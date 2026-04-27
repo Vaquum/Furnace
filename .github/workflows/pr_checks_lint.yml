@@ -1,0 +1,94 @@
+name: pr_checks_lint
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  pr_checks_lint:
+    name: pr_checks_lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up lint venv
+        run: python -m venv .venv-lint
+
+      - name: Install gate toolchain and project
+        run: |
+          uv pip install --python .venv-lint/bin/python -e '.[dev]' 'ruff==0.15.11'
+
+      - name: Resolve package root
+        id: package
+        run: |
+          set -euo pipefail
+          package_root="$(python - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path('.github/typing_budget.json').read_text())
+          root = data.get('package_root')
+          if not isinstance(root, str) or not root:
+              raise SystemExit('typing_budget.json must set package_root')
+          print(root)
+          PY
+          )"
+          if [ ! -d "$package_root" ]; then
+            echo "::error::package root '$package_root' does not exist"
+            exit 1
+          fi
+          echo "package_root=$package_root" >> "$GITHUB_OUTPUT"
+
+      - name: Run ruff lint
+        run: .venv-lint/bin/python -m ruff check "${{ steps.package.outputs.package_root }}" tools tests scripts
+
+      - name: Module line-count budget gate
+        run: .venv-lint/bin/python scripts/check_module_budgets.py
+
+      - name: Module docstring gate
+        run: .venv-lint/bin/python scripts/check_module_docstrings.py
+
+      - name: File size balance gate
+        run: .venv-lint/bin/python scripts/check_file_size_balance.py
+
+      - name: Test/code SLOC ratio gate
+        run: .venv-lint/bin/python scripts/check_test_code_ratio.py
+
+      - name: Dead-code (vulture)
+        run: .venv-lint/bin/python -m vulture "${{ steps.package.outputs.package_root }}/" --min-confidence 80
+
+      - name: No-swallowed-violations gate
+        run: .venv-lint/bin/python scripts/check_no_swallowed_violations.py
+
+      - name: Coverage floor gate
+        run: |
+          .venv-lint/bin/python -m coverage run --branch --source="${{ steps.package.outputs.package_root }}" \
+            -m pytest tests/ -q
+          .venv-lint/bin/python -m coverage json -o coverage.json
+          .venv-lint/bin/python scripts/check_coverage_floor.py
+
+      - name: Budget-raise ratchet gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git fetch origin "$BASE_REF" --depth=1
+          .venv-lint/bin/python scripts/check_budget_ratchet.py \
+            --base-ref "origin/$BASE_REF" \
+            --pr-number "$PR_NUMBER"

@@ -1,0 +1,40 @@
+name: Setup New Repository with Labels
+
+on:
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Replace labels from template repository
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TEMPLATE_REPOSITORY: ${{ vars.LABEL_TEMPLATE_REPOSITORY }}
+          NEW_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          template_repo="${TEMPLATE_REPOSITORY:-Vaquum/new-repository-template}"
+
+          gh api --paginate -X GET "/repos/$NEW_REPOSITORY/labels" \
+            | jq -r '.[].name' \
+            | while IFS= read -r label; do
+                encoded_label="$(jq -rn --arg value "$label" '$value | @uri')"
+                gh api -X DELETE "/repos/$NEW_REPOSITORY/labels/$encoded_label"
+              done
+
+          gh api --paginate -X GET "/repos/$template_repo/labels" \
+            | jq -c '.[]' \
+            | while IFS= read -r label; do
+                name="$(echo "$label" | jq -r '.name')"
+                color="$(echo "$label" | jq -r '.color')"
+                description="$(echo "$label" | jq -r '.description // empty')"
+                gh api -X POST "/repos/$NEW_REPOSITORY/labels" \
+                  -f name="$name" \
+                  -f color="$color" \
+                  -f description="$description"
+              done

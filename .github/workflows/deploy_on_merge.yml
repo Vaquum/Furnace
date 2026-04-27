@@ -1,0 +1,23 @@
+name: Deploy On Merge
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    if: ${{ vars.DEPLOY_ON_MERGE_ENABLED == 'true' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Refuse unconfigured deploy
+        run: |
+          set -euo pipefail
+          test -f Dockerfile
+          test -f docker-compose.deploy.yml
+          echo "::notice::Deploy workflow is enabled; replace this template step with the repository's deploy procedure."

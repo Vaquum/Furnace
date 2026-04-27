@@ -1,0 +1,159 @@
+name: Bootstrap Repository
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      package_name:
+        description: Optional Python import package name. Defaults to repository slug converted to snake_case.
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  bootstrap:
+    name: Bootstrap Repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install bootstrap dependencies
+        run: python -m pip install --upgrade pip 'pyyaml==6.0.2'
+
+      - name: Rewrite repository-specific files
+        run: |
+          set -euo pipefail
+          args=(--repo-name "${{ github.event.repository.name }}" --owner "${{ github.repository_owner }}" --files-only)
+          if [ -n "${{ inputs.package_name }}" ]; then
+            args+=(--package-name "${{ inputs.package_name }}")
+          fi
+          python tools/bootstrap_repository.py "${args[@]}"
+
+      - name: Open and merge bootstrap PR
+        id: bootstrap_pr
+        env:
+          GH_TOKEN: ${{ secrets.REPO_BOOTSTRAP_TOKEN }}
+          BOOTSTRAP_BRANCH: bootstrap/repository-law-${{ github.run_id }}
+          BOOTSTRAP_TITLE: "chore: bootstrap repository law"
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- .; then
+            echo "No repository bootstrap file changes."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::REPO_BOOTSTRAP_TOKEN is required so bootstrap can create a PR, trigger PR checks, merge through branch rules, and apply labels/rulesets."
+            exit 1
+          fi
+
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "chore: bootstrap repository law"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${REPOSITORY}.git"
+          git push origin "HEAD:${BOOTSTRAP_BRANCH}"
+
+          gh label create slice \
+            --repo "$REPOSITORY" \
+            --color "5319e7" \
+            --description "Mechanically scoped repository slice" \
+            --force
+
+          python - <<'PY' > bootstrap_issue.md
+          from pathlib import Path
+
+          import yaml
+
+          def blockquote(value: str) -> str | None:
+              collected: list[str] = []
+              started = False
+              for line in value.split('\n'):
+                  if not started:
+                      if line.startswith('> **Significance.**'):
+                          collected.append(line)
+                          started = True
+                  elif line.startswith('>'):
+                      collected.append(line)
+                  else:
+                      break
+              return '\n'.join(collected) if collected else None
+
+          template = yaml.safe_load(Path('.github/ISSUE_TEMPLATE/slice.yml').read_text())
+          blocks: list[str] = []
+          for item in template.get('body', []):
+              attrs = item.get('attributes', {}) if isinstance(item, dict) else {}
+              value = attrs.get('value') if isinstance(attrs, dict) else None
+              if isinstance(value, str):
+                  block = blockquote(value)
+                  if block:
+                      blocks.append(block)
+
+          print('\n\n'.join(blocks))
+          print('\n\n## Surfaces\n- `**`\n\n## Out of Scope\n- (none)\n')
+          PY
+
+          issue_number="$(gh issue list \
+            --repo "$REPOSITORY" \
+            --state open \
+            --search "${BOOTSTRAP_TITLE} in:title" \
+            --json number \
+            --jq '.[0].number // empty')"
+          if [ -z "$issue_number" ]; then
+            issue_url="$(gh issue create \
+              --repo "$REPOSITORY" \
+              --title "$BOOTSTRAP_TITLE" \
+              --label slice \
+              --body-file bootstrap_issue.md)"
+            issue_number="${issue_url##*/}"
+          fi
+
+          printf 'Closes #%s\n' "$issue_number" > bootstrap_pr.md
+          pr_url="$(gh pr create \
+            --repo "$REPOSITORY" \
+            --base main \
+            --head "$BOOTSTRAP_BRANCH" \
+            --title "$BOOTSTRAP_TITLE" \
+            --body-file bootstrap_pr.md)"
+          pr_number="${pr_url##*/}"
+          echo "Bootstrap PR: $pr_url"
+
+          sleep 15
+          gh pr checks "$pr_number" --repo "$REPOSITORY" --watch --interval 10
+          gh pr merge "$pr_number" \
+            --repo "$REPOSITORY" \
+            --merge \
+            --delete-branch \
+            --subject "$BOOTSTRAP_TITLE" \
+            --body "Merge automated repository bootstrap."
+
+      - name: Apply labels and protected-main ruleset
+        if: ${{ steps.bootstrap_pr.outputs.changed == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.REPO_BOOTSTRAP_TOKEN }}
+          LABEL_TEMPLATE_REPOSITORY: ${{ vars.LABEL_TEMPLATE_REPOSITORY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::REPO_BOOTSTRAP_TOKEN is not configured. File bootstrap is complete, but labels and the live protected-main ruleset were not applied."
+            exit 1
+          fi
+          python tools/bootstrap_repository.py \
+            --repo-name "${{ github.event.repository.name }}" \
+            --owner "${{ github.repository_owner }}" \
+            --github-only

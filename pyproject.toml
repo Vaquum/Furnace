@@ -1,0 +1,161 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "new-repository-template"
+version = "0.2.1"
+description = "Gate-enforced Python repository template."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "dagster",
+  "dagster-cloud",
+  "boto3",
+  "pandas",
+  "requests",
+  "matplotlib",
+  "clickhouse-driver",
+  "clickhouse-connect>=0.7",
+  "polars>=1.0",
+  "pyarrow>=15.0",
+  "huggingface_hub",
+  "lz4>=4.0.0",
+  "clickhouse-cityhash>=1.0.2",
+  "freezegun>=1.5.0",
+  "numpy>=2.0",
+  "scipy>=1.13",
+  "aiosqlite>=0.20",
+  "orjson>=3.10",
+]
+
+[project.optional-dependencies]
+dev = [
+  "dagster-webserver",
+  "pytest",
+  "pytest-asyncio",
+  "ruff==0.15.11",
+  "pyright==1.1.408",
+  "vulture>=2.14",
+  "coverage[toml]>=7.6",
+  "scikit-learn>=1.5",
+  "jupyter>=1.0",
+  "nbconvert>=7.0",
+  "ipykernel>=6.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["new_repository_template*"]
+exclude = ["tests*", "demo*"]
+
+[tool.pyright]
+pythonVersion = "3.12"
+typeCheckingMode = "strict"
+include = ["new_repository_template"]
+exclude = [
+  "**/__pycache__",
+  "build",
+  "dist",
+  "tests",
+  "demo",
+]
+stubPath = "stubs"
+reportExplicitAny = "error"
+reportMissingImports = "error"
+reportMissingTypeStubs = "error"
+reportUnknownArgumentType = "error"
+reportUnknownMemberType = "error"
+reportUnknownVariableType = "error"
+reportUnknownLambdaType = "error"
+reportUnknownParameterType = "error"
+reportMissingParameterType = "error"
+reportConstantRedefinition = "error"
+reportImportCycles = "error"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+exclude = [
+  ".git",
+  "__pycache__",
+  "build",
+  "dist",
+  "demo",
+  "tests/fixtures",
+]
+
+[tool.ruff.format]
+quote-style = "single"
+
+[tool.ruff.lint]
+select = [
+  "E",
+  "F",
+  "I",
+  "UP",
+  "RUF",
+  "BLE",
+  "ANN",
+  "C901",
+  "PLR0912",
+  "PLR0913",
+  "PLR0915",
+  "T201",
+  "FIX001",
+  "FIX002",
+  "FIX003",
+  "FIX004",
+  "ERA001",
+  "D200",
+  "D205",
+  "D415",
+  "PIE790",
+]
+ignore = [
+  "E501",
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.pylint]
+max-args = 6
+max-branches = 12
+max-statements = 50
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+  "S101", "ANN", "BLE001",
+  "PLR0912", "PLR0913", "PLR0915",
+  "D200", "D205", "D415",
+]
+"tools/**/*.py" = [
+  "C901", "PLR0912", "PLR0913", "PLR0915",
+  "T201",
+  "FIX001", "FIX002", "FIX003", "FIX004",
+  "ERA001", "D200", "D205", "D415",
+]
+"scripts/**/*.py" = [
+  "C901", "PLR0912", "PLR0913", "PLR0915",
+  "T201",
+  "FIX001", "FIX002", "FIX003", "FIX004",
+  "ERA001", "D200", "D205", "D415",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["new_repository_template"]
+
+[tool.vulture]
+paths = ["new_repository_template"]
+min_confidence = 80
+
+[tool.coverage.run]
+branch = true
+source = ["new_repository_template"]
+
+[tool.coverage.report]
+show_missing = true
+
+[tool.coverage.json]
+output = "coverage.json"

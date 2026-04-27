@@ -1,0 +1,28 @@
+name: pr_checks_honesty
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  pr_checks_honesty:
+    name: pr_checks_honesty
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install package and test dependencies
+        run: python -m pip install --upgrade pip '.[dev]'
+
+      - name: Run honesty gate suite
+        run: pytest tests/honesty/ -v --tb=short
