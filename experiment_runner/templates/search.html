@@ -103,6 +103,9 @@ class RangeSlider {
     // Achievable (LOO) bounds — shrink as other sliders narrow.
     this.looLo = lo;
     this.looHi = hi;
+    // Sticky once the user has narrowed within the LOO band; clears when
+    // the user widens back to the band's endpoints.
+    this.userTouched = false;
     this.step = 1e-4;
     this.minInput = root.querySelector('input.min');
     this.maxInput = root.querySelector('input.max');
@@ -139,6 +142,12 @@ class RangeSlider {
     }
     this.minInput.value = min;
     this.maxInput.value = max;
+    // The slider counts as user-narrowed only when the values sit inside
+    // the LOO band. Widening to the band's endpoints releases it back to
+    // auto-tracking.
+    this.userTouched = !(
+      min <= this.looLo + this.step / 2 && max >= this.looHi - this.step / 2
+    );
     this.update();
     debounceRefresh(this.metric);
   }
@@ -160,6 +169,9 @@ class RangeSlider {
   }
 
   reset() {
+    this.userTouched = false;
+    this.looLo = this.lo;
+    this.looHi = this.hi;
     this.minInput.value = this.lo;
     this.maxInput.value = this.hi;
     this.update();
@@ -170,14 +182,21 @@ class RangeSlider {
     this.looLo = round4(Math.max(newLo, this.lo));
     this.looHi = round4(Math.min(newHi, this.hi));
     if (this.looHi < this.looLo) { this.looLo = this.lo; this.looHi = this.hi; }
-    // Clamp current values into the new achievable region.
-    let curMin = parseFloat(this.minInput.value);
-    let curMax = parseFloat(this.maxInput.value);
-    if (curMin < this.looLo) curMin = this.looLo;
-    if (curMax > this.looHi) curMax = this.looHi;
-    if (curMin > curMax) { curMin = this.looLo; curMax = this.looHi; }
-    this.minInput.value = curMin;
-    this.maxInput.value = curMax;
+    if (!this.userTouched) {
+      // Untouched slider tracks the LOO endpoints in both directions —
+      // narrowing or widening with the band.
+      this.minInput.value = this.looLo;
+      this.maxInput.value = this.looHi;
+    } else {
+      // Touched: keep the user's values, only clamp them into the new band.
+      let curMin = parseFloat(this.minInput.value);
+      let curMax = parseFloat(this.maxInput.value);
+      if (curMin < this.looLo) curMin = this.looLo;
+      if (curMax > this.looHi) curMax = this.looHi;
+      if (curMin > curMax) { curMin = this.looLo; curMax = this.looHi; }
+      this.minInput.value = curMin;
+      this.maxInput.value = curMax;
+    }
     this.update();
   }
 
