@@ -645,7 +645,7 @@ def create_app(root: Path) -> FastAPI:
 
     @app.get("/search", response_class=HTMLResponse)
     def search_page(request: Request, experiment_name: str | None = None):
-        bounds = _compute_search_bounds(root, experiment_name)
+        bounds = _compute_search_bounds(root, {}, experiment_name)
         return templates.TemplateResponse(
             "search.html",
             {
@@ -657,10 +657,11 @@ def create_app(root: Path) -> FastAPI:
         )
 
     @app.get("/search/bounds.json")
-    def search_bounds(experiment_name: str | None = None):
+    def search_bounds(request: Request, experiment_name: str | None = None):
+        filters = _parse_filter_params(dict(request.query_params))
         return JSONResponse({
             "metrics": list(_SEARCH_METRICS),
-            "bounds": _compute_search_bounds(root, experiment_name),
+            "bounds": _compute_search_bounds(root, filters, experiment_name),
         })
 
     @app.get("/search/rounds.json")
@@ -963,21 +964,32 @@ def _apply_search_filters(lf: pl.LazyFrame, filters: _FilterMap) -> pl.LazyFrame
     return lf
 
 
-def _compute_search_bounds(root: Path, experiment_name: str | None) -> dict[str, dict[str, float | None]]:
+def _compute_search_bounds(
+    root: Path,
+    filters: _FilterMap,
+    experiment_name: str | None,
+) -> dict[str, dict[str, float | None]]:
+    """Per-metric leave-one-out bounds: each slider's range is min/max of its
+    column with the other sliders' filters applied (its own filter excluded)."""
     _ensure_indices(root, experiment_name)
     paths = _index_paths(root, experiment_name)
     if not paths:
         return {m: {"min": None, "max": None} for m in _SEARCH_METRICS}
     lf = pl.scan_parquet([str(p) for p in paths])
-    aggs: list[pl.Expr] = []
+    out: dict[str, dict[str, float | None]] = {}
     for m in _SEARCH_METRICS:
-        aggs.append(pl.col(m).min().alias(f"{m}__min"))
-        aggs.append(pl.col(m).max().alias(f"{m}__max"))
-    df = lf.select(aggs).collect()
-    if df.height == 0:
-        return {m: {"min": None, "max": None} for m in _SEARCH_METRICS}
-    row = df.row(0, named=True)
-    return {m: {"min": row[f"{m}__min"], "max": row[f"{m}__max"]} for m in _SEARCH_METRICS}
+        loo = {k: v for k, v in filters.items() if k != m}
+        df = (
+            _apply_search_filters(lf, loo)
+            .select([pl.col(m).min().alias("lo"), pl.col(m).max().alias("hi")])
+            .collect()
+        )
+        if df.height == 0:
+            out[m] = {"min": None, "max": None}
+        else:
+            row = df.row(0, named=True)
+            out[m] = {"min": row["lo"], "max": row["hi"]}
+    return out
 
 
 def _matching_rounds(root: Path, filters: _FilterMap, experiment_name: str | None) -> list[dict]:

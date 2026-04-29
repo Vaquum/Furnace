@@ -45,6 +45,8 @@
     <button id="search-btn" type="button" class="primary">Search</button>
     <button id="reset-btn" type="button">Reset</button>
     <a id="export-btn" class="btn" href="/search/bundle">Export bundle</a>
+    <button id="copy-curl-btn" type="button">Copy curl</button>
+    <span id="copy-curl-status" class="atom-small" style="margin-left: var(--gap-s); align-self: center; color: var(--ink-mute);"></span>
   </div>
 </div>
 
@@ -114,6 +116,7 @@ class RangeSlider {
       else this.maxInput.value = this.minInput.value;
     }
     this.update();
+    debounceCrossTalk(this.metric);
   }
 
   update() {
@@ -130,6 +133,29 @@ class RangeSlider {
   reset() {
     this.minInput.value = this.lo;
     this.maxInput.value = this.hi;
+    this.update();
+  }
+
+  updateBounds(newLo, newHi) {
+    if (!isFinite(newLo) || !isFinite(newHi)) return;
+    if (newHi <= newLo) newHi = newLo + 1e-9;
+    const curMin = parseFloat(this.minInput.value);
+    const curMax = parseFloat(this.maxInput.value);
+    this.lo = newLo;
+    this.hi = newHi;
+    this.step = (newHi - newLo) / 1000;
+    [this.minInput, this.maxInput].forEach(inp => {
+      inp.min = newLo;
+      inp.max = newHi;
+      inp.step = this.step;
+    });
+    let nextMin = Math.max(curMin, newLo);
+    let nextMax = Math.min(curMax, newHi);
+    if (nextMin > nextMax) { nextMin = newLo; nextMax = newHi; }
+    this.minInput.value = nextMin;
+    this.maxInput.value = nextMax;
+    this.boundMin.textContent = fmt(newLo);
+    this.boundMax.textContent = fmt(newHi);
     this.update();
   }
 
@@ -201,6 +227,44 @@ async function runSearch() {
   document.getElementById('export-btn').href = `/search/bundle${qs ? '?' + qs : ''}`;
 }
 
+let crossTalkTimer = null;
+
+function debounceCrossTalk(activeMetric) {
+  clearTimeout(crossTalkTimer);
+  crossTalkTimer = setTimeout(() => crossTalk(activeMetric), 150);
+}
+
+async function crossTalk(activeMetric) {
+  const qs = buildQueryString();
+  const r = await fetch(`/search/bounds.json${qs ? '?' + qs : ''}`);
+  const data = await r.json();
+  for (const m of METRICS) {
+    if (m === activeMetric) continue;
+    const b = data.bounds[m];
+    if (b == null || b.min == null || b.max == null) continue;
+    sliders[m].updateBounds(b.min, b.max);
+  }
+}
+
+function bundleUrl() {
+  const qs = buildQueryString();
+  return `${location.origin}/search/bundle${qs ? '?' + qs : ''}`;
+}
+
+async function copyCurl() {
+  const cmd = `curl -OJ '${bundleUrl()}'`;
+  const status = document.getElementById('copy-curl-status');
+  try {
+    await navigator.clipboard.writeText(cmd);
+    status.textContent = 'copied';
+    status.style.color = 'var(--accent)';
+  } catch (err) {
+    status.textContent = 'copy failed';
+    status.style.color = 'var(--negative)';
+  }
+  setTimeout(() => { status.textContent = ''; }, 1500);
+}
+
 document.querySelectorAll('.range-slider').forEach(el => {
   sliders[el.dataset.metric] = new RangeSlider(el);
 });
@@ -208,7 +272,9 @@ document.querySelectorAll('.range-slider').forEach(el => {
 document.getElementById('search-btn').addEventListener('click', runSearch);
 document.getElementById('reset-btn').addEventListener('click', () => {
   for (const m of METRICS) sliders[m].reset();
+  debounceCrossTalk(null);
 });
+document.getElementById('copy-curl-btn').addEventListener('click', copyCurl);
 
 const enameInput = document.getElementById('experiment-name');
 enameInput.addEventListener('keydown', e => {
