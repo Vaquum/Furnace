@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import difflib
+import io
 import json
 import os
 import re
@@ -8,10 +9,11 @@ import signal
 import subprocess
 import sys
 import time
+import zipfile
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -587,6 +589,26 @@ def create_app(root: Path) -> FastAPI:
         if not csv_path.exists():
             return PlainTextResponse("", media_type="text/csv", headers=headers)
         return PlainTextResponse(csv_path.read_text(), media_type="text/csv", headers=headers)
+
+    @app.get("/experiments/{experiment_id}/rounds/{round_id}/bundle")
+    def round_bundle(experiment_id: str, round_id: str):
+        round_dir = _round_dir(experiment_id, round_id)
+        frozen_args = json.loads((round_dir / "args.json").read_text())
+        ename = frozen_args["uel_run"]["experiment_name"]
+        base = f"{ename}__r{round_id}"
+        code_path = round_dir / "code.py"
+        args_path = round_dir / "args.json"
+        csv_path = round_dir / f"{base}.csv"
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr(f"{base}.py", code_path.read_text())
+            z.writestr(f"{base}.json", args_path.read_text())
+            if csv_path.exists():
+                z.writestr(f"{base}.csv", csv_path.read_text())
+
+        headers = {"Content-Disposition": f'attachment; filename="{base}.zip"'}
+        return Response(buf.getvalue(), media_type="application/zip", headers=headers)
 
     @app.get("/experiments/{experiment_id}/rounds/{round_id}/results", response_class=HTMLResponse)
     def round_results_page(request: Request, experiment_id: str, round_id: str):
