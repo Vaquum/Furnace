@@ -35,8 +35,8 @@
            data-metric="{{ metric }}"
            data-lo="{{ bounds[metric].min if bounds[metric].min is not none else 0 }}"
            data-hi="{{ bounds[metric].max if bounds[metric].max is not none else 1 }}">
-        <div class="track"></div>
         <div class="achievable"></div>
+        <div class="track"></div>
         <div class="fill"></div>
         <input type="range" class="min" aria-label="{{ metric }} min">
         <input type="range" class="max" aria-label="{{ metric }} max">
@@ -140,7 +140,7 @@ class RangeSlider {
     this.minInput.value = min;
     this.maxInput.value = max;
     this.update();
-    debounceCrossTalk(this.metric);
+    debounceRefresh(this.metric);
   }
 
   update() {
@@ -229,10 +229,7 @@ function buildQueryString() {
   return params.toString();
 }
 
-async function runSearch() {
-  const qs = buildQueryString();
-  const r = await fetch(`/search/rounds.json${qs ? '?' + qs : ''}`);
-  const data = await r.json();
+function renderRounds(data) {
   const tbody = document.getElementById('search-results-rows');
   const empty = document.getElementById('search-empty');
   const meta = document.getElementById('results-meta');
@@ -240,42 +237,49 @@ async function runSearch() {
   if (!data.rounds || data.rounds.length === 0) {
     empty.style.display = '';
     meta.textContent = '';
-  } else {
-    empty.style.display = 'none';
-    let total = 0;
-    data.rounds.forEach(row => {
-      total += row.match_count;
-      const tr = document.createElement('tr');
-      tr.innerHTML =
-        `<td>${escapeHTML(row.experiment_id)}</td>` +
-        `<td>${escapeHTML(row.round_id)}</td>` +
-        `<td class="num">${row.match_count}</td>` +
-        `<td><a class="atom-micro" href="/experiments/${encodeURIComponent(row.experiment_id)}/rounds/${encodeURIComponent(row.round_id)}/results">→</a></td>`;
-      tbody.appendChild(tr);
-    });
-    meta.textContent = `${data.rounds.length} rounds · ${total} permutations`;
+    return;
   }
-  document.getElementById('export-btn').href = `/search/bundle${qs ? '?' + qs : ''}`;
+  empty.style.display = 'none';
+  let total = 0;
+  data.rounds.forEach(row => {
+    total += row.match_count;
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      `<td>${escapeHTML(row.experiment_id)}</td>` +
+      `<td>${escapeHTML(row.round_id)}</td>` +
+      `<td class="num">${row.match_count}</td>` +
+      `<td><a class="atom-micro" href="/experiments/${encodeURIComponent(row.experiment_id)}/rounds/${encodeURIComponent(row.round_id)}/results">→</a></td>`;
+    tbody.appendChild(tr);
+  });
+  meta.textContent = `${data.rounds.length} rounds · ${total} permutations`;
 }
 
-let crossTalkTimer = null;
+let refreshTimer = null;
 
-function debounceCrossTalk(activeMetric) {
-  clearTimeout(crossTalkTimer);
-  crossTalkTimer = setTimeout(() => crossTalk(activeMetric), 150);
+function debounceRefresh(activeMetric) {
+  clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(() => refresh(activeMetric), 150);
 }
 
-async function crossTalk(activeMetric) {
+async function refresh(activeMetric) {
   const qs = buildQueryString();
-  const r = await fetch(`/search/bounds.json${qs ? '?' + qs : ''}`);
-  const data = await r.json();
+  const tail = qs ? '?' + qs : '';
+  const [bd, rd] = await Promise.all([
+    fetch(`/search/bounds.json${tail}`).then(r => r.json()),
+    fetch(`/search/rounds.json${tail}`).then(r => r.json()),
+  ]);
   for (const m of METRICS) {
     if (m === activeMetric) continue;
-    const b = data.bounds[m];
-    if (b == null || b.min == null || b.max == null) continue;
-    sliders[m].setLooBounds(b.min, b.max);
+    const b = bd.bounds[m];
+    if (b && b.min != null && b.max != null) {
+      sliders[m].setLooBounds(b.min, b.max);
+    }
   }
+  renderRounds(rd);
+  document.getElementById('export-btn').href = `/search/bundle${tail}`;
 }
+
+async function runSearch() { return refresh(null); }
 
 function bundleUrl() {
   const qs = buildQueryString();
@@ -305,7 +309,7 @@ document.getElementById('reset-btn').addEventListener('click', () => {
   for (const m of METRICS) sliders[m].reset();
   expBoxes().forEach(c => c.checked = true);
   updateExpToggleLabel();
-  debounceCrossTalk(null);
+  debounceRefresh(null);
 });
 document.getElementById('copy-curl-btn').addEventListener('click', copyCurl);
 
@@ -320,7 +324,7 @@ document.addEventListener('click', e => {
 });
 expBoxes().forEach(c => c.addEventListener('change', () => {
   updateExpToggleLabel();
-  debounceCrossTalk(null);
+  debounceRefresh(null);
 }));
 
 updateExpToggleLabel();

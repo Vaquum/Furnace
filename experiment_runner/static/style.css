@@ -852,20 +852,20 @@ table.results-table tbody tr.row-enter {
   width: 100%;
   overflow: visible;
 }
+.range-slider .achievable {
+  position: absolute;
+  top: 50%;
+  height: 6px;
+  background: var(--paper-2);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
 .range-slider .track {
   position: absolute;
   top: 50%; left: 0; right: 0;
   height: 1px;
-  background: var(--paper-2);
-  transform: translateY(-50%);
-}
-.range-slider .achievable {
-  position: absolute;
-  top: 50%;
-  height: 1px;
   background: var(--rule);
   transform: translateY(-50%);
-  pointer-events: none;
 }
 .range-slider .fill {
   position: absolute;
