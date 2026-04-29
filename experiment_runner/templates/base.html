@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}experiment_runner{% endblock %}</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23F8F8F8'/%3E%3Crect x='4' y='14' width='24' height='3' fill='%23DC65A6'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/style.css?v={{ asset_version }}">
+  <script defer src="/static/poll.js?v={{ asset_version }}"></script>
+</head>
+<body>
+  <nav class="top">
+    <div class="brand"><a href="/">experiment_runner</a></div>
+    <div class="meta">{% block meta %}{% endblock %}</div>
+  </nav>
+  {% block content %}{% endblock %}
+</body>
+</html>

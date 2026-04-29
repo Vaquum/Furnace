@@ -1,0 +1,48 @@
+{% for exp in experiments %}
+<tr class="exp-row" data-exp="{{ exp.id }}">
+  <td class="col-chevron"><button type="button" class="chevron" data-toggle="{{ exp.id }}" aria-expanded="false" aria-label="Expand"></button></td>
+  <td><a href="/experiments/{{ exp.id }}">{{ exp.id }}</a></td>
+  <td class="num">{{ exp.round_count }}</td>
+  <td class="time">{{ exp.latest_at or "—" }}</td>
+  <td class="col-actions">
+    <button type="button" class="delete-exp" data-exp="{{ exp.id }}" aria-label="Delete experiment" title="Delete experiment">×</button>
+  </td>
+</tr>
+<tr class="rounds-row" data-parent="{{ exp.id }}" hidden>
+  <td></td>
+  <td colspan="4" class="rounds-cell">
+    <table class="rounds-sub-table">
+      <thead>
+        <tr>
+          <th>Round</th>
+          <th>State</th>
+          <th class="num">PID</th>
+          <th>Started</th>
+          <th>Ended</th>
+          <th class="num">Exit</th>
+          <th class="col-actions"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in exp.rounds %}
+        <tr>
+          <td class="mono"><a href="/experiments/{{ exp.id }}/rounds/{{ r.round_id }}">{{ r.round_id }}</a></td>
+          <td><span class="state {{ r.state }}">{{ r.state }}</span></td>
+          <td class="num">{{ r.pid if r.pid is not none else "—" }}</td>
+          <td class="time">{{ r.started_at or "—" }}</td>
+          <td class="time">{{ r.ended_at or "—" }}</td>
+          <td class="num">{{ r.exit_code if r.exit_code is not none else "—" }}</td>
+          <td class="col-actions"><a class="atom-micro" href="/experiments/{{ exp.id }}/rounds/{{ r.round_id }}">View</a></td>
+        </tr>
+        {% endfor %}
+        {% if not exp.rounds %}
+        <tr><td colspan="7" class="empty-cell">No rounds yet for this experiment.</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </td>
+</tr>
+{% endfor %}
+{% if not experiments %}
+<tr><td colspan="5" class="empty-cell">No experiments yet. Create one above.</td></tr>
+{% endif %}

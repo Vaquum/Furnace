@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}Jobs · experiment_runner{% endblock %}
+{% set total_rounds = experiments | sum(attribute='round_count') %}
+{% block meta %}{{ experiments | length }} experiments · {{ total_rounds }} rounds{% endblock %}
+{% block content %}
+
+<div class="bar">
+  <h1 class="atom-title">Experiments</h1>
+  <a class="atom-micro" href="/search">search →</a>
+</div>
+
+<div class="section section-narrow">
+  <h2 class="atom-heading"><span class="numeral">01</span><span>New experiment</span></h2>
+  <form method="post" action="/experiments" class="row">
+    <div class="col">
+      <input id="new-name" name="name" type="text" required placeholder="Experiment name…" autocomplete="off">
+    </div>
+    <div>
+      <button type="submit" class="primary">Create</button>
+    </div>
+  </form>
+</div>
+
+<div class="section"
+     data-poll-url="/_partials/jobs"
+     data-poll-target="#experiments-rows">
+  <h2 class="atom-heading"><span class="numeral">02</span><span>All experiments</span></h2>
+  <table class="experiments-table">
+    <thead>
+      <tr>
+        <th class="col-chevron"></th>
+        <th>Experiment</th>
+        <th class="num">Rounds</th>
+        <th>Latest activity</th>
+        <th class="col-actions"></th>
+      </tr>
+    </thead>
+    <tbody id="experiments-rows">
+      {% include "_jobs_rows.html" %}
+    </tbody>
+  </table>
+</div>
+
+<script>
+const expanded = new Set();
+
+function applyExpanded() {
+  document.querySelectorAll('tr.rounds-row').forEach(row => {
+    const parent = row.dataset.parent;
+    const isExp = expanded.has(parent);
+    row.hidden = !isExp;
+  });
+  document.querySelectorAll('.chevron[data-toggle]').forEach(btn => {
+    const id = btn.dataset.toggle;
+    const isExp = expanded.has(id);
+    btn.classList.toggle('open', isExp);
+    btn.setAttribute('aria-expanded', isExp ? 'true' : 'false');
+  });
+}
+
+document.body.addEventListener('click', async (e) => {
+  const chev = e.target.closest('.chevron');
+  if (chev) {
+    const id = chev.dataset.toggle;
+    if (expanded.has(id)) expanded.delete(id);
+    else expanded.add(id);
+    applyExpanded();
+    return;
+  }
+  const del = e.target.closest('.delete-exp');
+  if (del) {
+    e.preventDefault();
+    const id = del.dataset.exp;
+    if (!confirm(`Delete experiment "${id}" and all its rounds? This cannot be undone.`)) return;
+    const r = await fetch(`/experiments/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    if (r.ok) {
+      expanded.delete(id);
+      location.reload();
+    } else {
+      let msg = 'Delete failed';
+      try { msg = (await r.json()).detail || msg; } catch (_) {}
+      alert(`${r.status}: ${msg}`);
+    }
+  }
+});
+
+// Re-apply expanded state after polling re-renders the tbody
+new MutationObserver(applyExpanded).observe(
+  document.getElementById('experiments-rows'),
+  { childList: true }
+);
+applyExpanded();
+</script>
+
+{% endblock %}

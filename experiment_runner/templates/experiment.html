@@ -1,0 +1,247 @@
+{% extends "base.html" %}
+{% block title %}{{ experiment_id }} · experiment_runner{% endblock %}
+{% block meta %}version {{ version }}{% endblock %}
+{% block content %}
+
+<div class="bar">
+  <h1 class="atom-title">{{ experiment_id }}</h1>
+  <a class="atom-micro" href="/">← all jobs</a>
+</div>
+
+<div id="conflict-banner" class="banner"></div>
+
+<div id="editor-wrap"
+     data-experiment-id="{{ experiment_id }}"
+     data-base-version="{{ version }}">
+
+  <div class="section">
+    <h2 class="atom-heading"><span class="numeral">01</span><span>Code</span></h2>
+    <textarea id="code-editor" class="atom-code-block" spellcheck="false">{{ code }}</textarea>
+  </div>
+
+  <div class="section section-narrow">
+    <h2 class="atom-heading"><span class="numeral">02</span><span>Args</span></h2>
+    <form id="args-form" autocomplete="off">
+      <div class="row">
+        <div class="col field">
+          <label for="f-sfd">sfd_identifier</label>
+          <input id="f-sfd" type="text" name="sfd_identifier" value="{{ args.sfd_identifier }}" placeholder="MySFDClass">
+        </div>
+        <div class="col field">
+          <label for="f-method">data_source.method</label>
+          <input id="f-method" type="text" name="data_source.method" value="{{ args.data_source.method }}" placeholder="get_spot_klines">
+        </div>
+      </div>
+      <div class="field">
+        <label for="f-params">data_source.params (JSON)</label>
+        <textarea id="f-params" class="atom-code-block" style="min-height: 200px;" name="data_source.params">{{ args.data_source.params | tojson(indent=2) }}</textarea>
+      </div>
+      <div class="row">
+        <div class="col field">
+          <label>uel_run.experiment_name</label>
+          <div class="static-value">{{ experiment_id }}<span class="static-note"> + __r&lt;round_id&gt;</span></div>
+        </div>
+        <div class="col field">
+          <label for="f-perm">uel_run.n_permutations</label>
+          <input id="f-perm" type="number" min="1" name="uel_run.n_permutations" value="{{ args.uel_run.n_permutations }}">
+        </div>
+      </div>
+      <div class="row">
+        <div class="col">
+          <label class="checkbox-row"><input type="checkbox" name="uel_run.prep_each_round" {% if args.uel_run.prep_each_round %}checked{% endif %}>prep_each_round</label>
+        </div>
+        <div class="col">
+          <label class="checkbox-row"><input type="checkbox" name="uel_run.random_search" {% if args.uel_run.random_search %}checked{% endif %}>random_search</label>
+        </div>
+        <div class="col">
+          <label class="checkbox-row"><input type="checkbox" name="uel_run.maintain_details_in_params" {% if args.uel_run.maintain_details_in_params %}checked{% endif %}>maintain_details_in_params</label>
+        </div>
+      </div>
+    </form>
+  </div>
+
+  <div class="button-row">
+    <button id="save-btn" type="button">Save</button>
+    <button id="start-btn" type="button" class="primary" {% if active %}disabled{% endif %}>Start round</button>
+    <span id="save-status" class="atom-small" style="margin-left: var(--gap-m); align-self: center;"></span>
+  </div>
+</div>
+
+<div class="section"
+     data-poll-url="/_partials/experiments/{{ experiment_id }}/rounds"
+     data-poll-target="#rounds-rows">
+  <h2 class="atom-heading"><span class="numeral">03</span><span>Rounds</span></h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Round</th>
+        <th>State</th>
+        <th class="num">PID</th>
+        <th>Started</th>
+        <th>Ended</th>
+        <th class="num">Exit</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody id="rounds-rows">
+      {% include "_round_rows.html" %}
+    </tbody>
+  </table>
+</div>
+
+<script>
+const EXP_ID = {{ experiment_id | tojson }};
+
+function gatherWorking() {
+  const form = document.getElementById('args-form');
+  const code = document.getElementById('code-editor').value;
+  let params;
+  try { params = JSON.parse(form.elements['data_source.params'].value || '{}'); }
+  catch (e) {
+    flashStatus('data_source.params is not valid JSON', true);
+    throw e;
+  }
+  return {
+    code,
+    args: {
+      sfd_identifier: form.elements['sfd_identifier'].value.trim(),
+      data_source: {
+        method: form.elements['data_source.method'].value.trim(),
+        params,
+      },
+      uel_run: {
+        experiment_name: EXP_ID,
+        n_permutations: parseInt(form.elements['uel_run.n_permutations'].value, 10) || 0,
+        prep_each_round: form.elements['uel_run.prep_each_round'].checked,
+        random_search: form.elements['uel_run.random_search'].checked,
+        maintain_details_in_params: form.elements['uel_run.maintain_details_in_params'].checked,
+      },
+    },
+  };
+}
+
+function flashStatus(text, error) {
+  const el = document.getElementById('save-status');
+  el.textContent = text;
+  el.style.color = error ? 'var(--ink-warm)' : 'var(--ink-mute)';
+}
+
+function showConflict(currentVersion, baseVersion) {
+  const b = document.getElementById('conflict-banner');
+  b.innerHTML = `Conflict — server is at version <strong>${currentVersion}</strong>; ` +
+                `your changes are based on <strong>${baseVersion}</strong>. ` +
+                `<a href="" onclick="location.reload(); return false;">Reload</a> to discard local edits, ` +
+                `or <a href="" id="overwrite-link">Overwrite</a> with your version.`;
+  b.classList.add('show');
+  document.getElementById('overwrite-link').addEventListener('click', async (e) => {
+    e.preventDefault();
+    const wrap = document.getElementById('editor-wrap');
+    wrap.dataset.baseVersion = String(currentVersion);
+    b.classList.remove('show');
+    saveBlocked = false;
+    await save();
+  });
+}
+
+async function postJson(url, body) {
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return r;
+}
+
+let saving = false;
+let pending = false;
+let saveBlocked = false;  // set on 409, cleared on Reload/Overwrite
+
+async function doSaveOnce() {
+  let body;
+  try { body = gatherWorking(); } catch (_) { return false; }
+  const wrap = document.getElementById('editor-wrap');
+  body.if_match = parseInt(wrap.dataset.baseVersion, 10);
+  flashStatus('Saving…', false);
+  const r = await postJson(`/experiments/${EXP_ID}/working`, body);
+  if (r.status === 200) {
+    const data = await r.json();
+    wrap.dataset.baseVersion = String(data.version);
+    flashStatus(`Saved at version ${data.version}`, false);
+    return true;
+  }
+  if (r.status === 409) {
+    const data = await r.json();
+    if (data.current_version !== undefined) {
+      showConflict(data.current_version, wrap.dataset.baseVersion);
+      saveBlocked = true;
+      flashStatus('Conflict — resolve above', true);
+    } else {
+      flashStatus(data.error || 'Conflict', true);
+    }
+    return false;
+  }
+  flashStatus(`Save failed (${r.status})`, true);
+  return false;
+}
+
+async function save() {
+  if (saveBlocked) return;
+  pending = true;
+  if (saving) return;
+  saving = true;
+  try {
+    while (pending && !saveBlocked) {
+      pending = false;
+      const ok = await doSaveOnce();
+      if (!ok) break;
+    }
+  } finally {
+    saving = false;
+  }
+}
+
+async function waitForIdleSave() {
+  while (saving) await new Promise(r => setTimeout(r, 50));
+}
+
+async function start() {
+  if (saveBlocked) {
+    flashStatus('Resolve the conflict above before starting a round.', true);
+    return;
+  }
+  await save();
+  await waitForIdleSave();
+  if (saveBlocked) return;
+  let body;
+  try { body = gatherWorking(); } catch (_) { return; }
+  const wrap = document.getElementById('editor-wrap');
+  body.if_match = parseInt(wrap.dataset.baseVersion, 10);
+  flashStatus('Starting…', false);
+  const r = await postJson(`/experiments/${EXP_ID}/rounds`, body);
+  if (r.status === 200) {
+    const data = await r.json();
+    location.href = `/experiments/${EXP_ID}/rounds/${data.round_id}`;
+    return;
+  }
+  if (r.status === 409) {
+    const data = await r.json();
+    if (data.current_version !== undefined) {
+      showConflict(data.current_version, wrap.dataset.baseVersion);
+      saveBlocked = true;
+    } else {
+      flashStatus(data.error || 'Conflict', true);
+    }
+    return;
+  }
+  let detail = '';
+  try { detail = (await r.json()).detail || ''; } catch (_) {}
+  flashStatus(`Start failed (${r.status})${detail ? ': ' + detail : ''}`, true);
+}
+
+document.getElementById('save-btn').addEventListener('click', save);
+document.getElementById('start-btn').addEventListener('click', start);
+document.getElementById('code-editor').addEventListener('blur', () => save());
+document.getElementById('args-form').addEventListener('change', () => save());
+</script>
+
+{% endblock %}

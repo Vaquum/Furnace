@@ -1,0 +1,185 @@
+{% extends "base.html" %}
+{% block title %}{{ experiment_id }} · r{{ round_id }} · experiment_runner{% endblock %}
+{% block meta %}round {{ round_id }}{% endblock %}
+{% block content %}
+
+<div class="bar">
+  <h1 class="atom-title">{{ experiment_id }} <span style="color: var(--ink-mute); font-family: var(--font-mono); font-weight: 500; letter-spacing: 0.04em;">/ r{{ round_id }}</span></h1>
+  <a class="atom-micro" href="/experiments/{{ experiment_id }}">← experiment</a>
+</div>
+
+<div class="section">
+  <h2 class="atom-heading"><span class="numeral">01</span><span>Status</span></h2>
+  <dl class="status-grid">
+    <dt>State</dt><dd><span id="status-state" class="state {{ status.state }}">{{ status.state }}</span></dd>
+    <dt>PID</dt><dd id="status-pid">{{ status.pid if status.pid is not none else "—" }}</dd>
+    <dt>Started</dt><dd id="status-started">{{ status.started_at or "—" }}</dd>
+    <dt>Ended</dt><dd id="status-ended">{{ status.ended_at or "—" }}</dd>
+    <dt>Exit code</dt><dd id="status-exit">{{ status.exit_code if status.exit_code is not none else "—" }}</dd>
+    <dt>Results</dt><dd><a class="atom-micro" href="/experiments/{{ experiment_id }}/rounds/{{ round_id }}/results">View</a></dd>
+    <dt>Download</dt><dd><a class="atom-micro" href="/experiments/{{ experiment_id }}/rounds/{{ round_id }}/bundle" download="{{ experiment_id }}__r{{ round_id }}.zip">Bundle</a></dd>
+  </dl>
+  <div class="button-row">
+    <button id="terminate-btn" type="button" {% if not active %}disabled{% endif %}>Terminate</button>
+    <span id="terminate-status" class="atom-small" style="margin-left: var(--gap-m); align-self: center;"></span>
+  </div>
+</div>
+
+<div class="section" id="progress-section"
+     data-stats-url="/experiments/{{ experiment_id }}/rounds/{{ round_id }}/stats">
+  <h2 class="atom-heading"><span class="numeral">02</span><span>Progress</span></h2>
+  <div id="progress-line" class="progress-line">—</div>
+  <table id="stats-table" class="progress-table" style="display: none;">
+    <thead>
+      <tr>
+        <th>Column</th>
+        <th class="num">p5</th>
+        <th class="num">p25</th>
+        <th class="num">p50</th>
+        <th class="num">p75</th>
+        <th class="num">p95</th>
+      </tr>
+    </thead>
+    <tbody id="stats-rows"></tbody>
+  </table>
+</div>
+
+<div class="section">
+  <h2 class="atom-heading"><span class="numeral">03</span><span>Logs</span></h2>
+  <div class="log-controls">
+    <label for="log-source" style="margin: 0;">Source</label>
+    <select id="log-source">
+      <option value="stdout">stdout</option>
+      <option value="stderr">stderr</option>
+      <option value="warnings">warnings</option>
+      <option value="all">all</option>
+    </select>
+  </div>
+  <pre id="log-viewer" class="log-viewer"
+       data-log-base="/experiments/{{ experiment_id }}/rounds/{{ round_id }}/log"
+       data-log-url="/experiments/{{ experiment_id }}/rounds/{{ round_id }}/log?source=stdout"></pre>
+</div>
+
+{% if diff_text %}
+<div class="section">
+  <h2 class="atom-heading"><span class="numeral">04</span><span>Diff vs previous round</span></h2>
+  <pre class="diff">{{ diff_text }}</pre>
+</div>
+{% endif %}
+
+<details class="section collapsible">
+  <summary class="atom-heading"><span class="numeral">{% if diff_text %}05{% else %}04{% endif %}</span><span>Frozen args</span></summary>
+  <pre class="atom-code-block">{{ frozen_args_json }}</pre>
+</details>
+
+<details class="section collapsible">
+  <summary class="atom-heading"><span class="numeral">{% if diff_text %}06{% else %}05{% endif %}</span><span>Frozen code</span></summary>
+  <pre class="atom-code-block">{{ frozen_code }}</pre>
+</details>
+
+<script>
+const EXP_ID = {{ experiment_id | tojson }};
+const ROUND_ID = {{ round_id | tojson }};
+const ACTIVE_STATES = new Set(['pending', 'running', 'terminating']);
+const STATS_URL = `/experiments/${EXP_ID}/rounds/${ROUND_ID}/stats`;
+
+document.getElementById('terminate-btn').addEventListener('click', async () => {
+  const status = document.getElementById('terminate-status');
+  status.textContent = 'Terminating…';
+  const r = await fetch(`/experiments/${EXP_ID}/rounds/${ROUND_ID}/terminate`, { method: 'POST' });
+  if (r.status === 200) {
+    status.textContent = 'Terminated.';
+    setTimeout(() => location.reload(), 600);
+  } else {
+    let body = {};
+    try { body = await r.json(); } catch (e) {}
+    status.textContent = `${r.status} ${body.error || ''}`;
+    status.style.color = 'var(--ink-warm)';
+  }
+});
+
+function fmtDuration(sec) {
+  if (sec === null || sec === undefined) return '—';
+  if (sec < 1) return `${sec.toFixed(1)}s`;
+  if (sec < 60) return `${Math.floor(sec)}s`;
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  if (m < 60) return `${m}m ${String(s).padStart(2,'0')}s`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${String(m % 60).padStart(2,'0')}m`;
+}
+
+function fmtNum(v) {
+  if (v === null || v === undefined) return '—';
+  if (typeof v !== 'number') return String(v);
+  if (!isFinite(v)) return '—';
+  if (Math.abs(v) >= 1000) return v.toFixed(0);
+  if (Math.abs(v) >= 100)  return v.toFixed(1);
+  if (Math.abs(v) >= 10)   return v.toFixed(2);
+  return v.toFixed(3);
+}
+
+async function pollStats() {
+  let data;
+  try {
+    const r = await fetch(STATS_URL);
+    if (!r.ok) return false;
+    data = await r.json();
+  } catch (e) { return false; }
+
+  const p = data.progress || {};
+
+  // Live-update Status block
+  const pill = document.getElementById('status-state');
+  if (pill) { pill.textContent = p.state; pill.className = 'state ' + p.state; }
+  const pid = document.getElementById('status-pid');
+  if (pid) pid.textContent = (p.pid !== null && p.pid !== undefined) ? p.pid : '—';
+  const started = document.getElementById('status-started');
+  if (started) started.textContent = p.started_at || '—';
+  const ended = document.getElementById('status-ended');
+  if (ended) ended.textContent = p.ended_at || '—';
+  const exit = document.getElementById('status-exit');
+  if (exit) exit.textContent = (p.exit_code !== null && p.exit_code !== undefined) ? p.exit_code : '—';
+  const term = document.getElementById('terminate-btn');
+  if (term) term.disabled = !ACTIVE_STATES.has(p.state);
+
+  const cur = p.current ?? 0;
+  const tgt = p.target ?? 0;
+  const pct = tgt > 0 ? (100 * cur / tgt).toFixed(1) : '—';
+  const rate = p.rate_per_sec !== null && p.rate_per_sec !== undefined
+    ? `${p.rate_per_sec.toFixed(2)}/s` : '—';
+  const elapsed = fmtDuration(p.elapsed_sec);
+  const eta = p.eta_sec !== null && p.eta_sec !== undefined
+    ? fmtDuration(p.eta_sec) : '—';
+  document.getElementById('progress-line').textContent =
+    `${cur} / ${tgt}  ·  ${pct}%  ·  ${rate}  ·  elapsed ${elapsed}  ·  eta ${eta}`;
+
+  const table = document.getElementById('stats-table');
+  const tbody = document.getElementById('stats-rows');
+  if (data.stats && data.stats.length) {
+    tbody.innerHTML = data.stats.map(s =>
+      `<tr><td class="mono">${s.label || s.name}</td>` +
+      `<td class="num">${fmtNum(s.p5)}</td>` +
+      `<td class="num">${fmtNum(s.p25)}</td>` +
+      `<td class="num">${fmtNum(s.p50)}</td>` +
+      `<td class="num">${fmtNum(s.p75)}</td>` +
+      `<td class="num">${fmtNum(s.p95)}</td></tr>`
+    ).join('');
+    table.style.display = '';
+  } else {
+    tbody.innerHTML = '';
+    table.style.display = 'none';
+  }
+  return ACTIVE_STATES.has(p.state);
+}
+
+(async function loop() {
+  while (true) {
+    const stillActive = await pollStats();
+    if (!stillActive) break;
+    await new Promise(r => setTimeout(r, 2000));
+  }
+})();
+</script>
+
+{% endblock %}

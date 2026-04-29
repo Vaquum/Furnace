@@ -1,0 +1,357 @@
+{% extends "base.html" %}
+{% block title %}Search · experiment_runner{% endblock %}
+{% block meta %}cross-round filter{% endblock %}
+{% block content %}
+
+<div class="bar">
+  <h1 class="atom-title">Search permutations</h1>
+  <a class="atom-micro" href="/">← experiments</a>
+</div>
+
+<div class="section">
+  <h2 class="atom-heading"><span class="numeral">01</span><span>Filters</span></h2>
+
+  <div class="filter-grid">
+    <div class="filter-row">
+      <span class="filter-label">Experiment</span>
+      <div class="multi-select" id="experiment-select">
+        <button type="button" class="ms-toggle" id="experiment-toggle"></button>
+        <div class="ms-panel" id="experiment-panel" hidden>
+          {% for name in all_experiments %}
+          <label class="ms-option">
+            <input type="checkbox" value="{{ name }}" {% if name in selected_experiments %}checked{% endif %}>
+            <span>{{ name }}</span>
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+      <span class="filter-readout"></span>
+    </div>
+
+    {% for metric in metrics %}
+    <div class="filter-row">
+      <span class="filter-label">{{ metric }}</span>
+      <div class="range-slider"
+           data-metric="{{ metric }}"
+           data-lo="{{ bounds[metric].min if bounds[metric].min is not none else 0 }}"
+           data-hi="{{ bounds[metric].max if bounds[metric].max is not none else 1 }}">
+        <div class="achievable"></div>
+        <div class="track"></div>
+        <div class="fill"></div>
+        <input type="range" class="min" aria-label="{{ metric }} min">
+        <input type="range" class="max" aria-label="{{ metric }} max">
+        <span class="bound-min"></span>
+        <span class="bound-max"></span>
+      </div>
+      <span class="filter-readout" data-readout="{{ metric }}"></span>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="button-row">
+    <button id="search-btn" type="button" class="primary">Search</button>
+    <button id="reset-btn" type="button">Reset</button>
+    <a id="export-btn" class="btn" href="/search/bundle">Export bundle</a>
+    <button id="copy-curl-btn" type="button">Copy curl</button>
+    <span id="copy-curl-status" class="atom-small" style="margin-left: var(--gap-s); align-self: center; color: var(--ink-mute);"></span>
+  </div>
+</div>
+
+<div class="section">
+  <h2 class="atom-heading">
+    <span class="numeral">02</span>
+    <span>Matching rounds</span>
+    <span id="results-meta" class="atom-small" style="margin-left: auto; color: var(--ink-mute); letter-spacing: 0.04em;"></span>
+  </h2>
+  <table class="search-results-table">
+    <thead>
+      <tr>
+        <th>Experiment</th>
+        <th>Round</th>
+        <th class="num">Matches</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody id="search-results-rows"></tbody>
+  </table>
+  <p id="search-empty" class="empty" style="display: none;">No matching rounds.</p>
+</div>
+
+<script>
+const METRICS = {{ metrics | tojson }};
+const ALL_EXPERIMENTS = {{ all_experiments | tojson }};
+const sliders = {};
+
+function round4(v) { return Math.round(v * 1e4) / 1e4; }
+
+function fmt(v) {
+  if (!isFinite(v)) return '—';
+  return round4(v).toString();
+}
+
+class RangeSlider {
+  constructor(root) {
+    this.root = root;
+    this.metric = root.dataset.metric;
+    let lo = round4(parseFloat(root.dataset.lo));
+    let hi = round4(parseFloat(root.dataset.hi));
+    if (!isFinite(lo) || !isFinite(hi)) { lo = 0; hi = 1; }
+    if (hi <= lo) hi = lo + 1e-4;
+    // Global bounds — fixed for the slider's lifetime.
+    this.lo = lo;
+    this.hi = hi;
+    // Achievable (LOO) bounds — shrink as other sliders narrow.
+    this.looLo = lo;
+    this.looHi = hi;
+    // Sticky once the user has narrowed within the LOO band; clears when
+    // the user widens back to the band's endpoints.
+    this.userTouched = false;
+    this.step = 1e-4;
+    this.minInput = root.querySelector('input.min');
+    this.maxInput = root.querySelector('input.max');
+    this.track = root.querySelector('.track');
+    this.achievable = root.querySelector('.achievable');
+    this.fill = root.querySelector('.fill');
+    this.boundMin = root.querySelector('.bound-min');
+    this.boundMax = root.querySelector('.bound-max');
+    this.readout = document.querySelector(`[data-readout="${this.metric}"]`);
+
+    [this.minInput, this.maxInput].forEach(inp => {
+      inp.min = this.lo;
+      inp.max = this.hi;
+      inp.step = this.step;
+    });
+    this.minInput.value = this.lo;
+    this.maxInput.value = this.hi;
+    this.minInput.addEventListener('input', e => this.onChange(e));
+    this.maxInput.addEventListener('input', e => this.onChange(e));
+    this.boundMin.textContent = fmt(this.lo);
+    this.boundMax.textContent = fmt(this.hi);
+    this.update();
+  }
+
+  onChange(e) {
+    let min = round4(parseFloat(this.minInput.value));
+    let max = round4(parseFloat(this.maxInput.value));
+    // Clamp to LOO (achievable) bounds — thumbs are pinned inside.
+    if (min < this.looLo) min = this.looLo;
+    if (max > this.looHi) max = this.looHi;
+    if (min > max) {
+      if (e.target === this.minInput) min = max;
+      else max = min;
+    }
+    this.minInput.value = min;
+    this.maxInput.value = max;
+    // The slider counts as user-narrowed only when the values sit inside
+    // the LOO band. Widening to the band's endpoints releases it back to
+    // auto-tracking.
+    this.userTouched = !(
+      min <= this.looLo + this.step / 2 && max >= this.looHi - this.step / 2
+    );
+    this.update();
+    debounceRefresh(this.metric);
+  }
+
+  update() {
+    const range = this.hi - this.lo;
+    const looL = ((this.looLo - this.lo) / range) * 100;
+    const looR = ((this.looHi - this.lo) / range) * 100;
+    this.achievable.style.left = looL + '%';
+    this.achievable.style.width = (looR - looL) + '%';
+
+    const min = parseFloat(this.minInput.value);
+    const max = parseFloat(this.maxInput.value);
+    const lpct = ((min - this.lo) / range) * 100;
+    const rpct = ((max - this.lo) / range) * 100;
+    this.fill.style.left = lpct + '%';
+    this.fill.style.width = (rpct - lpct) + '%';
+    this.readout.textContent = `${fmt(min)} — ${fmt(max)}`;
+  }
+
+  reset() {
+    this.userTouched = false;
+    this.looLo = this.lo;
+    this.looHi = this.hi;
+    this.minInput.value = this.lo;
+    this.maxInput.value = this.hi;
+    this.update();
+  }
+
+  setLooBounds(newLo, newHi) {
+    if (!isFinite(newLo) || !isFinite(newHi)) return;
+    this.looLo = round4(Math.max(newLo, this.lo));
+    this.looHi = round4(Math.min(newHi, this.hi));
+    if (this.looHi < this.looLo) { this.looLo = this.lo; this.looHi = this.hi; }
+    if (!this.userTouched) {
+      // Untouched slider tracks the LOO endpoints in both directions —
+      // narrowing or widening with the band.
+      this.minInput.value = this.looLo;
+      this.maxInput.value = this.looHi;
+    } else {
+      // Touched: keep the user's values, only clamp them into the new band.
+      let curMin = parseFloat(this.minInput.value);
+      let curMax = parseFloat(this.maxInput.value);
+      if (curMin < this.looLo) curMin = this.looLo;
+      if (curMax > this.looHi) curMax = this.looHi;
+      if (curMin > curMax) { curMin = this.looLo; curMax = this.looHi; }
+      this.minInput.value = curMin;
+      this.maxInput.value = curMax;
+    }
+    this.update();
+  }
+
+  values() {
+    return [round4(parseFloat(this.minInput.value)), round4(parseFloat(this.maxInput.value))];
+  }
+
+  isFullRange() {
+    const [min, max] = this.values();
+    return min <= this.looLo + this.step / 2 && max >= this.looHi - this.step / 2;
+  }
+}
+
+function escapeHTML(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+const expPanel = document.getElementById('experiment-panel');
+const expToggle = document.getElementById('experiment-toggle');
+const expBoxes = () => Array.from(expPanel.querySelectorAll('input[type="checkbox"]'));
+
+function selectedExperiments() {
+  return expBoxes().filter(c => c.checked).map(c => c.value);
+}
+
+function updateExpToggleLabel() {
+  const sel = selectedExperiments();
+  if (sel.length === 0) expToggle.textContent = 'no experiments';
+  else if (sel.length === ALL_EXPERIMENTS.length) expToggle.textContent = 'all experiments';
+  else if (sel.length === 1) expToggle.textContent = sel[0];
+  else expToggle.textContent = `${sel.length} of ${ALL_EXPERIMENTS.length}`;
+}
+
+function buildQueryString() {
+  const params = new URLSearchParams();
+  const sel = selectedExperiments();
+  if (sel.length === 0) {
+    // Explicit empty selection — sentinel for "no experiments". The
+    // server distinguishes this from a missing param (= all).
+    params.set('experiment_name', '');
+  } else if (sel.length < ALL_EXPERIMENTS.length) {
+    params.set('experiment_name', sel.join(','));
+  }
+  for (const m of METRICS) {
+    const s = sliders[m];
+    if (!s.isFullRange()) {
+      const [lo, hi] = s.values();
+      params.set(`${m}_min`, lo);
+      params.set(`${m}_max`, hi);
+    }
+  }
+  return params.toString();
+}
+
+function renderRounds(data) {
+  const tbody = document.getElementById('search-results-rows');
+  const empty = document.getElementById('search-empty');
+  const meta = document.getElementById('results-meta');
+  tbody.innerHTML = '';
+  if (!data.rounds || data.rounds.length === 0) {
+    empty.style.display = '';
+    meta.textContent = '';
+    return;
+  }
+  empty.style.display = 'none';
+  let total = 0;
+  data.rounds.forEach(row => {
+    total += row.match_count;
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      `<td>${escapeHTML(row.experiment_id)}</td>` +
+      `<td>${escapeHTML(row.round_id)}</td>` +
+      `<td class="num">${row.match_count}</td>` +
+      `<td><a class="atom-micro" href="/experiments/${encodeURIComponent(row.experiment_id)}/rounds/${encodeURIComponent(row.round_id)}/results">→</a></td>`;
+    tbody.appendChild(tr);
+  });
+  meta.textContent = `${data.rounds.length} rounds · ${total} permutations`;
+}
+
+let refreshTimer = null;
+
+function debounceRefresh(activeMetric) {
+  clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(() => refresh(activeMetric), 150);
+}
+
+async function refresh(activeMetric) {
+  const qs = buildQueryString();
+  const tail = qs ? '?' + qs : '';
+  const [bd, rd] = await Promise.all([
+    fetch(`/search/bounds.json${tail}`).then(r => r.json()),
+    fetch(`/search/rounds.json${tail}`).then(r => r.json()),
+  ]);
+  for (const m of METRICS) {
+    if (m === activeMetric) continue;
+    const b = bd.bounds[m];
+    if (b && b.min != null && b.max != null) {
+      sliders[m].setLooBounds(b.min, b.max);
+    }
+  }
+  renderRounds(rd);
+  document.getElementById('export-btn').href = `/search/bundle${tail}`;
+}
+
+async function runSearch() { return refresh(null); }
+
+function bundleUrl() {
+  const qs = buildQueryString();
+  return `${location.origin}/search/bundle${qs ? '?' + qs : ''}`;
+}
+
+async function copyCurl() {
+  const cmd = `curl -OJ '${bundleUrl()}'`;
+  const status = document.getElementById('copy-curl-status');
+  try {
+    await navigator.clipboard.writeText(cmd);
+    status.textContent = 'copied';
+    status.style.color = 'var(--accent)';
+  } catch (err) {
+    status.textContent = 'copy failed';
+    status.style.color = 'var(--negative)';
+  }
+  setTimeout(() => { status.textContent = ''; }, 1500);
+}
+
+document.querySelectorAll('.range-slider').forEach(el => {
+  sliders[el.dataset.metric] = new RangeSlider(el);
+});
+
+document.getElementById('search-btn').addEventListener('click', runSearch);
+document.getElementById('reset-btn').addEventListener('click', () => {
+  for (const m of METRICS) sliders[m].reset();
+  expBoxes().forEach(c => c.checked = true);
+  updateExpToggleLabel();
+  debounceRefresh(null);
+});
+document.getElementById('copy-curl-btn').addEventListener('click', copyCurl);
+
+expToggle.addEventListener('click', e => {
+  e.stopPropagation();
+  expPanel.hidden = !expPanel.hidden;
+});
+document.addEventListener('click', e => {
+  if (!document.getElementById('experiment-select').contains(e.target)) {
+    expPanel.hidden = true;
+  }
+});
+expBoxes().forEach(c => c.addEventListener('change', () => {
+  updateExpToggleLabel();
+  debounceRefresh(null);
+}));
+
+updateExpToggleLabel();
+runSearch();
+</script>
+
+{% endblock %}
