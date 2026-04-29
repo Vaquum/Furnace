@@ -645,12 +645,14 @@ def create_app(root: Path) -> FastAPI:
 
     @app.get("/search", response_class=HTMLResponse)
     def search_page(request: Request, experiment_name: str | None = None):
-        bounds = _compute_search_bounds(root, {}, experiment_name)
+        scope = _parse_experiment_names(experiment_name)
+        bounds = _compute_search_bounds(root, {}, scope)
         return templates.TemplateResponse(
             "search.html",
             {
                 "request": request,
-                "experiment_name": experiment_name or "",
+                "all_experiments": _list_experiment_names(root),
+                "selected_experiments": scope if scope is not None else _list_experiment_names(root),
                 "metrics": list(_SEARCH_METRICS),
                 "bounds": bounds,
             },
@@ -658,24 +660,30 @@ def create_app(root: Path) -> FastAPI:
 
     @app.get("/search/bounds.json")
     def search_bounds(request: Request, experiment_name: str | None = None):
+        scope = _parse_experiment_names(experiment_name)
         filters = _parse_filter_params(dict(request.query_params))
         return JSONResponse({
             "metrics": list(_SEARCH_METRICS),
-            "bounds": _compute_search_bounds(root, filters, experiment_name),
+            "bounds": _compute_search_bounds(root, filters, scope),
         })
 
     @app.get("/search/rounds.json")
     def search_rounds(request: Request, experiment_name: str | None = None):
+        scope = _parse_experiment_names(experiment_name)
         filters = _parse_filter_params(dict(request.query_params))
         return JSONResponse({
-            "rounds": _matching_rounds(root, filters, experiment_name),
+            "rounds": _matching_rounds(root, filters, scope),
         })
 
     @app.get("/search/bundle")
     def search_bundle(request: Request, experiment_name: str | None = None):
+        scope = _parse_experiment_names(experiment_name)
         filters = _parse_filter_params(dict(request.query_params))
-        blob = _build_search_bundle(root, filters, experiment_name)
-        name = f"search_{experiment_name}.zip" if experiment_name else "search_bundle.zip"
+        blob = _build_search_bundle(root, filters, scope)
+        if scope and len(scope) == 1:
+            name = f"search_{scope[0]}.zip"
+        else:
+            name = "search_bundle.zip"
         headers = {"Content-Disposition": f'attachment; filename="{name}"'}
         return Response(blob, media_type="application/zip", headers=headers)
 
@@ -924,14 +932,21 @@ def _ensure_round_index(round_dir: Path) -> Path | None:
     return idx_path
 
 
-def _ensure_indices(root: Path, experiment_name: str | None) -> None:
+def _list_experiment_names(root: Path) -> list[str]:
+    base = root / "experiments"
+    if not base.exists():
+        return []
+    return sorted(d.name for d in base.iterdir() if d.is_dir())
+
+
+def _ensure_indices(root: Path, experiment_names: list[str] | None) -> None:
     base = root / "experiments"
     if not base.exists():
         return
-    if experiment_name:
-        edirs = [base / experiment_name] if (base / experiment_name).is_dir() else []
-    else:
+    if experiment_names is None:
         edirs = [d for d in base.iterdir() if d.is_dir()]
+    else:
+        edirs = [base / n for n in experiment_names if (base / n).is_dir()]
     for ed in edirs:
         rd = ed / "rounds"
         if not rd.exists():
@@ -941,15 +956,19 @@ def _ensure_indices(root: Path, experiment_name: str | None) -> None:
                 _ensure_round_index(round_dir)
 
 
-def _index_paths(root: Path, experiment_name: str | None) -> list[Path]:
+def _index_paths(root: Path, experiment_names: list[str] | None) -> list[Path]:
     base = root / "experiments"
     if not base.exists():
         return []
     pat = "rounds/*/.index.parquet"
-    if experiment_name:
-        ed = base / experiment_name
-        return sorted(ed.glob(pat)) if ed.is_dir() else []
-    return sorted(base.glob(f"*/{pat}"))
+    if experiment_names is None:
+        return sorted(base.glob(f"*/{pat}"))
+    paths: list[Path] = []
+    for name in experiment_names:
+        ed = base / name
+        if ed.is_dir():
+            paths.extend(ed.glob(pat))
+    return sorted(paths)
 
 
 _FilterMap = dict[str, tuple[float | None, float | None]]
@@ -967,12 +986,12 @@ def _apply_search_filters(lf: pl.LazyFrame, filters: _FilterMap) -> pl.LazyFrame
 def _compute_search_bounds(
     root: Path,
     filters: _FilterMap,
-    experiment_name: str | None,
+    experiment_names: list[str] | None,
 ) -> dict[str, dict[str, float | None]]:
     """Per-metric leave-one-out bounds: each slider's range is min/max of its
     column with the other sliders' filters applied (its own filter excluded)."""
-    _ensure_indices(root, experiment_name)
-    paths = _index_paths(root, experiment_name)
+    _ensure_indices(root, experiment_names)
+    paths = _index_paths(root, experiment_names)
     if not paths:
         return {m: {"min": None, "max": None} for m in _SEARCH_METRICS}
     lf = pl.scan_parquet([str(p) for p in paths])
@@ -992,9 +1011,9 @@ def _compute_search_bounds(
     return out
 
 
-def _matching_rounds(root: Path, filters: _FilterMap, experiment_name: str | None) -> list[dict]:
-    _ensure_indices(root, experiment_name)
-    paths = _index_paths(root, experiment_name)
+def _matching_rounds(root: Path, filters: _FilterMap, experiment_names: list[str] | None) -> list[dict]:
+    _ensure_indices(root, experiment_names)
+    paths = _index_paths(root, experiment_names)
     if not paths:
         return []
     lf = pl.scan_parquet([str(p) for p in paths])
@@ -1008,9 +1027,9 @@ def _matching_rounds(root: Path, filters: _FilterMap, experiment_name: str | Non
     return df.to_dicts()
 
 
-def _build_search_bundle(root: Path, filters: _FilterMap, experiment_name: str | None) -> bytes:
-    _ensure_indices(root, experiment_name)
-    paths = _index_paths(root, experiment_name)
+def _build_search_bundle(root: Path, filters: _FilterMap, experiment_names: list[str] | None) -> bytes:
+    _ensure_indices(root, experiment_names)
+    paths = _index_paths(root, experiment_names)
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         if not paths:
@@ -1067,6 +1086,13 @@ def _build_search_bundle(root: Path, filters: _FilterMap, experiment_name: str |
                 z.writestr(f"{base}.csv", combined.write_csv())
 
     return buf.getvalue()
+
+
+def _parse_experiment_names(value: str | None) -> list[str] | None:
+    if not value:
+        return None
+    out = [s.strip() for s in value.split(",") if s.strip()]
+    return out or None
 
 
 def _parse_filter_params(qp: dict[str, str | None]) -> _FilterMap:

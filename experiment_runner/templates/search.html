@@ -14,27 +14,34 @@
   <div class="filter-grid">
     <div class="filter-row">
       <span class="filter-label">Experiment</span>
-      <input type="text" id="experiment-name" value="{{ experiment_name }}" placeholder="all experiments" autocomplete="off">
+      <div class="multi-select" id="experiment-select">
+        <button type="button" class="ms-toggle" id="experiment-toggle"></button>
+        <div class="ms-panel" id="experiment-panel" hidden>
+          {% for name in all_experiments %}
+          <label class="ms-option">
+            <input type="checkbox" value="{{ name }}" {% if name in selected_experiments %}checked{% endif %}>
+            <span>{{ name }}</span>
+          </label>
+          {% endfor %}
+        </div>
+      </div>
       <span class="filter-readout"></span>
     </div>
 
     {% for metric in metrics %}
     <div class="filter-row">
       <span class="filter-label">{{ metric }}</span>
-      <div class="range-wrap">
-        <div class="range-slider"
-             data-metric="{{ metric }}"
-             data-lo="{{ bounds[metric].min if bounds[metric].min is not none else 0 }}"
-             data-hi="{{ bounds[metric].max if bounds[metric].max is not none else 1 }}">
-          <div class="track"></div>
-          <div class="fill"></div>
-          <input type="range" class="min" aria-label="{{ metric }} min">
-          <input type="range" class="max" aria-label="{{ metric }} max">
-        </div>
-        <div class="range-bounds">
-          <span class="bound-min"></span>
-          <span class="bound-max"></span>
-        </div>
+      <div class="range-slider"
+           data-metric="{{ metric }}"
+           data-lo="{{ bounds[metric].min if bounds[metric].min is not none else 0 }}"
+           data-hi="{{ bounds[metric].max if bounds[metric].max is not none else 1 }}">
+        <div class="track"></div>
+        <div class="achievable"></div>
+        <div class="fill"></div>
+        <input type="range" class="min" aria-label="{{ metric }} min">
+        <input type="range" class="max" aria-label="{{ metric }} max">
+        <span class="bound-min"></span>
+        <span class="bound-max"></span>
       </div>
       <span class="filter-readout" data-readout="{{ metric }}"></span>
     </div>
@@ -72,26 +79,38 @@
 
 <script>
 const METRICS = {{ metrics | tojson }};
-const SCOPE_NAME = {{ experiment_name | tojson }};
+const ALL_EXPERIMENTS = {{ all_experiments | tojson }};
 const sliders = {};
+
+function round4(v) { return Math.round(v * 1e4) / 1e4; }
+
+function fmt(v) {
+  if (!isFinite(v)) return '—';
+  return round4(v).toString();
+}
 
 class RangeSlider {
   constructor(root) {
     this.root = root;
     this.metric = root.dataset.metric;
-    let lo = parseFloat(root.dataset.lo);
-    let hi = parseFloat(root.dataset.hi);
+    let lo = round4(parseFloat(root.dataset.lo));
+    let hi = round4(parseFloat(root.dataset.hi));
     if (!isFinite(lo) || !isFinite(hi)) { lo = 0; hi = 1; }
-    if (hi <= lo) hi = lo + 1e-9;
+    if (hi <= lo) hi = lo + 1e-4;
+    // Global bounds — fixed for the slider's lifetime.
     this.lo = lo;
     this.hi = hi;
-    this.step = (hi - lo) / 1000;
+    // Achievable (LOO) bounds — shrink as other sliders narrow.
+    this.looLo = lo;
+    this.looHi = hi;
+    this.step = 1e-4;
     this.minInput = root.querySelector('input.min');
     this.maxInput = root.querySelector('input.max');
+    this.track = root.querySelector('.track');
+    this.achievable = root.querySelector('.achievable');
     this.fill = root.querySelector('.fill');
-    const wrap = root.parentElement;
-    this.boundMin = wrap.querySelector('.bound-min');
-    this.boundMax = wrap.querySelector('.bound-max');
+    this.boundMin = root.querySelector('.bound-min');
+    this.boundMax = root.querySelector('.bound-max');
     this.readout = document.querySelector(`[data-readout="${this.metric}"]`);
 
     [this.minInput, this.maxInput].forEach(inp => {
@@ -109,20 +128,30 @@ class RangeSlider {
   }
 
   onChange(e) {
-    const min = parseFloat(this.minInput.value);
-    const max = parseFloat(this.maxInput.value);
+    let min = round4(parseFloat(this.minInput.value));
+    let max = round4(parseFloat(this.maxInput.value));
+    // Clamp to LOO (achievable) bounds — thumbs are pinned inside.
+    if (min < this.looLo) min = this.looLo;
+    if (max > this.looHi) max = this.looHi;
     if (min > max) {
-      if (e.target === this.minInput) this.minInput.value = this.maxInput.value;
-      else this.maxInput.value = this.minInput.value;
+      if (e.target === this.minInput) min = max;
+      else max = min;
     }
+    this.minInput.value = min;
+    this.maxInput.value = max;
     this.update();
     debounceCrossTalk(this.metric);
   }
 
   update() {
+    const range = this.hi - this.lo;
+    const looL = ((this.looLo - this.lo) / range) * 100;
+    const looR = ((this.looHi - this.lo) / range) * 100;
+    this.achievable.style.left = looL + '%';
+    this.achievable.style.width = (looR - looL) + '%';
+
     const min = parseFloat(this.minInput.value);
     const max = parseFloat(this.maxInput.value);
-    const range = this.hi - this.lo;
     const lpct = ((min - this.lo) / range) * 100;
     const rpct = ((max - this.lo) / range) * 100;
     this.fill.style.left = lpct + '%';
@@ -136,47 +165,30 @@ class RangeSlider {
     this.update();
   }
 
-  updateBounds(newLo, newHi) {
+  setLooBounds(newLo, newHi) {
     if (!isFinite(newLo) || !isFinite(newHi)) return;
-    if (newHi <= newLo) newHi = newLo + 1e-9;
-    const curMin = parseFloat(this.minInput.value);
-    const curMax = parseFloat(this.maxInput.value);
-    this.lo = newLo;
-    this.hi = newHi;
-    this.step = (newHi - newLo) / 1000;
-    [this.minInput, this.maxInput].forEach(inp => {
-      inp.min = newLo;
-      inp.max = newHi;
-      inp.step = this.step;
-    });
-    let nextMin = Math.max(curMin, newLo);
-    let nextMax = Math.min(curMax, newHi);
-    if (nextMin > nextMax) { nextMin = newLo; nextMax = newHi; }
-    this.minInput.value = nextMin;
-    this.maxInput.value = nextMax;
-    this.boundMin.textContent = fmt(newLo);
-    this.boundMax.textContent = fmt(newHi);
+    this.looLo = round4(Math.max(newLo, this.lo));
+    this.looHi = round4(Math.min(newHi, this.hi));
+    if (this.looHi < this.looLo) { this.looLo = this.lo; this.looHi = this.hi; }
+    // Clamp current values into the new achievable region.
+    let curMin = parseFloat(this.minInput.value);
+    let curMax = parseFloat(this.maxInput.value);
+    if (curMin < this.looLo) curMin = this.looLo;
+    if (curMax > this.looHi) curMax = this.looHi;
+    if (curMin > curMax) { curMin = this.looLo; curMax = this.looHi; }
+    this.minInput.value = curMin;
+    this.maxInput.value = curMax;
     this.update();
   }
 
   values() {
-    return [parseFloat(this.minInput.value), parseFloat(this.maxInput.value)];
+    return [round4(parseFloat(this.minInput.value)), round4(parseFloat(this.maxInput.value))];
   }
 
   isFullRange() {
     const [min, max] = this.values();
-    return min <= this.lo + this.step / 2 && max >= this.hi - this.step / 2;
+    return min <= this.looLo + this.step / 2 && max >= this.looHi - this.step / 2;
   }
-}
-
-function fmt(v) {
-  if (!isFinite(v)) return '—';
-  const a = Math.abs(v);
-  if (a === 0) return '0';
-  if (a >= 100) return v.toFixed(1);
-  if (a >= 1) return v.toFixed(3);
-  if (a >= 0.001) return v.toFixed(5);
-  return v.toExponential(2);
 }
 
 function escapeHTML(s) {
@@ -184,9 +196,28 @@ function escapeHTML(s) {
     ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
+const expPanel = document.getElementById('experiment-panel');
+const expToggle = document.getElementById('experiment-toggle');
+const expBoxes = () => Array.from(expPanel.querySelectorAll('input[type="checkbox"]'));
+
+function selectedExperiments() {
+  return expBoxes().filter(c => c.checked).map(c => c.value);
+}
+
+function updateExpToggleLabel() {
+  const sel = selectedExperiments();
+  if (sel.length === 0) expToggle.textContent = 'no experiments';
+  else if (sel.length === ALL_EXPERIMENTS.length) expToggle.textContent = 'all experiments';
+  else if (sel.length === 1) expToggle.textContent = sel[0];
+  else expToggle.textContent = `${sel.length} of ${ALL_EXPERIMENTS.length}`;
+}
+
 function buildQueryString() {
   const params = new URLSearchParams();
-  if (SCOPE_NAME) params.set('experiment_name', SCOPE_NAME);
+  const sel = selectedExperiments();
+  if (sel.length > 0 && sel.length < ALL_EXPERIMENTS.length) {
+    params.set('experiment_name', sel.join(','));
+  }
   for (const m of METRICS) {
     const s = sliders[m];
     if (!s.isFullRange()) {
@@ -242,7 +273,7 @@ async function crossTalk(activeMetric) {
     if (m === activeMetric) continue;
     const b = data.bounds[m];
     if (b == null || b.min == null || b.max == null) continue;
-    sliders[m].updateBounds(b.min, b.max);
+    sliders[m].setLooBounds(b.min, b.max);
   }
 }
 
@@ -272,19 +303,27 @@ document.querySelectorAll('.range-slider').forEach(el => {
 document.getElementById('search-btn').addEventListener('click', runSearch);
 document.getElementById('reset-btn').addEventListener('click', () => {
   for (const m of METRICS) sliders[m].reset();
+  expBoxes().forEach(c => c.checked = true);
+  updateExpToggleLabel();
   debounceCrossTalk(null);
 });
 document.getElementById('copy-curl-btn').addEventListener('click', copyCurl);
 
-const enameInput = document.getElementById('experiment-name');
-enameInput.addEventListener('keydown', e => {
-  if (e.key === 'Enter') {
-    e.preventDefault();
-    const v = enameInput.value.trim();
-    location.href = v ? `/search?experiment_name=${encodeURIComponent(v)}` : '/search';
+expToggle.addEventListener('click', e => {
+  e.stopPropagation();
+  expPanel.hidden = !expPanel.hidden;
+});
+document.addEventListener('click', e => {
+  if (!document.getElementById('experiment-select').contains(e.target)) {
+    expPanel.hidden = true;
   }
 });
+expBoxes().forEach(c => c.addEventListener('change', () => {
+  updateExpToggleLabel();
+  debounceCrossTalk(null);
+}));
 
+updateExpToggleLabel();
 runSearch();
 </script>
 

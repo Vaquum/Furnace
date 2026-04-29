@@ -771,41 +771,101 @@ table.results-table tbody tr.row-enter {
   text-align: right;
 }
 
-#experiment-name {
+/* Multi-select dropdown for experiment scope */
+.multi-select { position: relative; width: 100%; }
+.ms-toggle {
   font-family: var(--font-sans);
   font-size: var(--t-body);
+  font-weight: 400;
   color: var(--ink);
   background: var(--paper);
   border: 1px solid var(--rule);
   border-radius: 0;
   padding: 8px 12px;
   width: 100%;
+  text-align: left;
+  cursor: pointer;
+  letter-spacing: 0;
+  transition: border-color var(--motion);
 }
-#experiment-name:focus {
+.ms-toggle:hover { border-color: var(--ink-mute); color: var(--ink); }
+.ms-toggle:focus-visible {
   outline: 1px solid var(--accent);
   outline-offset: 2px;
   border-color: var(--accent);
 }
-
-.range-wrap { display: flex; flex-direction: column; gap: 4px; }
-.range-bounds {
+.ms-panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  z-index: 10;
+  max-height: 240px;
+  overflow-y: auto;
   display: flex;
-  justify-content: space-between;
-  font-family: var(--font-mono);
-  font-size: var(--t-small);
-  color: var(--ink-mute);
+  flex-direction: column;
 }
+.ms-panel[hidden] { display: none; }
+.ms-option {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-s);
+  padding: 6px 12px;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: var(--t-code);
+  color: var(--ink);
+}
+.ms-option:hover { background: var(--paper-2); }
+.ms-option input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--ink-mute);
+  border-radius: 0;
+  background: var(--paper);
+  cursor: pointer;
+  position: relative;
+  margin: 0;
+  flex: 0 0 auto;
+}
+.ms-option input[type="checkbox"]:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.ms-option input[type="checkbox"]:checked::after {
+  content: "";
+  position: absolute;
+  left: 3px; top: 0;
+  width: 4px; height: 8px;
+  border: solid var(--paper);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
 .range-slider {
   position: relative;
   height: 24px;
   width: 100%;
+  overflow: visible;
 }
 .range-slider .track {
   position: absolute;
   top: 50%; left: 0; right: 0;
   height: 1px;
+  background: var(--paper-2);
+  transform: translateY(-50%);
+}
+.range-slider .achievable {
+  position: absolute;
+  top: 50%;
+  height: 1px;
   background: var(--rule);
   transform: translateY(-50%);
+  pointer-events: none;
 }
 .range-slider .fill {
   position: absolute;
@@ -815,6 +875,17 @@ table.results-table tbody tr.row-enter {
   transform: translateY(-50%);
   pointer-events: none;
 }
+.range-slider .bound-min,
+.range-slider .bound-max {
+  position: absolute;
+  top: calc(50% + 12px);
+  font-family: var(--font-mono);
+  font-size: var(--t-small);
+  color: var(--ink-mute);
+  pointer-events: none;
+}
+.range-slider .bound-min { left: 0; }
+.range-slider .bound-max { right: 0; }
 .range-slider input[type="range"] {
   position: absolute;
   inset: 0;
