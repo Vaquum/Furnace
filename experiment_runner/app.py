@@ -908,21 +908,21 @@ def _ensure_round_index(round_dir: Path) -> Path | None:
         return None
 
     sha = hashlib.sha256(code_path.read_bytes()).hexdigest()
-    bim = pl.col("backtest_bars_total").cast(pl.Float64) * pl.col("backtest_bars_in_market_pct").cast(pl.Float64) / 100.0
+    bt = pl.col("backtest_bars_total").cast(pl.Float64)
 
     out = (
         df.lazy()
-        .with_columns(bim.alias("_bim"))
-        .filter(pl.col("_bim") > 0)
+        .with_columns(bt.alias("_bt"))
+        .filter(pl.col("_bt") > 0)
         .select([
             pl.col("id").cast(pl.Int64).alias("permutation_id"),
             pl.lit(round_dir.parent.parent.name).alias("experiment_id"),
             pl.lit(round_dir.name).alias("round_id"),
             pl.lit(sha).alias("code_sha256"),
-            (pl.col("backtest_trades_count").cast(pl.Float64) / pl.col("_bim")).alias("trade_per_bar"),
-            (pl.col("backtest_total_return_net_pct").cast(pl.Float64) / pl.col("_bim")).alias("return_per_bar"),
-            (pl.col("backtest_mean_kelly_pct").cast(pl.Float64) / pl.col("_bim")).alias("kelly_per_bar"),
-            pl.col("backtest_sharpe_per_bar").cast(pl.Float64).alias("sharpe_per_bar"),
+            (pl.col("backtest_trades_count").cast(pl.Float64) / pl.col("_bt")).alias("trade_per_bar"),
+            (pl.col("backtest_total_return_net_pct").cast(pl.Float64) / pl.col("_bt")).alias("return_per_bar"),
+            (pl.col("backtest_mean_kelly_pct").cast(pl.Float64, strict=False) / pl.col("_bt")).alias("kelly_per_bar"),
+            pl.col("backtest_sharpe_per_bar").cast(pl.Float64, strict=False).alias("sharpe_per_bar"),
         ])
         .collect()
     )
@@ -976,6 +976,9 @@ _FilterMap = dict[str, tuple[float | None, float | None]]
 
 def _apply_search_filters(lf: pl.LazyFrame, filters: _FilterMap) -> pl.LazyFrame:
     for metric, (lo, hi) in filters.items():
+        if lo is None and hi is None:
+            continue
+        lf = lf.filter(pl.col(metric).is_not_nan())
         if lo is not None:
             lf = lf.filter(pl.col(metric) >= lo)
         if hi is not None:
