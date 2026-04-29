@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import difflib
+import hashlib
 import io
 import json
 import os
@@ -12,6 +13,7 @@ import time
 import zipfile
 from pathlib import Path
 
+import polars as pl
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -641,6 +643,28 @@ def create_app(root: Path) -> FastAPI:
     def round_stats(experiment_id: str, round_id: str):
         return JSONResponse(_compute_round_stats(_round_dir(experiment_id, round_id)))
 
+    @app.get("/search/bounds.json")
+    def search_bounds(experiment_name: str | None = None):
+        return JSONResponse({
+            "metrics": list(_SEARCH_METRICS),
+            "bounds": _compute_search_bounds(root, experiment_name),
+        })
+
+    @app.get("/search/rounds.json")
+    def search_rounds(request: Request, experiment_name: str | None = None):
+        filters = _parse_filter_params(dict(request.query_params))
+        return JSONResponse({
+            "rounds": _matching_rounds(root, filters, experiment_name),
+        })
+
+    @app.get("/search/bundle")
+    def search_bundle(request: Request, experiment_name: str | None = None):
+        filters = _parse_filter_params(dict(request.query_params))
+        blob = _build_search_bundle(root, filters, experiment_name)
+        name = f"search_{experiment_name}.zip" if experiment_name else "search_bundle.zip"
+        headers = {"Content-Disposition": f'attachment; filename="{name}"'}
+        return Response(blob, media_type="application/zip", headers=headers)
+
     return app
 
 
@@ -817,3 +841,215 @@ def _compute_round_stats(round_dir: Path) -> dict:
             continue
 
     return {"progress": progress, "stats": stats}
+
+
+# ---- Cross-round search ---------------------------------------------------
+
+_SEARCH_METRICS: tuple[str, ...] = (
+    "trade_per_bar",
+    "return_per_bar",
+    "kelly_per_bar",
+    "sharpe_per_bar",
+)
+
+_SEARCH_REQUIRED_COLS: frozenset[str] = frozenset({
+    "id",
+    "backtest_bars_total",
+    "backtest_bars_in_market_pct",
+    "backtest_trades_count",
+    "backtest_total_return_net_pct",
+    "backtest_mean_kelly_pct",
+    "backtest_sharpe_per_bar",
+})
+
+
+def _ensure_round_index(round_dir: Path) -> Path | None:
+    state = read_status(round_dir).get("state")
+    if state in ACTIVE_STATES:
+        return None
+    args_path = round_dir / "args.json"
+    code_path = round_dir / "code.py"
+    if not args_path.exists() or not code_path.exists():
+        return None
+    args = json.loads(args_path.read_text())
+    ename = args["uel_run"]["experiment_name"]
+    csv_path = round_dir / f"{ename}__r{round_dir.name}.csv"
+    if not csv_path.exists():
+        return None
+
+    idx_path = round_dir / ".index.parquet"
+    if idx_path.exists() and idx_path.stat().st_mtime >= csv_path.stat().st_mtime:
+        return idx_path
+
+    df = pl.read_csv(csv_path, infer_schema_length=200)
+    if not _SEARCH_REQUIRED_COLS.issubset(df.columns):
+        return None
+
+    sha = hashlib.sha256(code_path.read_bytes()).hexdigest()
+    bim = pl.col("backtest_bars_total").cast(pl.Float64) * pl.col("backtest_bars_in_market_pct").cast(pl.Float64) / 100.0
+
+    out = (
+        df.lazy()
+        .with_columns(bim.alias("_bim"))
+        .filter(pl.col("_bim") > 0)
+        .select([
+            pl.col("id").cast(pl.Int64).alias("permutation_id"),
+            pl.lit(round_dir.parent.parent.name).alias("experiment_id"),
+            pl.lit(round_dir.name).alias("round_id"),
+            pl.lit(sha).alias("code_sha256"),
+            (pl.col("backtest_trades_count").cast(pl.Float64) / pl.col("_bim")).alias("trade_per_bar"),
+            (pl.col("backtest_total_return_net_pct").cast(pl.Float64) / pl.col("_bim")).alias("return_per_bar"),
+            (pl.col("backtest_mean_kelly_pct").cast(pl.Float64) / pl.col("_bim")).alias("kelly_per_bar"),
+            pl.col("backtest_sharpe_per_bar").cast(pl.Float64).alias("sharpe_per_bar"),
+        ])
+        .collect()
+    )
+    tmp = idx_path.with_suffix(".parquet.tmp")
+    out.write_parquet(tmp, compression="snappy")
+    os.replace(tmp, idx_path)
+    return idx_path
+
+
+def _ensure_indices(root: Path, experiment_name: str | None) -> None:
+    base = root / "experiments"
+    if not base.exists():
+        return
+    if experiment_name:
+        edirs = [base / experiment_name] if (base / experiment_name).is_dir() else []
+    else:
+        edirs = [d for d in base.iterdir() if d.is_dir()]
+    for ed in edirs:
+        rd = ed / "rounds"
+        if not rd.exists():
+            continue
+        for round_dir in rd.iterdir():
+            if round_dir.is_dir():
+                _ensure_round_index(round_dir)
+
+
+def _index_paths(root: Path, experiment_name: str | None) -> list[Path]:
+    base = root / "experiments"
+    if not base.exists():
+        return []
+    pat = "rounds/*/.index.parquet"
+    if experiment_name:
+        ed = base / experiment_name
+        return sorted(ed.glob(pat)) if ed.is_dir() else []
+    return sorted(base.glob(f"*/{pat}"))
+
+
+_FilterMap = dict[str, tuple[float | None, float | None]]
+
+
+def _apply_search_filters(lf: pl.LazyFrame, filters: _FilterMap) -> pl.LazyFrame:
+    for metric, (lo, hi) in filters.items():
+        if lo is not None:
+            lf = lf.filter(pl.col(metric) >= lo)
+        if hi is not None:
+            lf = lf.filter(pl.col(metric) <= hi)
+    return lf
+
+
+def _compute_search_bounds(root: Path, experiment_name: str | None) -> dict[str, dict[str, float | None]]:
+    _ensure_indices(root, experiment_name)
+    paths = _index_paths(root, experiment_name)
+    if not paths:
+        return {m: {"min": None, "max": None} for m in _SEARCH_METRICS}
+    lf = pl.scan_parquet([str(p) for p in paths])
+    aggs: list[pl.Expr] = []
+    for m in _SEARCH_METRICS:
+        aggs.append(pl.col(m).min().alias(f"{m}__min"))
+        aggs.append(pl.col(m).max().alias(f"{m}__max"))
+    df = lf.select(aggs).collect()
+    if df.height == 0:
+        return {m: {"min": None, "max": None} for m in _SEARCH_METRICS}
+    row = df.row(0, named=True)
+    return {m: {"min": row[f"{m}__min"], "max": row[f"{m}__max"]} for m in _SEARCH_METRICS}
+
+
+def _matching_rounds(root: Path, filters: _FilterMap, experiment_name: str | None) -> list[dict]:
+    _ensure_indices(root, experiment_name)
+    paths = _index_paths(root, experiment_name)
+    if not paths:
+        return []
+    lf = pl.scan_parquet([str(p) for p in paths])
+    df = (
+        _apply_search_filters(lf, filters)
+        .group_by(["experiment_id", "round_id"])
+        .agg(pl.len().alias("match_count"))
+        .sort(["match_count", "experiment_id", "round_id"], descending=[True, False, True])
+        .collect()
+    )
+    return df.to_dicts()
+
+
+def _build_search_bundle(root: Path, filters: _FilterMap, experiment_name: str | None) -> bytes:
+    _ensure_indices(root, experiment_name)
+    paths = _index_paths(root, experiment_name)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        if not paths:
+            return buf.getvalue()
+        lf = pl.scan_parquet([str(p) for p in paths])
+        matches = (
+            _apply_search_filters(lf, filters)
+            .select(["experiment_id", "round_id", "code_sha256", "permutation_id"])
+            .collect()
+        )
+        if matches.height == 0:
+            return buf.getvalue()
+
+        groups: dict[tuple[str, str], dict[str, list[int]]] = {}
+        for row in matches.iter_rows(named=True):
+            key = (row["experiment_id"], row["code_sha256"])
+            groups.setdefault(key, {}).setdefault(row["round_id"], []).append(row["permutation_id"])
+
+        for (exp_id, sha), by_round in groups.items():
+            sorted_round_ids = sorted(by_round.keys())
+            base = f"{exp_id}__r" + "-".join(sorted_round_ids)
+
+            first_dir = root / "experiments" / exp_id / "rounds" / sorted_round_ids[0]
+            z.writestr(f"{base}.py", (first_dir / "code.py").read_text())
+
+            rounds_meta = []
+            for rid in sorted_round_ids:
+                rdir = root / "experiments" / exp_id / "rounds" / rid
+                rounds_meta.append({
+                    "round_id": rid,
+                    "args": json.loads((rdir / "args.json").read_text()),
+                })
+            meta = {"experiment_id": exp_id, "code_sha256": sha, "rounds": rounds_meta}
+            z.writestr(f"{base}.json", json.dumps(meta, indent=2))
+
+            csv_parts: list[pl.DataFrame] = []
+            for rid in sorted_round_ids:
+                rdir = root / "experiments" / exp_id / "rounds" / rid
+                args = json.loads((rdir / "args.json").read_text())
+                ename = args["uel_run"]["experiment_name"]
+                csv_path = rdir / f"{ename}__r{rid}.csv"
+                if not csv_path.exists():
+                    continue
+                df = pl.read_csv(csv_path, infer_schema_length=200)
+                df = df.filter(pl.col("id").is_in(by_round[rid]))
+                df = df.select([
+                    pl.lit(exp_id).alias("experiment_id"),
+                    pl.lit(rid).alias("round_id"),
+                    *[pl.col(c) for c in df.columns],
+                ])
+                csv_parts.append(df)
+            if csv_parts:
+                combined = pl.concat(csv_parts, how="vertical_relaxed")
+                z.writestr(f"{base}.csv", combined.write_csv())
+
+    return buf.getvalue()
+
+
+def _parse_filter_params(qp: dict[str, str | None]) -> _FilterMap:
+    out: _FilterMap = {}
+    for m in _SEARCH_METRICS:
+        lo_s = qp.get(f"{m}_min")
+        hi_s = qp.get(f"{m}_max")
+        lo = float(lo_s) if lo_s not in (None, "") else None
+        hi = float(hi_s) if hi_s not in (None, "") else None
+        out[m] = (lo, hi)
+    return out
