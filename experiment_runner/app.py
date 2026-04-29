@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 import zipfile
+from datetime import datetime
 from pathlib import Path
 
 import polars as pl
@@ -724,11 +725,7 @@ def _compute_results_page(
     if not csv_path.exists():
         return {"rows": [], "total": 0}
 
-    import polars as pl
-    try:
-        df = pl.read_csv(csv_path, infer_schema_length=200)
-    except Exception:
-        return {"rows": [], "total": 0}
+    df = pl.read_csv(csv_path, infer_schema_length=200)
 
     present = [c for c in _RESULTS_COLUMNS if c in df.columns]
     if not present:
@@ -771,12 +768,10 @@ def _compute_results_page(
 def _parse_iso(s: str | None):
     if not s:
         return None
-    from datetime import datetime
     return datetime.fromisoformat(s.rstrip("Z"))
 
 
 def _compute_round_stats(round_dir: Path) -> dict:
-    from datetime import datetime
     status = read_status(round_dir)
     frozen_args = json.loads((round_dir / "args.json").read_text())
     target = int(frozen_args["uel_run"]["n_permutations"])
@@ -801,13 +796,9 @@ def _compute_round_stats(round_dir: Path) -> dict:
     if not csv_path.exists():
         return {"progress": progress, "stats": stats}
 
-    try:
-        with open(csv_path, "r") as f:
-            for current, _line in enumerate(f):
-                pass
-    except OSError:
-        return {"progress": progress, "stats": stats}
-    current = max(current, 0)  # subtract header (0-indexed last loop var)
+    with open(csv_path, "r") as f:
+        n_lines = sum(1 for _ in f)
+    current = max(n_lines - 1, 0)  # subtract one for the header line
     progress["current"] = current
 
     if started:
@@ -823,11 +814,7 @@ def _compute_round_stats(round_dir: Path) -> dict:
     if current <= 0:
         return {"progress": progress, "stats": stats}
 
-    try:
-        import polars as pl
-        df = pl.read_csv(csv_path, infer_schema_length=200)
-    except Exception:
-        return {"progress": progress, "stats": stats}
+    df = pl.read_csv(csv_path, infer_schema_length=200)
 
     desired = (
         "backtest_trades_count",
@@ -843,24 +830,18 @@ def _compute_round_stats(round_dir: Path) -> dict:
     for col in desired:
         if col not in df.columns:
             continue
-        try:
-            s = df[col].cast(pl.Float64, strict=False).drop_nulls().drop_nans()
-        except Exception:
-            continue
+        s = df[col].cast(pl.Float64, strict=False).drop_nulls().drop_nans()
         if s.is_empty():
             continue
-        try:
-            stats.append({
-                "name": col,
-                "label": _display_label(col),
-                "p5": s.quantile(0.05),
-                "p25": s.quantile(0.25),
-                "p50": s.quantile(0.50),
-                "p75": s.quantile(0.75),
-                "p95": s.quantile(0.95),
-            })
-        except Exception:
-            continue
+        stats.append({
+            "name": col,
+            "label": _display_label(col),
+            "p5": s.quantile(0.05),
+            "p25": s.quantile(0.25),
+            "p50": s.quantile(0.50),
+            "p75": s.quantile(0.75),
+            "p95": s.quantile(0.95),
+        })
 
     return {"progress": progress, "stats": stats}
 
@@ -1033,69 +1014,70 @@ def _matching_rounds(root: Path, filters: _FilterMap, experiment_names: list[str
 def _build_search_bundle(root: Path, filters: _FilterMap, experiment_names: list[str] | None) -> bytes:
     _ensure_indices(root, experiment_names)
     paths = _index_paths(root, experiment_names)
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        if not paths:
-            return buf.getvalue()
+    matches = pl.DataFrame()
+    if paths:
         lf = pl.scan_parquet([str(p) for p in paths])
         matches = (
             _apply_search_filters(lf, filters)
             .select(["experiment_id", "round_id", "code_sha256", "permutation_id"])
             .collect()
         )
-        if matches.height == 0:
-            return buf.getvalue()
 
-        groups: dict[tuple[str, str], dict[str, list[int]]] = {}
-        for row in matches.iter_rows(named=True):
-            key = (row["experiment_id"], row["code_sha256"])
-            groups.setdefault(key, {}).setdefault(row["round_id"], []).append(row["permutation_id"])
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        if matches.height > 0:
+            groups: dict[tuple[str, str], dict[str, list[int]]] = {}
+            for row in matches.iter_rows(named=True):
+                key = (row["experiment_id"], row["code_sha256"])
+                groups.setdefault(key, {}).setdefault(row["round_id"], []).append(row["permutation_id"])
 
-        for (exp_id, sha), by_round in groups.items():
-            sorted_round_ids = sorted(by_round.keys())
-            base = f"{exp_id}__r" + "-".join(sorted_round_ids)
+            for (exp_id, sha), by_round in groups.items():
+                sorted_round_ids = sorted(by_round.keys())
+                base = f"{exp_id}__r" + "-".join(sorted_round_ids)
 
-            first_dir = root / "experiments" / exp_id / "rounds" / sorted_round_ids[0]
-            z.writestr(f"{base}.py", (first_dir / "code.py").read_text())
+                first_dir = root / "experiments" / exp_id / "rounds" / sorted_round_ids[0]
+                z.writestr(f"{base}.py", (first_dir / "code.py").read_text())
 
-            rounds_meta = []
-            for rid in sorted_round_ids:
-                rdir = root / "experiments" / exp_id / "rounds" / rid
-                rounds_meta.append({
-                    "round_id": rid,
-                    "args": json.loads((rdir / "args.json").read_text()),
-                })
-            meta = {"experiment_id": exp_id, "code_sha256": sha, "rounds": rounds_meta}
-            z.writestr(f"{base}.json", json.dumps(meta, indent=2))
+                rounds_meta = []
+                for rid in sorted_round_ids:
+                    rdir = root / "experiments" / exp_id / "rounds" / rid
+                    rounds_meta.append({
+                        "round_id": rid,
+                        "args": json.loads((rdir / "args.json").read_text()),
+                    })
+                meta = {"experiment_id": exp_id, "code_sha256": sha, "rounds": rounds_meta}
+                z.writestr(f"{base}.json", json.dumps(meta, indent=2))
 
-            csv_parts: list[pl.DataFrame] = []
-            for rid in sorted_round_ids:
-                rdir = root / "experiments" / exp_id / "rounds" / rid
-                args = json.loads((rdir / "args.json").read_text())
-                ename = args["uel_run"]["experiment_name"]
-                csv_path = rdir / f"{ename}__r{rid}.csv"
-                if not csv_path.exists():
-                    continue
-                df = pl.read_csv(csv_path, infer_schema_length=200)
-                df = df.filter(pl.col("id").is_in(by_round[rid]))
-                df = df.select([
-                    pl.lit(exp_id).alias("experiment_id"),
-                    pl.lit(rid).alias("round_id"),
-                    *[pl.col(c) for c in df.columns],
-                ])
-                csv_parts.append(df)
-            if csv_parts:
-                combined = pl.concat(csv_parts, how="vertical_relaxed")
-                z.writestr(f"{base}.csv", combined.write_csv())
+                csv_parts: list[pl.DataFrame] = []
+                for rid in sorted_round_ids:
+                    rdir = root / "experiments" / exp_id / "rounds" / rid
+                    args = json.loads((rdir / "args.json").read_text())
+                    ename = args["uel_run"]["experiment_name"]
+                    csv_path = rdir / f"{ename}__r{rid}.csv"
+                    if not csv_path.exists():
+                        continue
+                    df = pl.read_csv(csv_path, infer_schema_length=200)
+                    df = df.filter(pl.col("id").is_in(by_round[rid]))
+                    df = df.select([
+                        pl.lit(exp_id).alias("experiment_id"),
+                        pl.lit(rid).alias("round_id"),
+                        *[pl.col(c) for c in df.columns],
+                    ])
+                    csv_parts.append(df)
+                if csv_parts:
+                    combined = pl.concat(csv_parts, how="vertical_relaxed")
+                    z.writestr(f"{base}.csv", combined.write_csv())
 
     return buf.getvalue()
 
 
 def _parse_experiment_names(value: str | None) -> list[str] | None:
-    if not value:
+    # None  -> missing param: scope is "all experiments".
+    # ""    -> explicit empty selection: scope is "no experiments".
+    # "A,B" -> explicit list.
+    if value is None:
         return None
-    out = [s.strip() for s in value.split(",") if s.strip()]
-    return out or None
+    return [s.strip() for s in value.split(",") if s.strip()]
 
 
 def _parse_filter_params(qp: dict[str, str | None]) -> _FilterMap:

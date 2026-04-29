@@ -1,0 +1,14 @@
+{% for r in rounds %}
+<tr>
+  <td class="mono"><a href="/experiments/{{ experiment_id }}/rounds/{{ r.round_id }}">{{ r.round_id }}</a></td>
+  <td><span class="state {{ r.state }}">{{ r.state }}</span></td>
+  <td class="num">{{ r.pid if r.pid is not none else "—" }}</td>
+  <td class="time">{{ r.started_at or "—" }}</td>
+  <td class="time">{{ r.ended_at or "—" }}</td>
+  <td class="num">{{ r.exit_code if r.exit_code is not none else "—" }}</td>
+  <td><a class="atom-micro" href="/experiments/{{ experiment_id }}/rounds/{{ r.round_id }}">View</a></td>
+</tr>
+{% endfor %}
+{% if not rounds %}
+<tr><td colspan="7" class="empty-cell">No rounds yet for this experiment.</td></tr>
+{% endif %}

@@ -234,7 +234,11 @@ function updateExpToggleLabel() {
 function buildQueryString() {
   const params = new URLSearchParams();
   const sel = selectedExperiments();
-  if (sel.length > 0 && sel.length < ALL_EXPERIMENTS.length) {
+  if (sel.length === 0) {
+    // Explicit empty selection — sentinel for "no experiments". The
+    // server distinguishes this from a missing param (= all).
+    params.set('experiment_name', '');
+  } else if (sel.length < ALL_EXPERIMENTS.length) {
     params.set('experiment_name', sel.join(','));
   }
   for (const m of METRICS) {

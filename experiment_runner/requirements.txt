@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+jinja2
+python-multipart
+polars>=1.0
+vaquum_limen @ git+https://github.com/Vaquum/Limen.git@main
