@@ -1,0 +1,225 @@
+{% extends "base.html" %}
+{% block title %}Search · experiment_runner{% endblock %}
+{% block meta %}cross-round filter{% endblock %}
+{% block content %}
+
+<div class="bar">
+  <h1 class="atom-title">Search permutations</h1>
+  <a class="atom-micro" href="/">← experiments</a>
+</div>
+
+<div class="section">
+  <h2 class="atom-heading"><span class="numeral">01</span><span>Filters</span></h2>
+
+  <div class="filter-grid">
+    <div class="filter-row">
+      <span class="filter-label">Experiment</span>
+      <input type="text" id="experiment-name" value="{{ experiment_name }}" placeholder="all experiments" autocomplete="off">
+      <span class="filter-readout"></span>
+    </div>
+
+    {% for metric in metrics %}
+    <div class="filter-row">
+      <span class="filter-label">{{ metric }}</span>
+      <div class="range-wrap">
+        <div class="range-slider"
+             data-metric="{{ metric }}"
+             data-lo="{{ bounds[metric].min if bounds[metric].min is not none else 0 }}"
+             data-hi="{{ bounds[metric].max if bounds[metric].max is not none else 1 }}">
+          <div class="track"></div>
+          <div class="fill"></div>
+          <input type="range" class="min" aria-label="{{ metric }} min">
+          <input type="range" class="max" aria-label="{{ metric }} max">
+        </div>
+        <div class="range-bounds">
+          <span class="bound-min"></span>
+          <span class="bound-max"></span>
+        </div>
+      </div>
+      <span class="filter-readout" data-readout="{{ metric }}"></span>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="button-row">
+    <button id="search-btn" type="button" class="primary">Search</button>
+    <button id="reset-btn" type="button">Reset</button>
+    <a id="export-btn" class="btn" href="/search/bundle">Export bundle</a>
+  </div>
+</div>
+
+<div class="section">
+  <h2 class="atom-heading">
+    <span class="numeral">02</span>
+    <span>Matching rounds</span>
+    <span id="results-meta" class="atom-small" style="margin-left: auto; color: var(--ink-mute); letter-spacing: 0.04em;"></span>
+  </h2>
+  <table class="search-results-table">
+    <thead>
+      <tr>
+        <th>Experiment</th>
+        <th>Round</th>
+        <th class="num">Matches</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody id="search-results-rows"></tbody>
+  </table>
+  <p id="search-empty" class="empty" style="display: none;">No matching rounds.</p>
+</div>
+
+<script>
+const METRICS = {{ metrics | tojson }};
+const SCOPE_NAME = {{ experiment_name | tojson }};
+const sliders = {};
+
+class RangeSlider {
+  constructor(root) {
+    this.root = root;
+    this.metric = root.dataset.metric;
+    let lo = parseFloat(root.dataset.lo);
+    let hi = parseFloat(root.dataset.hi);
+    if (!isFinite(lo) || !isFinite(hi)) { lo = 0; hi = 1; }
+    if (hi <= lo) hi = lo + 1e-9;
+    this.lo = lo;
+    this.hi = hi;
+    this.step = (hi - lo) / 1000;
+    this.minInput = root.querySelector('input.min');
+    this.maxInput = root.querySelector('input.max');
+    this.fill = root.querySelector('.fill');
+    const wrap = root.parentElement;
+    this.boundMin = wrap.querySelector('.bound-min');
+    this.boundMax = wrap.querySelector('.bound-max');
+    this.readout = document.querySelector(`[data-readout="${this.metric}"]`);
+
+    [this.minInput, this.maxInput].forEach(inp => {
+      inp.min = this.lo;
+      inp.max = this.hi;
+      inp.step = this.step;
+    });
+    this.minInput.value = this.lo;
+    this.maxInput.value = this.hi;
+    this.minInput.addEventListener('input', e => this.onChange(e));
+    this.maxInput.addEventListener('input', e => this.onChange(e));
+    this.boundMin.textContent = fmt(this.lo);
+    this.boundMax.textContent = fmt(this.hi);
+    this.update();
+  }
+
+  onChange(e) {
+    const min = parseFloat(this.minInput.value);
+    const max = parseFloat(this.maxInput.value);
+    if (min > max) {
+      if (e.target === this.minInput) this.minInput.value = this.maxInput.value;
+      else this.maxInput.value = this.minInput.value;
+    }
+    this.update();
+  }
+
+  update() {
+    const min = parseFloat(this.minInput.value);
+    const max = parseFloat(this.maxInput.value);
+    const range = this.hi - this.lo;
+    const lpct = ((min - this.lo) / range) * 100;
+    const rpct = ((max - this.lo) / range) * 100;
+    this.fill.style.left = lpct + '%';
+    this.fill.style.width = (rpct - lpct) + '%';
+    this.readout.textContent = `${fmt(min)} — ${fmt(max)}`;
+  }
+
+  reset() {
+    this.minInput.value = this.lo;
+    this.maxInput.value = this.hi;
+    this.update();
+  }
+
+  values() {
+    return [parseFloat(this.minInput.value), parseFloat(this.maxInput.value)];
+  }
+
+  isFullRange() {
+    const [min, max] = this.values();
+    return min <= this.lo + this.step / 2 && max >= this.hi - this.step / 2;
+  }
+}
+
+function fmt(v) {
+  if (!isFinite(v)) return '—';
+  const a = Math.abs(v);
+  if (a === 0) return '0';
+  if (a >= 100) return v.toFixed(1);
+  if (a >= 1) return v.toFixed(3);
+  if (a >= 0.001) return v.toFixed(5);
+  return v.toExponential(2);
+}
+
+function escapeHTML(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function buildQueryString() {
+  const params = new URLSearchParams();
+  if (SCOPE_NAME) params.set('experiment_name', SCOPE_NAME);
+  for (const m of METRICS) {
+    const s = sliders[m];
+    if (!s.isFullRange()) {
+      const [lo, hi] = s.values();
+      params.set(`${m}_min`, lo);
+      params.set(`${m}_max`, hi);
+    }
+  }
+  return params.toString();
+}
+
+async function runSearch() {
+  const qs = buildQueryString();
+  const r = await fetch(`/search/rounds.json${qs ? '?' + qs : ''}`);
+  const data = await r.json();
+  const tbody = document.getElementById('search-results-rows');
+  const empty = document.getElementById('search-empty');
+  const meta = document.getElementById('results-meta');
+  tbody.innerHTML = '';
+  if (!data.rounds || data.rounds.length === 0) {
+    empty.style.display = '';
+    meta.textContent = '';
+  } else {
+    empty.style.display = 'none';
+    let total = 0;
+    data.rounds.forEach(row => {
+      total += row.match_count;
+      const tr = document.createElement('tr');
+      tr.innerHTML =
+        `<td>${escapeHTML(row.experiment_id)}</td>` +
+        `<td>${escapeHTML(row.round_id)}</td>` +
+        `<td class="num">${row.match_count}</td>` +
+        `<td><a class="atom-micro" href="/experiments/${encodeURIComponent(row.experiment_id)}/rounds/${encodeURIComponent(row.round_id)}/results">→</a></td>`;
+      tbody.appendChild(tr);
+    });
+    meta.textContent = `${data.rounds.length} rounds · ${total} permutations`;
+  }
+  document.getElementById('export-btn').href = `/search/bundle${qs ? '?' + qs : ''}`;
+}
+
+document.querySelectorAll('.range-slider').forEach(el => {
+  sliders[el.dataset.metric] = new RangeSlider(el);
+});
+
+document.getElementById('search-btn').addEventListener('click', runSearch);
+document.getElementById('reset-btn').addEventListener('click', () => {
+  for (const m of METRICS) sliders[m].reset();
+});
+
+const enameInput = document.getElementById('experiment-name');
+enameInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    const v = enameInput.value.trim();
+    location.href = v ? `/search?experiment_name=${encodeURIComponent(v)}` : '/search';
+  }
+});
+
+runSearch();
+</script>
+
+{% endblock %}

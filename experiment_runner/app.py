@@ -643,6 +643,19 @@ def create_app(root: Path) -> FastAPI:
     def round_stats(experiment_id: str, round_id: str):
         return JSONResponse(_compute_round_stats(_round_dir(experiment_id, round_id)))
 
+    @app.get("/search", response_class=HTMLResponse)
+    def search_page(request: Request, experiment_name: str | None = None):
+        bounds = _compute_search_bounds(root, experiment_name)
+        return templates.TemplateResponse(
+            "search.html",
+            {
+                "request": request,
+                "experiment_name": experiment_name or "",
+                "metrics": list(_SEARCH_METRICS),
+                "bounds": bounds,
+            },
+        )
+
     @app.get("/search/bounds.json")
     def search_bounds(experiment_name: str | None = None):
         return JSONResponse({
