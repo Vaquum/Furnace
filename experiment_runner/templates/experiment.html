@@ -90,38 +90,27 @@ let SAVED_OVERRIDES = {{ args.data_source.params | tojson }};
 let LAST_SCHEMA = null;
 
 function gatherDataSourceParams() {
+  // What the form shows is what gets used. Whatever value sits in a control
+  // gets stored in args.data_source.params verbatim, so the bundle's args.json
+  // is a complete record of the round's effective config — not a sparse diff.
+  // Empty fields are the only "no value" path: no key is stored.
   const params = {};
   const fields = document.querySelectorAll('#data-source-controls input[data-param-name]');
   fields.forEach(f => {
     const name = f.dataset.paramName;
-    let val;
     if (f.type === 'checkbox') {
-      val = f.checked;
-      if (val === false) return;
-    } else if (f.type === 'number') {
-      const s = f.value.trim();
-      if (!s) return;
-      val = Number(s);
-      if (Number.isNaN(val)) return;
-    } else {
-      const s = f.value.trim();
-      if (!s) return;
-      val = s;
+      params[name] = f.checked;
+      return;
     }
-    // Save as override only if the user-typed value does not equal any of the
-    // prefill sources (manifest, library default, fallback). A field that's
-    // just showing the rendered prefill must not save itself as an override —
-    // otherwise the form auto-pollutes args.json with values that lock the
-    // round against future manifest changes.
-    const valStr = String(val);
-    const manifestStr = f.dataset.manifestValue || '';
-    const libraryStr = f.dataset.libraryDefault || '';
-    const fallback = FALLBACK_DEFAULTS[name];
-    const fallbackStr = fallback !== undefined ? String(fallback) : '';
-    if (manifestStr !== '' && valStr === manifestStr) return;
-    if (libraryStr !== '' && valStr === libraryStr) return;
-    if (fallbackStr !== '' && valStr === fallbackStr) return;
-    params[name] = val;
+    const s = f.value.trim();
+    if (!s) return;
+    if (f.type === 'number') {
+      const n = Number(s);
+      if (Number.isNaN(n)) return;
+      params[name] = n;
+      return;
+    }
+    params[name] = s;
   });
   return params;
 }
