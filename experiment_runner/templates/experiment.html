@@ -108,8 +108,19 @@ function gatherDataSourceParams() {
       if (!s) return;
       val = s;
     }
+    // Save as override only if the user-typed value does not equal any of the
+    // prefill sources (manifest, library default, fallback). A field that's
+    // just showing the rendered prefill must not save itself as an override —
+    // otherwise the form auto-pollutes args.json with values that lock the
+    // round against future manifest changes.
+    const valStr = String(val);
     const manifestStr = f.dataset.manifestValue || '';
-    if (manifestStr !== '' && String(val) === manifestStr) return;
+    const libraryStr = f.dataset.libraryDefault || '';
+    const fallback = FALLBACK_DEFAULTS[name];
+    const fallbackStr = fallback !== undefined ? String(fallback) : '';
+    if (manifestStr !== '' && valStr === manifestStr) return;
+    if (libraryStr !== '' && valStr === libraryStr) return;
+    if (fallbackStr !== '' && valStr === fallbackStr) return;
     params[name] = val;
   });
   return params;
@@ -141,6 +152,22 @@ function gatherWorking() {
 const STEP_HINTS = {
   kline_size: 60,  // seconds; kline_size must be a multiple of 1 minute
 };
+
+// Fallback defaults for params whose library default is None (no signature
+// hint exists). Used when neither a saved override nor the SFD's manifest
+// declares a value, so every control always renders with something visible.
+const FALLBACK_DEFAULTS = {
+  kline_size: 60,
+  n_rows: 6000,
+  start_date_limit: '2024-01-01',
+};
+
+function effectivePrefill(name, manifest, libraryDefault) {
+  if (manifest && manifest[name] !== undefined && manifest[name] !== null) return manifest[name];
+  if (libraryDefault !== null && libraryDefault !== undefined) return libraryDefault;
+  if (FALLBACK_DEFAULTS[name] !== undefined) return FALLBACK_DEFAULTS[name];
+  return '';
+}
 
 function renderDataSourceControls(schema) {
   LAST_SCHEMA = schema;
@@ -180,15 +207,23 @@ function renderDataSourceControls(schema) {
     } else {
       el = document.createElement('input');
       el.type = isNum ? 'number' : 'text';
-      const v = overrides[name] !== undefined ? overrides[name]
-              : manifest[name] !== undefined ? manifest[name]
-              : '';
-      if (v !== '' && v !== null && v !== undefined) el.value = v;
-      // Placeholder shows manifest value first, then library default, then "(required)".
+      // Effective prefill chain: saved override > manifest > library default >
+      // hardcoded fallback. The control always renders with a value so the
+      // user sees what would actually run.
+      const prefill = overrides[name] !== undefined
+        ? overrides[name]
+        : effectivePrefill(name, manifest, param.default);
+      if (prefill !== '' && prefill !== null && prefill !== undefined) {
+        el.value = prefill;
+      }
+      // Placeholder labels the source of the prefill so the user can tell
+      // declared-by-code from typed-by-me.
       if (manifest[name] !== undefined && manifest[name] !== null) {
         el.placeholder = `manifest: ${manifest[name]}`;
       } else if (param.has_default && param.default !== null && param.default !== undefined) {
         el.placeholder = `library default: ${param.default}`;
+      } else if (FALLBACK_DEFAULTS[name] !== undefined) {
+        el.placeholder = `default: ${FALLBACK_DEFAULTS[name]}`;
       } else if (!param.has_default) {
         el.placeholder = '(required)';
       }

@@ -102,8 +102,10 @@ def _find_set_data_source_params(call_chain) -> dict | None:
 
 def _extract_manifest_data_source_params(code: str, sfd_identifier: str) -> dict | None:
     """AST-walk: find `class <sfd_identifier>:`, find its `manifest` method,
-    walk the chained Manifest().set_data_source(...) call, return params={...}
-    as a Python dict if it is a literal."""
+    locate any `set_data_source(...)` call anywhere in its body, return its
+    `params={...}` dict literal if extractable. Handles both
+    `return Manifest().set_data_source(...)` and the assignment form
+    `manifest = Manifest().set_data_source(...)`."""
     if not code or not sfd_identifier:
         return None
     try:
@@ -114,12 +116,17 @@ def _extract_manifest_data_source_params(code: str, sfd_identifier: str) -> dict
         if not (isinstance(node, _ast.ClassDef) and node.name == sfd_identifier):
             continue
         for item in node.body:
-            if isinstance(item, _ast.FunctionDef) and item.name == "manifest":
-                for stmt in item.body:
-                    if isinstance(stmt, _ast.Return) and stmt.value is not None:
-                        params = _find_set_data_source_params(stmt.value)
-                        if params is not None:
-                            return params
+            if not (isinstance(item, _ast.FunctionDef) and item.name == "manifest"):
+                continue
+            for sub in _ast.walk(item):
+                if not (isinstance(sub, _ast.Call) and isinstance(sub.func, _ast.Attribute)):
+                    continue
+                if sub.func.attr != "set_data_source":
+                    continue
+                for kw in sub.keywords:
+                    if kw.arg == "params" and isinstance(kw.value, _ast.Dict):
+                        return _ast_dict_to_python(kw.value)
+                return {}
     return None
 
 

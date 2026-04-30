@@ -410,7 +410,7 @@ button.primary:hover, .btn.primary:hover {
   color: var(--paper);
 }
 
-.button-row { display: flex; gap: var(--gap-s); margin-top: var(--gap-m); }
+.button-row { display: flex; gap: var(--gap-s); margin-top: var(--gap-m); margin-bottom: var(--gap-l); }
 
 /* ---- Experiments table (jobs page) ---- */
 
