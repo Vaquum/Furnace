@@ -346,6 +346,25 @@ input[type="checkbox"]:checked::after {
   margin-bottom: var(--gap-s);
 }
 
+/* Field grouping per Design-System Field atom: fieldset with legend rendered
+   as h-label, 1 px rule top border above the legend, no decorative border. */
+fieldset.args-group {
+  border: none;
+  border-top: 1px solid var(--rule);
+  padding: var(--gap-s) 0 0 0;
+  margin: 0 0 var(--gap-m) 0;
+}
+fieldset.args-group legend {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+  font-weight: 500;
+  padding: 0;
+  margin-bottom: var(--gap-s);
+}
+
 .static-value {
   font-family: var(--font-mono);
   font-size: var(--t-code);

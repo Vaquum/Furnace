@@ -28,18 +28,18 @@
         </div>
       </div>
 
-      <div class="field">
-        <label class="atom-heading-inline">data_source params</label>
-        <div id="data-source-controls" class="filter-grid"></div>
-        <p id="data-source-empty" class="atom-small" style="color: var(--ink-mute);">Save the experiment to populate from your SFD's manifest.</p>
-      </div>
+      <fieldset class="args-group">
+        <legend>data source</legend>
+        <div id="data-source-controls" class="row"></div>
+        <p id="data-source-empty" class="atom-small" style="color: var(--ink-mute); display: none;">Save the experiment to populate from your SFD's manifest.</p>
+      </fieldset>
 
-      <div class="field">
-        <label class="atom-heading-inline">uel_run</label>
-        <div class="row">
+      <fieldset class="args-group">
+        <legend>uel_run</legend>
+        <div class="row" style="align-items: flex-end;">
           <div class="col field">
             <label for="f-perm">n_permutations</label>
-            <input id="f-perm" type="number" min="1" name="uel_run.n_permutations" value="{{ args.uel_run.n_permutations }}">
+            <input id="f-perm" type="number" min="1" step="1" name="uel_run.n_permutations" value="{{ args.uel_run.n_permutations }}">
           </div>
           <div class="col">
             <label class="checkbox-row"><input type="checkbox" name="uel_run.prep_each_round" {% if args.uel_run.prep_each_round %}checked{% endif %}>prep_each_round</label>
@@ -51,7 +51,7 @@
             <label class="checkbox-row"><input type="checkbox" name="uel_run.maintain_details_in_params" {% if args.uel_run.maintain_details_in_params %}checked{% endif %}>maintain_details_in_params</label>
           </div>
         </div>
-      </div>
+      </fieldset>
     </form>
   </div>
 
@@ -137,6 +137,11 @@ function gatherWorking() {
   };
 }
 
+// Step hints per known field — hardcoded knowledge of the data source.
+const STEP_HINTS = {
+  kline_size: 60,  // seconds; kline_size must be a multiple of 1 minute
+};
+
 function renderDataSourceControls(schema) {
   LAST_SCHEMA = schema;
   const container = document.getElementById('data-source-controls');
@@ -156,11 +161,14 @@ function renderDataSourceControls(schema) {
     const isBool = /\bbool\b/.test(ann);
     const isNum = /\bint\b|\bfloat\b/.test(ann);
 
-    const labelCell = document.createElement('span');
-    labelCell.className = 'filter-label';
-    labelCell.textContent = name;
+    const cell = document.createElement('div');
+    cell.className = 'col field';
 
-    const inputCell = document.createElement('div');
+    const label = document.createElement('label');
+    label.htmlFor = `ds-${name}`;
+    label.textContent = name;
+    cell.appendChild(label);
+
     let el;
     if (isBool) {
       el = document.createElement('input');
@@ -176,33 +184,27 @@ function renderDataSourceControls(schema) {
               : manifest[name] !== undefined ? manifest[name]
               : '';
       if (v !== '' && v !== null && v !== undefined) el.value = v;
-      if (param.has_default && param.default !== null && param.default !== undefined) {
+      // Placeholder shows manifest value first, then library default, then "(required)".
+      if (manifest[name] !== undefined && manifest[name] !== null) {
+        el.placeholder = `manifest: ${manifest[name]}`;
+      } else if (param.has_default && param.default !== null && param.default !== undefined) {
         el.placeholder = `library default: ${param.default}`;
       } else if (!param.has_default) {
         el.placeholder = '(required)';
       }
+      if (isNum && STEP_HINTS[name] !== undefined) {
+        el.step = String(STEP_HINTS[name]);
+        el.min = String(STEP_HINTS[name]);
+      }
     }
+    el.id = `ds-${name}`;
     el.dataset.paramName = name;
     el.dataset.manifestValue = (manifest[name] !== undefined && manifest[name] !== null) ? String(manifest[name]) : '';
     el.dataset.libraryDefault = (param.default !== null && param.default !== undefined) ? String(param.default) : '';
     el.addEventListener('change', () => save());
-    inputCell.appendChild(el);
+    cell.appendChild(el);
 
-    const readout = document.createElement('span');
-    readout.className = 'filter-readout';
-    if (manifest[name] !== undefined && manifest[name] !== null) {
-      readout.textContent = `manifest: ${manifest[name]}`;
-    } else if (param.default !== null && param.default !== undefined) {
-      readout.textContent = `library: ${param.default}`;
-    } else if (!param.has_default) {
-      readout.textContent = '(required)';
-    } else {
-      readout.textContent = '';
-    }
-
-    container.appendChild(labelCell);
-    container.appendChild(inputCell);
-    container.appendChild(readout);
+    container.appendChild(cell);
   }
 }
 
