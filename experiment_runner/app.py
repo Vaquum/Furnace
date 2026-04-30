@@ -73,6 +73,93 @@ def _load_build_meta() -> dict[str, str]:
 _BUILD_META = _load_build_meta()
 
 
+def _ast_dict_to_python(d: _ast.Dict) -> dict | None:
+    out: dict = {}
+    for k, v in zip(d.keys, d.values):
+        try:
+            key = _ast.literal_eval(k) if k is not None else None
+            val = _ast.literal_eval(v)
+        except (ValueError, SyntaxError):
+            return None
+        out[key] = val
+    return out
+
+
+def _find_set_data_source_params(call_chain) -> dict | None:
+    node = call_chain
+    while node is not None:
+        if isinstance(node, _ast.Call) and isinstance(node.func, _ast.Attribute):
+            if node.func.attr == "set_data_source":
+                for kw in node.keywords:
+                    if kw.arg == "params" and isinstance(kw.value, _ast.Dict):
+                        return _ast_dict_to_python(kw.value)
+                return {}
+            node = node.func.value
+        else:
+            return None
+    return None
+
+
+def _extract_manifest_data_source_params(code: str, sfd_identifier: str) -> dict | None:
+    """AST-walk: find `class <sfd_identifier>:`, find its `manifest` method,
+    walk the chained Manifest().set_data_source(...) call, return params={...}
+    as a Python dict if it is a literal."""
+    if not code or not sfd_identifier:
+        return None
+    try:
+        tree = _ast.parse(code)
+    except SyntaxError:
+        return None
+    for node in tree.body:
+        if not (isinstance(node, _ast.ClassDef) and node.name == sfd_identifier):
+            continue
+        for item in node.body:
+            if isinstance(item, _ast.FunctionDef) and item.name == "manifest":
+                for stmt in item.body:
+                    if isinstance(stmt, _ast.Return) and stmt.value is not None:
+                        params = _find_set_data_source_params(stmt.value)
+                        if params is not None:
+                            return params
+    return None
+
+
+def _inspect_round_args(code: str, sfd_identifier: str) -> dict:
+    """Return the schema for the experiment-edit controls:
+    library signature for get_spot_klines (placeholder defaults) and the
+    SFD's declared manifest params (pre-fills)."""
+    import inspect as _inspect_mod
+    out: dict = {
+        "data_source": {
+            "manifest_params": _extract_manifest_data_source_params(code, sfd_identifier) or {},
+            "library_signature": [],
+        },
+    }
+    try:
+        import limen
+        sig = _inspect_mod.signature(limen.HistoricalData.get_spot_klines)
+    except Exception:
+        return out
+    sentinel = _inspect_mod.Parameter.empty
+    for name, param in sig.parameters.items():
+        if name == "self" or param.kind in (
+            _inspect_mod.Parameter.VAR_POSITIONAL,
+            _inspect_mod.Parameter.VAR_KEYWORD,
+        ):
+            continue
+        has_default = param.default is not sentinel
+        default = param.default if has_default else None
+        if callable(default):
+            default = None
+        annotation = str(param.annotation) if param.annotation is not sentinel else "Any"
+        out["data_source"]["library_signature"].append({
+            "name": name,
+            "default": default,
+            "has_default": has_default,
+            "annotation": annotation,
+        })
+    return out
+
+
 _WARNING_HEADER = re.compile(r"^[/\\].+?:\d+:\s+\w*Warning:.*$")
 _TRACEBACK_HEADER = re.compile(r"^Traceback \(most recent call last\):")
 
@@ -308,6 +395,14 @@ def create_app(root: Path) -> FastAPI:
         (exp_dir / "args.json").write_text(json.dumps(seeded_args, indent=2))
         write_version_atomic(exp_dir, 0)
         return RedirectResponse(f"/experiments/{eid}", status_code=303)
+
+    @app.post("/experiments/{experiment_id}/inspect")
+    async def inspect_args(experiment_id: str, request: Request):
+        _exp_dir(experiment_id)
+        body = await request.json()
+        code = body.get("code", "") or ""
+        sfd_id = body.get("sfd_identifier", "") or ""
+        return JSONResponse(_inspect_round_args(code, sfd_id))
 
     @app.get("/experiments/{experiment_id}", response_class=HTMLResponse)
     def experiment_page(request: Request, experiment_id: str):

@@ -26,34 +26,30 @@
           <label for="f-sfd">sfd_identifier</label>
           <input id="f-sfd" type="text" name="sfd_identifier" value="{{ args.sfd_identifier }}" placeholder="MySFDClass">
         </div>
-        <div class="col field">
-          <label for="f-method">data_source.method</label>
-          <input id="f-method" type="text" name="data_source.method" value="{{ args.data_source.method }}" placeholder="get_spot_klines">
-        </div>
       </div>
+
       <div class="field">
-        <label for="f-params">data_source.params (JSON)</label>
-        <textarea id="f-params" class="atom-code-block" style="min-height: 200px;" name="data_source.params">{{ args.data_source.params | tojson(indent=2) }}</textarea>
+        <label class="atom-heading-inline">data_source params</label>
+        <div id="data-source-controls" class="filter-grid"></div>
+        <p id="data-source-empty" class="atom-small" style="color: var(--ink-mute);">Save the experiment to populate from your SFD's manifest.</p>
       </div>
-      <div class="row">
-        <div class="col field">
-          <label>uel_run.experiment_name</label>
-          <div class="static-value">{{ experiment_id }}<span class="static-note"> + __r&lt;round_id&gt;</span></div>
-        </div>
-        <div class="col field">
-          <label for="f-perm">uel_run.n_permutations</label>
-          <input id="f-perm" type="number" min="1" name="uel_run.n_permutations" value="{{ args.uel_run.n_permutations }}">
-        </div>
-      </div>
-      <div class="row">
-        <div class="col">
-          <label class="checkbox-row"><input type="checkbox" name="uel_run.prep_each_round" {% if args.uel_run.prep_each_round %}checked{% endif %}>prep_each_round</label>
-        </div>
-        <div class="col">
-          <label class="checkbox-row"><input type="checkbox" name="uel_run.random_search" {% if args.uel_run.random_search %}checked{% endif %}>random_search</label>
-        </div>
-        <div class="col">
-          <label class="checkbox-row"><input type="checkbox" name="uel_run.maintain_details_in_params" {% if args.uel_run.maintain_details_in_params %}checked{% endif %}>maintain_details_in_params</label>
+
+      <div class="field">
+        <label class="atom-heading-inline">uel_run</label>
+        <div class="row">
+          <div class="col field">
+            <label for="f-perm">n_permutations</label>
+            <input id="f-perm" type="number" min="1" name="uel_run.n_permutations" value="{{ args.uel_run.n_permutations }}">
+          </div>
+          <div class="col">
+            <label class="checkbox-row"><input type="checkbox" name="uel_run.prep_each_round" {% if args.uel_run.prep_each_round %}checked{% endif %}>prep_each_round</label>
+          </div>
+          <div class="col">
+            <label class="checkbox-row"><input type="checkbox" name="uel_run.random_search" {% if args.uel_run.random_search %}checked{% endif %}>random_search</label>
+          </div>
+          <div class="col">
+            <label class="checkbox-row"><input type="checkbox" name="uel_run.maintain_details_in_params" {% if args.uel_run.maintain_details_in_params %}checked{% endif %}>maintain_details_in_params</label>
+          </div>
         </div>
       </div>
     </form>
@@ -90,23 +86,45 @@
 
 <script>
 const EXP_ID = {{ experiment_id | tojson }};
+let SAVED_OVERRIDES = {{ args.data_source.params | tojson }};
+let LAST_SCHEMA = null;
+
+function gatherDataSourceParams() {
+  const params = {};
+  const fields = document.querySelectorAll('#data-source-controls input[data-param-name]');
+  fields.forEach(f => {
+    const name = f.dataset.paramName;
+    let val;
+    if (f.type === 'checkbox') {
+      val = f.checked;
+      if (val === false) return;
+    } else if (f.type === 'number') {
+      const s = f.value.trim();
+      if (!s) return;
+      val = Number(s);
+      if (Number.isNaN(val)) return;
+    } else {
+      const s = f.value.trim();
+      if (!s) return;
+      val = s;
+    }
+    const manifestStr = f.dataset.manifestValue || '';
+    if (manifestStr !== '' && String(val) === manifestStr) return;
+    params[name] = val;
+  });
+  return params;
+}
 
 function gatherWorking() {
   const form = document.getElementById('args-form');
   const code = document.getElementById('code-editor').value;
-  let params;
-  try { params = JSON.parse(form.elements['data_source.params'].value || '{}'); }
-  catch (e) {
-    flashStatus('data_source.params is not valid JSON', true);
-    throw e;
-  }
   return {
     code,
     args: {
       sfd_identifier: form.elements['sfd_identifier'].value.trim(),
       data_source: {
-        method: form.elements['data_source.method'].value.trim(),
-        params,
+        method: 'get_spot_klines',
+        params: gatherDataSourceParams(),
       },
       uel_run: {
         experiment_name: EXP_ID,
@@ -117,6 +135,90 @@ function gatherWorking() {
       },
     },
   };
+}
+
+function renderDataSourceControls(schema) {
+  LAST_SCHEMA = schema;
+  const container = document.getElementById('data-source-controls');
+  const emptyMsg = document.getElementById('data-source-empty');
+  container.innerHTML = '';
+  const sig = (schema && schema.library_signature) || [];
+  const manifest = (schema && schema.manifest_params) || {};
+  const overrides = SAVED_OVERRIDES || {};
+  if (sig.length === 0) {
+    emptyMsg.style.display = '';
+    return;
+  }
+  emptyMsg.style.display = 'none';
+  for (const param of sig) {
+    const name = param.name;
+    const ann = (param.annotation || '').toLowerCase();
+    const isBool = /\bbool\b/.test(ann);
+    const isNum = /\bint\b|\bfloat\b/.test(ann);
+
+    const labelCell = document.createElement('span');
+    labelCell.className = 'filter-label';
+    labelCell.textContent = name;
+
+    const inputCell = document.createElement('div');
+    let el;
+    if (isBool) {
+      el = document.createElement('input');
+      el.type = 'checkbox';
+      const v = overrides[name] !== undefined ? overrides[name]
+              : manifest[name] !== undefined ? manifest[name]
+              : param.default ?? false;
+      el.checked = !!v;
+    } else {
+      el = document.createElement('input');
+      el.type = isNum ? 'number' : 'text';
+      const v = overrides[name] !== undefined ? overrides[name]
+              : manifest[name] !== undefined ? manifest[name]
+              : '';
+      if (v !== '' && v !== null && v !== undefined) el.value = v;
+      if (param.has_default && param.default !== null && param.default !== undefined) {
+        el.placeholder = `library default: ${param.default}`;
+      } else if (!param.has_default) {
+        el.placeholder = '(required)';
+      }
+    }
+    el.dataset.paramName = name;
+    el.dataset.manifestValue = (manifest[name] !== undefined && manifest[name] !== null) ? String(manifest[name]) : '';
+    el.dataset.libraryDefault = (param.default !== null && param.default !== undefined) ? String(param.default) : '';
+    el.addEventListener('change', () => save());
+    inputCell.appendChild(el);
+
+    const readout = document.createElement('span');
+    readout.className = 'filter-readout';
+    if (manifest[name] !== undefined && manifest[name] !== null) {
+      readout.textContent = `manifest: ${manifest[name]}`;
+    } else if (param.default !== null && param.default !== undefined) {
+      readout.textContent = `library: ${param.default}`;
+    } else if (!param.has_default) {
+      readout.textContent = '(required)';
+    } else {
+      readout.textContent = '';
+    }
+
+    container.appendChild(labelCell);
+    container.appendChild(inputCell);
+    container.appendChild(readout);
+  }
+}
+
+async function refreshInspect() {
+  const code = document.getElementById('code-editor').value;
+  const sfdId = document.getElementById('f-sfd').value.trim();
+  try {
+    const r = await fetch(`/experiments/${encodeURIComponent(EXP_ID)}/inspect`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({code, sfd_identifier: sfdId}),
+    });
+    if (!r.ok) return;
+    const schema = await r.json();
+    renderDataSourceControls(schema.data_source || {});
+  } catch (_) {}
 }
 
 function flashStatus(text, error) {
@@ -240,7 +342,11 @@ async function start() {
 document.getElementById('save-btn').addEventListener('click', save);
 document.getElementById('start-btn').addEventListener('click', start);
 const editor = document.getElementById('code-editor');
-editor.addEventListener('blur', () => save());
+editor.addEventListener('blur', async () => {
+  await save();
+  await refreshInspect();
+});
+document.getElementById('f-sfd').addEventListener('change', () => refreshInspect());
 document.getElementById('args-form').addEventListener('change', () => save());
 
 // Wheel routing: while the editor is not focused, page-scroll wins. Only
@@ -251,6 +357,9 @@ editor.addEventListener('wheel', (e) => {
     window.scrollBy(0, e.deltaY);
   }
 }, { passive: false });
+
+// Initial inspect on page load to populate the controls.
+refreshInspect();
 </script>
 
 {% endblock %}
