@@ -1,6 +1,5 @@
 {% extends "base.html" %}
 {% block title %}{{ experiment_id }} · experiment_runner{% endblock %}
-{% block meta %}version {{ version }}{% endblock %}
 {% block content %}
 
 <div class="bar">
@@ -16,7 +15,7 @@
 
   <div class="section">
     <h2 class="atom-heading"><span class="numeral">01</span><span>Code</span></h2>
-    <textarea id="code-editor" class="atom-code-block" spellcheck="false">{{ code }}</textarea>
+    <textarea id="code-editor" class="atom-code-block compact" rows="5" spellcheck="false">{{ code }}</textarea>
   </div>
 
   <div class="section section-narrow">
@@ -240,8 +239,18 @@ async function start() {
 
 document.getElementById('save-btn').addEventListener('click', save);
 document.getElementById('start-btn').addEventListener('click', start);
-document.getElementById('code-editor').addEventListener('blur', () => save());
+const editor = document.getElementById('code-editor');
+editor.addEventListener('blur', () => save());
 document.getElementById('args-form').addEventListener('change', () => save());
+
+// Wheel routing: while the editor is not focused, page-scroll wins. Only
+// when the user has clicked into the editor does the textarea scroll.
+editor.addEventListener('wheel', (e) => {
+  if (document.activeElement !== editor) {
+    e.preventDefault();
+    window.scrollBy(0, e.deltaY);
+  }
+}, { passive: false });
 </script>
 
 {% endblock %}

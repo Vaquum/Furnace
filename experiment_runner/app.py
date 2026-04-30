@@ -46,6 +46,33 @@ LAUNCHER_PATH = PKG_DIR / "run_round.py"
 ASSET_VERSION = str(int(time.time()))
 
 
+def _load_build_meta() -> dict[str, str]:
+    """Resolve package version and git SHA at import time so every template
+    can stamp the running build."""
+    import tomllib
+    repo_root = PKG_DIR.parent
+    pp = tomllib.loads((repo_root / "pyproject.toml").read_text())
+    pkg_ver = pp["project"]["version"]
+    sha_full = os.environ.get("GIT_SHA", "").strip()
+    if not sha_full:
+        try:
+            sha_full = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=repo_root, text=True,
+            ).strip()
+        except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+            sha_full = ""
+    sha_short = sha_full[:7] if sha_full else ""
+    return {
+        "package_version": pkg_ver,
+        "git_full_sha": sha_full,
+        "git_short_sha": sha_short,
+        "repo_url": "https://github.com/Vaquum/experiment_runner",
+    }
+
+
+_BUILD_META = _load_build_meta()
+
+
 _WARNING_HEADER = re.compile(r"^[/\\].+?:\d+:\s+\w*Warning:.*$")
 _TRACEBACK_HEADER = re.compile(r"^Traceback \(most recent call last\):")
 
@@ -217,6 +244,8 @@ def _experiment_rounds(experiment_dir: Path) -> list[dict]:
 def create_app(root: Path) -> FastAPI:
     templates = Jinja2Templates(directory=str(PKG_DIR / "templates"))
     templates.env.globals["asset_version"] = ASSET_VERSION
+    for k, v in _BUILD_META.items():
+        templates.env.globals[k] = v
     sm = StateMachine(root)
     reconcile_at_startup(sm)
 

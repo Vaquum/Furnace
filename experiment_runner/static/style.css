@@ -175,8 +175,20 @@ textarea.atom-code-block {
   white-space: pre;
   word-wrap: normal;
   overflow: auto;
+  overscroll-behavior: contain;
   tab-size: 4;
   -moz-tab-size: 4;
+}
+textarea.atom-code-block.compact {
+  min-height: 0;
+}
+.build-stamp {
+  margin-left: var(--gap-s);
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
 }
 textarea.atom-code-block:focus {
   border-color: var(--ink-soft);

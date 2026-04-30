@@ -11,7 +11,10 @@
 <body>
   <nav class="top">
     <div class="brand"><a href="/">experiment_runner</a></div>
-    <div class="meta">{% block meta %}{% endblock %}</div>
+    <div class="meta">
+      {% block meta %}{% endblock %}
+      <span class="build-stamp">v{{ package_version }}{% if git_short_sha %} · <a class="atom-micro" href="{{ repo_url }}/commit/{{ git_full_sha }}" target="_blank" rel="noopener">{{ git_short_sha }}</a>{% endif %}</span>
+    </div>
   </nav>
   {% block content %}{% endblock %}
 </body>
