@@ -6,7 +6,7 @@ services:
       APP_PASSWORD: ${APP_PASSWORD:?APP_PASSWORD must be set}
       API_SECRET: ${API_SECRET:?API_SECRET must be set}
     ports:
-      - "127.0.0.1:${EXPERIMENT_RUNNER_PORT:-8502}:8502"
+      - "${EXPERIMENT_RUNNER_PORT:-8502}:8502"
     volumes:
       - type: bind
         source: ${EXPERIMENT_RUNNER_HOST_DATA_ROOT:-/data/experiments}
