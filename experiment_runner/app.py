@@ -401,14 +401,14 @@ def create_app(root: Path) -> FastAPI:
     def jobs(request: Request):
         experiments = _all_experiments(root)
         return templates.TemplateResponse(
-            "jobs.html", {"request": request, "experiments": experiments},
+            request, "jobs.html", {"experiments": experiments},
         )
 
     @app.get("/_partials/jobs", response_class=HTMLResponse)
     def jobs_partial(request: Request):
         experiments = _all_experiments(root)
         return templates.TemplateResponse(
-            "_jobs_rows.html", {"request": request, "experiments": experiments},
+            request, "_jobs_rows.html", {"experiments": experiments},
         )
 
     @app.delete("/experiments/{experiment_id}")
@@ -459,9 +459,9 @@ def create_app(root: Path) -> FastAPI:
         rounds = _experiment_rounds(exp_dir)
         active = is_experiment_active(exp_dir)
         return templates.TemplateResponse(
+            request,
             "experiment.html",
             {
-                "request": request,
                 "experiment_id": experiment_id,
                 "code": code,
                 "args": args,
@@ -477,8 +477,9 @@ def create_app(root: Path) -> FastAPI:
         exp_dir = _exp_dir(experiment_id)
         rounds = _experiment_rounds(exp_dir)
         return templates.TemplateResponse(
+            request,
             "_round_rows.html",
-            {"request": request, "experiment_id": experiment_id, "rounds": rounds},
+            {"experiment_id": experiment_id, "rounds": rounds},
         )
 
     @app.post("/experiments/{experiment_id}/working")
@@ -639,9 +640,9 @@ def create_app(root: Path) -> FastAPI:
                 n=3,
             ))
         return templates.TemplateResponse(
+            request,
             "round.html",
             {
-                "request": request,
                 "experiment_id": experiment_id,
                 "round_id": round_id,
                 "status": st,
@@ -790,9 +791,9 @@ def create_app(root: Path) -> FastAPI:
         _round_dir(experiment_id, round_id)
         cols = _RESULTS_COLUMNS
         return templates.TemplateResponse(
+            request,
             "results.html",
             {
-                "request": request,
                 "experiment_id": experiment_id,
                 "round_id": round_id,
                 "columns": [{"key": c, "label": _display_label(c),
@@ -821,9 +822,9 @@ def create_app(root: Path) -> FastAPI:
         scope = _parse_experiment_names(experiment_name)
         bounds = _compute_search_bounds(root, {}, scope)
         return templates.TemplateResponse(
+            request,
             "search.html",
             {
-                "request": request,
                 "all_experiments": _list_experiment_names(root),
                 "selected_experiments": scope if scope is not None else _list_experiment_names(root),
                 "metrics": list(_SEARCH_METRICS),

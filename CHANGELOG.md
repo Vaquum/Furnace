@@ -1,3 +1,7 @@
+# v0.5.1
+
+- Migrate all `TemplateResponse(...)` calls in `experiment_runner/app.py` to the starlette 1.0 signature (`request` is now the first positional arg). The previous old-style `(name, context)` form was a silent runtime failure on starlette 1.0.0+: the template name was being read as `request` (a string), the context dict was being read as `name`, and the unhashable dict propagated into jinja2's template cache as `TypeError: unhashable type: 'dict'` — every HTML page returned 500 (jobs page, experiment page, search page, round page, results page, and the `_partials/*` rows). Pin `starlette>=1.0.0` in `experiment_runner/requirements.txt` so the contract is explicit at install time.
+
 # v0.5.0
 
 - Deploy experiment_runner to TDW server: Dockerfile (port 8502, `--host` CLI flag), loopback-only compose with rw bind mount on `/data/experiments`, deploy workflow with host-data-root allowlist (rejects typos and `/data/notebooks`), and `pr_checks_deploy_contract` PR-time regression gate. The mount gate also rejects additional bind mounts whose `source` resolves to `/data/notebooks` (or a subpath), in literal or `${VAR:-...}` form, and the destructive-volume-ops scanner now sweeps every workflow including its own file (no `--exclude` self-skip), with the gate's documentation reworded to avoid literal pattern matches.
