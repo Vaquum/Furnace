@@ -172,10 +172,14 @@ def _inspect_round_args(code: str, sfd_identifier: str) -> dict:
     method = getattr(limen.HistoricalData, method_name, None)
     if method is None:
         # Manifest declared a method that doesn't exist on HistoricalData.
-        # Keep the manifest readout in the response but leave the
-        # signature empty so the client doesn't synthesise controls for
-        # an un-introspectable method.
-        return out
+        # Fail loud at inspect time so the user can fix the manifest before
+        # starting a round — otherwise run_round would crash on the same
+        # getattr() with a less actionable traceback.
+        raise HTTPException(
+            400,
+            f"manifest declares data_source.method={method_name!r} which is "
+            f"not available on limen.HistoricalData",
+        )
     sig = _inspect_mod.signature(method)
     sentinel = _inspect_mod.Parameter.empty
     for name, param in sig.parameters.items():
@@ -440,8 +444,12 @@ def create_app(root: Path) -> FastAPI:
         body = await request.json()
         if not isinstance(body, dict):
             raise HTTPException(400, "request body must be a JSON object")
-        code = body.get("code", "") or ""
-        sfd_id = body.get("sfd_identifier", "") or ""
+        code = body.get("code", "")
+        sfd_id = body.get("sfd_identifier", "")
+        if not isinstance(code, str):
+            raise HTTPException(400, "code must be a string")
+        if not isinstance(sfd_id, str):
+            raise HTTPException(400, "sfd_identifier must be a string")
         return JSONResponse(_inspect_round_args(code, sfd_id))
 
     @app.get("/experiments/{experiment_id}", response_class=HTMLResponse)

@@ -92,13 +92,12 @@ let LAST_SCHEMA = null;
 let LAST_MANIFEST_METHOD = null;
 
 function effectiveMethod() {
-  // Manifest is canonical. If the current SFD code declares no method
-  // (or the inspect endpoint hasn't returned yet), fall back to the
-  // legacy default. SAVED_METHOD is intentionally NOT in this chain:
-  // the new contract is "code is the source of truth", and a
-  // previously-saved method name has no business overriding what the
-  // current code does (or doesn't) declare.
-  return LAST_MANIFEST_METHOD || 'get_spot_klines';
+  // Manifest is canonical when the current SFD declares one. If it
+  // doesn't (or inspect hasn't completed yet), preserve the previously
+  // saved method so a re-save against an SFD that's quiet about
+  // data_source doesn't trash a legitimate legacy method name. The
+  // legacy default applies only when nothing else is known.
+  return LAST_MANIFEST_METHOD || SAVED_METHOD || 'get_spot_klines';
 }
 
 function gatherDataSourceParams() {
@@ -106,8 +105,16 @@ function gatherDataSourceParams() {
   // gets stored in args.data_source.params verbatim, so the bundle's args.json
   // is a complete record of the round's effective config — not a sparse diff.
   // Empty fields are the only "no value" path: no key is stored.
-  const params = {};
+  //
+  // When no controls are rendered (inspect returned an empty schema, the
+  // SFD declares no data_source, or the endpoint failed), fall back to
+  // the saved overrides so a legitimate pre-existing args.data_source.params
+  // is not silently wiped to {} on the next save.
   const fields = document.querySelectorAll('#data-source-controls input[data-param-name]');
+  if (fields.length === 0) {
+    return SAVED_OVERRIDES || {};
+  }
+  const params = {};
   fields.forEach(f => {
     const name = f.dataset.paramName;
     if (f.type === 'checkbox') {
@@ -153,23 +160,19 @@ function gatherWorking() {
 }
 
 // Step hints per known field — hardcoded knowledge of the data source.
+// These set <input step=...> only; they do NOT introduce values.
 const STEP_HINTS = {
   kline_size: 60,  // seconds; kline_size must be a multiple of 1 minute
 };
 
-// Fallback defaults for params whose library default is None (no signature
-// hint exists). Used when neither a saved override nor the SFD's manifest
-// declares a value, so every control always renders with something visible.
-const FALLBACK_DEFAULTS = {
-  kline_size: 60,
-  n_rows: 6000,
-  start_date_limit: '2024-01-01',
-};
-
 function effectivePrefill(name, manifest, libraryDefault) {
+  // Code-derived: only the SFD's manifest and the library signature
+  // can provide a default value. No synthetic UI fallbacks — if the
+  // manifest is silent and the library default is None, the control
+  // renders empty, gatherDataSourceParams skips it, and the round
+  // runs against whatever the library/UEL chooses at runtime.
   if (manifest && manifest[name] !== undefined && manifest[name] !== null) return manifest[name];
   if (libraryDefault !== null && libraryDefault !== undefined) return libraryDefault;
-  if (FALLBACK_DEFAULTS[name] !== undefined) return FALLBACK_DEFAULTS[name];
   return '';
 }
 
@@ -229,10 +232,12 @@ function renderDataSourceControls(schema) {
         el.placeholder = `manifest: ${manifest[name]}`;
       } else if (param.has_default && param.default !== null && param.default !== undefined) {
         el.placeholder = `library default: ${param.default}`;
-      } else if (FALLBACK_DEFAULTS[name] !== undefined) {
-        el.placeholder = `default: ${FALLBACK_DEFAULTS[name]}`;
       } else if (!param.has_default) {
         el.placeholder = '(required)';
+      } else {
+        // has_default with default=None — leave the field empty; the
+        // library/UEL chooses at runtime if the user doesn't type a value.
+        el.placeholder = '(no limit / library default)';
       }
       if (isNum) {
         if (STEP_HINTS[name] !== undefined) {
