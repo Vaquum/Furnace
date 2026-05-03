@@ -61,47 +61,50 @@ jobs:
           set -euo pipefail
           test "$(grep -cE '"--port", "8502"' Dockerfile)" -ge 1
 
-      - name: Compose binds container port 8502
-        run: |
-          set -euo pipefail
-          # The runner now binds publicly (auth gates every endpoint per
-          # slice S06). The remaining contract: a port mapping must exist
-          # whose container side is 8502. Host IP is intentionally
-          # unconstrained so an operator can pick loopback on dev and
-          # all-interfaces on TDW.
-          test "$(grep -cE ':8502\b' deploy/docker-compose.yml)" -ge 1
-
-      - name: Compose ports all target container port 8502
+      - name: Compose ports all bind container port 8502 with an explicit host port
         run: |
           set -euo pipefail
           # Walk every entry under services.experiment_runner.ports and
-          # require each one's container side is 8502. Host IP and host
-          # port are unconstrained, but the container port must not drift
-          # — otherwise the deploy.yml + Dockerfile + healthcheck contract
-          # silently breaks.
+          # require each one (a) targets container port 8502 and (b) has
+          # an explicit host port. The container port must not drift —
+          # otherwise the deploy.yml + Dockerfile + healthcheck contract
+          # silently breaks. The explicit host port is what the operator
+          # controls via vars.EXPERIMENT_RUNNER_PORT; without it Docker
+          # would publish on a random ephemeral port and bypass that
+          # control entirely. Host IP is intentionally unconstrained so
+          # an operator can pick loopback for dev or all-interfaces in
+          # production.
           python <<'PY'
-          import re, sys, yaml
+          import sys, yaml
           d = yaml.safe_load(open('deploy/docker-compose.yml'))
           svc = (d.get('services') or {}).get('experiment_runner') or {}
           ports = svc.get('ports')
           if not ports:
               print('::error::experiment_runner service has no ports')
               sys.exit(1)
-          # Short form: "[host_ip:]host_port:container_port" — split on
-          # the LAST colon and the container side must be 8502.
           errors = []
           for entry in ports:
               if isinstance(entry, str):
-                  _, _, container = entry.rpartition(':')
+                  # Short form: "[host_ip:]host_port:container_port".
+                  # `rpartition` splits the container side off the right;
+                  # the left side must be non-empty (i.e. a host port is
+                  # specified). A bare "8502" would publish on a random
+                  # host port, bypassing vars.EXPERIMENT_RUNNER_PORT.
+                  left, sep, container = entry.rpartition(':')
+                  if not sep or not left:
+                      errors.append(f'  port {entry!r}: short form must specify a host port (HOST:CONTAINER)')
+                      continue
                   if container != '8502':
                       errors.append(f'  port {entry!r}: container side must be 8502')
               elif isinstance(entry, dict):
                   if str(entry.get('target')) != '8502':
                       errors.append(f'  port {entry!r}: target must be 8502')
+                  if entry.get('published') in (None, ''):
+                      errors.append(f'  port {entry!r}: published (host port) must be set')
               else:
                   errors.append(f'  port {entry!r}: unrecognized form')
           if errors:
-              print('::error::experiment_runner ports must all target 8502:')
+              print('::error::experiment_runner ports must all target 8502 with an explicit host port:')
               for line in errors:
                   print(line)
               sys.exit(1)
