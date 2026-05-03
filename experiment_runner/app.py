@@ -126,18 +126,35 @@ def _extract_manifest_data_source(code: str, sfd_identifier: str) -> dict | None
 
 
 def _inspect_round_args(code: str, sfd_identifier: str) -> dict:
-    """Return the schema for the experiment-edit controls. Looks at the
-    SFD's manifest to find which HistoricalData method it declares (e.g.
-    `set_data_source(method="get_spot_klines", params={...})`), then
-    introspects that method's signature for the per-parameter library
-    defaults that drive the placeholder text in the UI.
+    """Return the schema for the experiment-edit controls. The SFD's
+    `manifest()` is the source of truth: we AST-walk for the chained
+    `set_data_source(method=..., params={...})` and introspect that
+    method's signature for the per-parameter library defaults that drive
+    the placeholder text in the UI.
 
     Fail-loud: a missing limen import or an un-introspectable method
     propagates so the inspect endpoint returns 500. The previous silent
     except masked real failures behind an empty-schema 200, which made
-    the client save `{}` against a working SFD without any signal."""
+    the client save `{}` against a working SFD without any signal.
+
+    No-manifest-no-schema: if the SFD class isn't in the code, doesn't
+    define `manifest`, or doesn't call `set_data_source`, the response
+    carries an empty signature. The client shows the empty-state
+    message instead of synthesising controls for a default method
+    unrelated to the current code (which would otherwise become real
+    `args.json` overrides on the next save and mask the real manifest
+    after the code is fixed)."""
     import inspect as _inspect_mod
-    extracted = _extract_manifest_data_source(code, sfd_identifier) or {}
+    empty: dict = {
+        "data_source": {
+            "manifest_method": None,
+            "manifest_params": {},
+            "library_signature": [],
+        },
+    }
+    extracted = _extract_manifest_data_source(code, sfd_identifier)
+    if extracted is None:
+        return empty
     manifest_method = extracted.get("method")
     manifest_params = extracted.get("params") or {}
     out: dict = {
@@ -147,14 +164,17 @@ def _inspect_round_args(code: str, sfd_identifier: str) -> dict:
             "library_signature": [],
         },
     }
+    # Manifest matched but didn't name a method. Default to the legacy
+    # `get_spot_klines` for introspection — UEL would do the same at run
+    # time when method is unspecified.
     method_name = manifest_method or "get_spot_klines"
     import limen
     method = getattr(limen.HistoricalData, method_name, None)
     if method is None:
-        # Manifest declared an unknown method name. Returning the
-        # extracted manifest_method/manifest_params with an empty
-        # signature lets the client render the readout without
-        # synthesising controls for a method we can't introspect.
+        # Manifest declared a method that doesn't exist on HistoricalData.
+        # Keep the manifest readout in the response but leave the
+        # signature empty so the client doesn't synthesise controls for
+        # an un-introspectable method.
         return out
     sig = _inspect_mod.signature(method)
     sentinel = _inspect_mod.Parameter.empty

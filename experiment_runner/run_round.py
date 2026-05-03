@@ -71,18 +71,11 @@ def main() -> None:
     import limen
     method_name = sfd_args["data_source"]["method"]
     method_params = sfd_args["data_source"]["params"]
-    if not method_params:
-        # No user overrides — let UEL drive data loading from the SFD's
-        # manifest natively. Honours set_data_source(method, params) declared
-        # in code instead of calling get_spot_klines with empty kwargs and
-        # getting library defaults the SFD did not ask for.
-        uel = limen.UniversalExperimentLoop(sfd=sfd)
-    else:
-        historical = limen.HistoricalData()
-        data = getattr(historical, method_name)(**method_params)
-        if data is None:
-            data = historical.data  # older Limen versions stored result on instance
-        uel = limen.UniversalExperimentLoop(data=data, sfd=sfd)
+    historical = limen.HistoricalData()
+    data = getattr(historical, method_name)(**method_params)
+    if data is None:
+        data = historical.data  # older Limen versions stored result on instance
+    uel = limen.UniversalExperimentLoop(data=data, sfd=sfd)
 
     round_id = round_dir.name
     uel_kwargs = dict(sfd_args["uel_run"])

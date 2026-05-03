@@ -92,9 +92,13 @@ let LAST_SCHEMA = null;
 let LAST_MANIFEST_METHOD = null;
 
 function effectiveMethod() {
-  // Manifest is canonical when the SFD code declares one; otherwise the
-  // saved value wins; otherwise the legacy default.
-  return LAST_MANIFEST_METHOD || SAVED_METHOD || 'get_spot_klines';
+  // Manifest is canonical. If the current SFD code declares no method
+  // (or the inspect endpoint hasn't returned yet), fall back to the
+  // legacy default. SAVED_METHOD is intentionally NOT in this chain:
+  // the new contract is "code is the source of truth", and a
+  // previously-saved method name has no business overriding what the
+  // current code does (or doesn't) declare.
+  return LAST_MANIFEST_METHOD || 'get_spot_klines';
 }
 
 function gatherDataSourceParams() {
