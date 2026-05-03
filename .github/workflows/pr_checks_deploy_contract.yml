@@ -61,20 +61,24 @@ jobs:
           set -euo pipefail
           test "$(grep -cE '"--port", "8502"' Dockerfile)" -ge 1
 
-      - name: Compose host port bound to loopback
+      - name: Compose binds container port 8502
         run: |
           set -euo pipefail
-          test "$(grep -cE '127\.0\.0\.1:(\$\{[^}]+\}|[0-9]+):8502' deploy/docker-compose.yml)" -ge 1
+          # The runner now binds publicly (auth gates every endpoint per
+          # slice S06). The remaining contract: a port mapping must exist
+          # whose container side is 8502. Host IP is intentionally
+          # unconstrained so an operator can pick loopback on dev and
+          # all-interfaces on TDW.
+          test "$(grep -cE ':8502\b' deploy/docker-compose.yml)" -ge 1
 
-      - name: Compose ports are all loopback-only on 8502
+      - name: Compose ports all target container port 8502
         run: |
           set -euo pipefail
-          # The line-count grep above proves at least one loopback mapping
-          # exists, but does not prevent a future PR from adding a second
-          # non-loopback entry (e.g. "0.0.0.0:8502:8502") alongside the
-          # loopback line. Iterate every entry under
-          # services.experiment_runner.ports and require each one binds
-          # host_ip 127.0.0.1 and container port 8502 — short or long form.
+          # Walk every entry under services.experiment_runner.ports and
+          # require each one's container side is 8502. Host IP and host
+          # port are unconstrained, but the container port must not drift
+          # — otherwise the deploy.yml + Dockerfile + healthcheck contract
+          # silently breaks.
           python <<'PY'
           import re, sys, yaml
           d = yaml.safe_load(open('deploy/docker-compose.yml'))
@@ -83,23 +87,21 @@ jobs:
           if not ports:
               print('::error::experiment_runner service has no ports')
               sys.exit(1)
-          short = re.compile(
-              r'127\.0\.0\.1:(\$\{[A-Z_][A-Z0-9_]*(\s*:-\s*[0-9]+)?\}|[0-9]+):8502'
-          )
+          # Short form: "[host_ip:]host_port:container_port" — split on
+          # the LAST colon and the container side must be 8502.
           errors = []
           for entry in ports:
               if isinstance(entry, str):
-                  if not short.fullmatch(entry):
-                      errors.append(f'  port {entry!r}: must match 127.0.0.1:HOST:8502')
+                  _, _, container = entry.rpartition(':')
+                  if container != '8502':
+                      errors.append(f'  port {entry!r}: container side must be 8502')
               elif isinstance(entry, dict):
-                  if entry.get('host_ip') != '127.0.0.1':
-                      errors.append(f'  port {entry!r}: host_ip must be 127.0.0.1')
                   if str(entry.get('target')) != '8502':
                       errors.append(f'  port {entry!r}: target must be 8502')
               else:
                   errors.append(f'  port {entry!r}: unrecognized form')
           if errors:
-              print('::error::experiment_runner ports must all be loopback-bound to 8502:')
+              print('::error::experiment_runner ports must all target 8502:')
               for line in errors:
                   print(line)
               sys.exit(1)
