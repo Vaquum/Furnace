@@ -75,32 +75,45 @@ jobs:
           # an operator can pick loopback for dev or all-interfaces in
           # production.
           python <<'PY'
-          import sys, yaml
+          import re, sys, yaml
           d = yaml.safe_load(open('deploy/docker-compose.yml'))
           svc = (d.get('services') or {}).get('experiment_runner') or {}
           ports = svc.get('ports')
           if not ports:
               print('::error::experiment_runner service has no ports')
               sys.exit(1)
+          # Mask `${VAR:-DEFAULT}` blocks before splitting so their inner
+          # `:` doesn't fool the segment count. After masking, an empty
+          # token between two colons is a real "no host port" bypass
+          # (e.g. `127.0.0.1::8502`).
+          var_block_re = re.compile(r'\$\{[^}]*\}')
+          # `0` (and `'0'`) tells Docker to pick a random ephemeral port
+          # — same bypass as omitting the host port — so reject it too.
+          BAD_HOST_PORTS = {'', '0'}
           errors = []
           for entry in ports:
               if isinstance(entry, str):
-                  # Short form: "[host_ip:]host_port:container_port".
-                  # `rpartition` splits the container side off the right;
-                  # the left side must be non-empty (i.e. a host port is
-                  # specified). A bare "8502" would publish on a random
-                  # host port, bypassing vars.EXPERIMENT_RUNNER_PORT.
-                  left, sep, container = entry.rpartition(':')
-                  if not sep or not left:
-                      errors.append(f'  port {entry!r}: short form must specify a host port (HOST:CONTAINER)')
+                  # Short form: HOST_PORT:CONTAINER_PORT or HOST_IP:HOST_PORT:CONTAINER_PORT.
+                  masked = var_block_re.sub('<VAR>', entry)
+                  parts = masked.split(':')
+                  if len(parts) == 2:
+                      host_port = parts[0]
+                  elif len(parts) == 3:
+                      host_port = parts[1]
+                  else:
+                      errors.append(f'  port {entry!r}: expected HOST:CONTAINER or HOST_IP:HOST:CONTAINER form')
                       continue
+                  if host_port in BAD_HOST_PORTS:
+                      errors.append(f'  port {entry!r}: host port must be set (not empty, not 0)')
+                  container = parts[-1]
                   if container != '8502':
                       errors.append(f'  port {entry!r}: container side must be 8502')
               elif isinstance(entry, dict):
                   if str(entry.get('target')) != '8502':
                       errors.append(f'  port {entry!r}: target must be 8502')
-                  if entry.get('published') in (None, ''):
-                      errors.append(f'  port {entry!r}: published (host port) must be set')
+                  published = entry.get('published')
+                  if published is None or str(published) in BAD_HOST_PORTS:
+                      errors.append(f'  port {entry!r}: published (host port) must be set (not empty, not 0)')
               else:
                   errors.append(f'  port {entry!r}: unrecognized form')
           if errors:
