@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import difflib
 import hashlib
 import io
@@ -411,8 +413,6 @@ def create_app(root: Path) -> FastAPI:
         scheme, _, credentials = auth.partition(" ")
         scheme_lc = scheme.lower()
         if scheme_lc == "basic":
-            import base64
-            import binascii
             try:
                 decoded = base64.b64decode(credentials, validate=False).decode(
                     "utf-8", errors="strict",
