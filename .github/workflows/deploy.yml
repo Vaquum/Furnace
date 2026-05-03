@@ -1,0 +1,142 @@
+name: Build And Deploy experiment_runner
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-experiment_runner
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  DEPLOY_DIR: /opt/experiment_runner
+  PROJECT_NAME: experiment_runner
+  EXPERIMENT_RUNNER_PORT: ${{ vars.EXPERIMENT_RUNNER_PORT || '8502' }}
+  EXPERIMENT_RUNNER_HOST_DATA_ROOT: ${{ vars.EXPERIMENT_RUNNER_HOST_DATA_ROOT || '/data/experiments' }}
+
+jobs:
+  build:
+    name: Build and push image
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compute lowercased image path
+        id: meta
+        run: |
+          set -euo pipefail
+          image_lc="${REGISTRY}/$(echo "${IMAGE_NAME}" | tr '[:upper:]' '[:lower:]')"
+          echo "image=${image_lc}" >> "$GITHUB_OUTPUT"
+          echo "resolved image: ${image_lc}"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image }}:sha-${{ github.sha }}
+            ${{ steps.meta.outputs.image }}:main
+
+  deploy:
+    name: Deploy to TDW
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate host data root (allowlist)
+        run: |
+          set -euo pipefail
+          # host-data-root must be exactly /data/experiments — typos like
+          # /data/expriments and other paths like /data/notebooks are rejected.
+          root="${EXPERIMENT_RUNNER_HOST_DATA_ROOT}"
+          case "$root" in
+            /data/experiments) : ;;
+            *)
+              echo "::error::host-data-root must be exactly /data/experiments — got: $root"
+              exit 1
+              ;;
+          esac
+
+      - name: Validate host port
+        run: |
+          set -euo pipefail
+          port="${EXPERIMENT_RUNNER_PORT}"
+          case "$port" in
+            ''|*[!0-9]*)
+              echo "::error::EXPERIMENT_RUNNER_PORT must be numeric — got: $port"
+              exit 1
+              ;;
+          esac
+
+      - name: Resolve image tag
+        id: img
+        run: |
+          set -euo pipefail
+          image_lc="${REGISTRY}/$(echo "${IMAGE_NAME}" | tr '[:upper:]' '[:lower:]')"
+          echo "image=${image_lc}:sha-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "deploy image: ${image_lc}:sha-${GITHUB_SHA}"
+
+      - name: Copy compose file to TDW host
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.TDW_IP }}
+          username: ${{ secrets.TDW_USER }}
+          key: ${{ secrets.TDW_KEY }}
+          source: "deploy/docker-compose.yml"
+          target: ${{ env.DEPLOY_DIR }}
+          strip_components: 1
+
+      - name: Deploy on TDW host
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          DEPLOY_IMAGE: ${{ steps.img.outputs.image }}
+          DEPLOY_PORT: ${{ env.EXPERIMENT_RUNNER_PORT }}
+          DEPLOY_DATA_ROOT: ${{ env.EXPERIMENT_RUNNER_HOST_DATA_ROOT }}
+          DEPLOY_DIR: ${{ env.DEPLOY_DIR }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REGISTRY_USER: ${{ github.actor }}
+        with:
+          host: ${{ secrets.TDW_IP }}
+          username: ${{ secrets.TDW_USER }}
+          key: ${{ secrets.TDW_KEY }}
+          envs: DEPLOY_IMAGE,DEPLOY_PORT,DEPLOY_DATA_ROOT,DEPLOY_DIR,REGISTRY_TOKEN,REGISTRY_USER
+          script: |
+            set -euo pipefail
+            cd "$DEPLOY_DIR"
+            test -d "$DEPLOY_DATA_ROOT" || { echo "host data root $DEPLOY_DATA_ROOT does not exist"; exit 1; }
+            # Persist resolved values to .env so subsequent operator-run
+            # `docker compose -f /opt/experiment_runner/docker-compose.yml ps`
+            # commands (run without these vars exported) interpolate cleanly.
+            umask 077
+            printf 'EXPERIMENT_RUNNER_IMAGE=%s\nEXPERIMENT_RUNNER_PORT=%s\nEXPERIMENT_RUNNER_HOST_DATA_ROOT=%s\n' \
+              "$DEPLOY_IMAGE" "$DEPLOY_PORT" "$DEPLOY_DATA_ROOT" > .env
+            export EXPERIMENT_RUNNER_IMAGE="$DEPLOY_IMAGE"
+            export EXPERIMENT_RUNNER_PORT="$DEPLOY_PORT"
+            export EXPERIMENT_RUNNER_HOST_DATA_ROOT="$DEPLOY_DATA_ROOT"
+            echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$REGISTRY_USER" --password-stdin
+            docker compose -p experiment_runner -f docker-compose.yml pull
+            docker compose -p experiment_runner -f docker-compose.yml up -d --wait
+            docker compose -p experiment_runner -f docker-compose.yml ps

@@ -1,0 +1,283 @@
+name: pr_checks_deploy_contract
+
+# PR-time gate that prevents future PRs from silently regressing the
+# Dockerfile / compose / CLI contract or the /data safety rules
+# documented in the slice issue. Trigger: on: pull_request — runs on
+# every PR; fails on any non-zero exit from the checks below.
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-contract:
+    name: deploy-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install PyYAML
+        run: pip install 'pyyaml==6.0.2'
+
+      - name: Dockerfile EXPOSE 8502
+        run: |
+          set -euo pipefail
+          test "$(grep -c 'EXPOSE 8502' Dockerfile)" -ge 1
+
+      - name: Dockerfile CMD binds container to 0.0.0.0
+        run: |
+          set -euo pipefail
+          test "$(grep -cE '"--host", "0\.0\.0\.0"' Dockerfile)" -ge 1
+
+      - name: Dockerfile CMD pins --root to /data/experiments
+        run: |
+          set -euo pipefail
+          # SPEC Signature Diff fixes the CMD's --root and --port. Without
+          # this check, a future PR could change --root to /data/notebooks
+          # or change --port to 8765 without failing the regression gate,
+          # silently breaking the bind-mount target and the loopback bind.
+          test "$(grep -cE '"--root", "/data/experiments"' Dockerfile)" -ge 1
+
+      - name: Dockerfile CMD pins --port to 8502
+        run: |
+          set -euo pipefail
+          test "$(grep -cE '"--port", "8502"' Dockerfile)" -ge 1
+
+      - name: Compose host port bound to loopback
+        run: |
+          set -euo pipefail
+          test "$(grep -cE '127\.0\.0\.1:(\$\{[^}]+\}|[0-9]+):8502' deploy/docker-compose.yml)" -ge 1
+
+      - name: Compose ports are all loopback-only on 8502
+        run: |
+          set -euo pipefail
+          # The line-count grep above proves at least one loopback mapping
+          # exists, but does not prevent a future PR from adding a second
+          # non-loopback entry (e.g. "0.0.0.0:8502:8502") alongside the
+          # loopback line. Iterate every entry under
+          # services.experiment_runner.ports and require each one binds
+          # host_ip 127.0.0.1 and container port 8502 — short or long form.
+          python <<'PY'
+          import re, sys, yaml
+          d = yaml.safe_load(open('deploy/docker-compose.yml'))
+          svc = (d.get('services') or {}).get('experiment_runner') or {}
+          ports = svc.get('ports')
+          if not ports:
+              print('::error::experiment_runner service has no ports')
+              sys.exit(1)
+          short = re.compile(
+              r'127\.0\.0\.1:(\$\{[A-Z_][A-Z0-9_]*(\s*:-\s*[0-9]+)?\}|[0-9]+):8502'
+          )
+          errors = []
+          for entry in ports:
+              if isinstance(entry, str):
+                  if not short.fullmatch(entry):
+                      errors.append(f'  port {entry!r}: must match 127.0.0.1:HOST:8502')
+              elif isinstance(entry, dict):
+                  if entry.get('host_ip') != '127.0.0.1':
+                      errors.append(f'  port {entry!r}: host_ip must be 127.0.0.1')
+                  if str(entry.get('target')) != '8502':
+                      errors.append(f'  port {entry!r}: target must be 8502')
+              else:
+                  errors.append(f'  port {entry!r}: unrecognized form')
+          if errors:
+              print('::error::experiment_runner ports must all be loopback-bound to 8502:')
+              for line in errors:
+                  print(line)
+              sys.exit(1)
+          PY
+
+      - name: Compose experiment_runner mounts satisfy /data/experiments rw bind contract
+        run: |
+          set -euo pipefail
+          # Structural YAML check on every entry under
+          # services.experiment_runner.volumes — not just the first.
+          # SPEC MVC line 44 asserts the live container reports its first
+          # mount as /data/experiments:/data/experiments:true (docker
+          # inspect ... index .Mounts 0). The first mount must satisfy
+          # that contract. Every additional mount must also be a
+          # long-form bind, must not target /data/notebooks (JupyterLab
+          # owns it), and must not be a named volume — named volumes are
+          # deletable by destructive volume operations and forbidden
+          # under the /data/* safety boundary.
+          python <<'PY'
+          import re, sys, yaml
+          d = yaml.safe_load(open('deploy/docker-compose.yml'))
+          svc = (d.get('services') or {}).get('experiment_runner') or {}
+          mounts = svc.get('volumes') or []
+          if not mounts:
+              print('::error::experiment_runner service has no volumes')
+              sys.exit(1)
+
+          src_re = re.compile(r'\$\{[A-Z_][A-Z0-9_]*\s*:-\s*/data/experiments\s*\}')
+
+          def source_defaults_to_data_experiments(source: object) -> bool:
+              return source == '/data/experiments' or (
+                  isinstance(source, str) and src_re.fullmatch(source) is not None
+              )
+
+          errors: list[str] = []
+
+          # First mount: must be the /data/experiments rw bind.
+          first = mounts[0]
+          if not isinstance(first, dict):
+              errors.append(f'  mount[0]: must be a long-form mapping, got {first!r}')
+          else:
+              if first.get('type') != 'bind':
+                  errors.append(f'  mount[0]: type must be "bind", got {first.get("type")!r}')
+              if first.get('target') != '/data/experiments':
+                  errors.append(f'  mount[0]: target must be "/data/experiments", got {first.get("target")!r}')
+              if not source_defaults_to_data_experiments(first.get('source')):
+                  errors.append(f'  mount[0]: source must default to "/data/experiments", got {first.get("source")!r}')
+              if first.get('read_only') is True:
+                  errors.append('  mount[0]: read_only must not be true (mount is rw per SPEC)')
+
+          # /data/notebooks is JupyterLab's; this slice must not mount it
+          # under any target. Strip an optional ${VAR:-...} env-default
+          # wrapper so e.g. ${HOST:-/data/notebooks} resolves to the path.
+          notebooks_re = re.compile(r'\$\{[A-Z_][A-Z0-9_]*\s*:-\s*([^}]*?)\s*\}')
+
+          def source_resolves_to_notebooks(source: object) -> bool:
+              if not isinstance(source, str):
+                  return False
+              m = notebooks_re.fullmatch(source)
+              path = m.group(1) if m else source
+              return path == '/data/notebooks' or path.startswith('/data/notebooks/')
+
+          # Every additional mount must also be a long-form bind and must
+          # not touch /data/notebooks via either target or source. Catches
+          # future PRs that keep mount[0] intact while adding a second
+          # named-volume or /data/notebooks mount alongside it.
+          for i, m in enumerate(mounts[1:], start=1):
+              if not isinstance(m, dict):
+                  errors.append(f'  mount[{i}]: must be a long-form mapping with type: bind, got {m!r}')
+                  continue
+              if m.get('type') != 'bind':
+                  errors.append(
+                      f'  mount[{i}]: type must be "bind" — got {m.get("type")!r} '
+                      '(named volumes are deletable by destructive volume ops and forbidden under the /data/* safety boundary)'
+                  )
+              if m.get('target') == '/data/notebooks':
+                  errors.append(f'  mount[{i}]: target /data/notebooks is forbidden by SPEC safety boundary (JupyterLab owns it)')
+              if source_resolves_to_notebooks(m.get('source')):
+                  errors.append(
+                      f'  mount[{i}]: source {m.get("source")!r} resolves to /data/notebooks — '
+                      'forbidden by SPEC safety boundary (JupyterLab owns the host path) '
+                      'regardless of the target'
+                  )
+
+          if errors:
+              print('::error::experiment_runner volumes do not satisfy the bind-only /data/experiments contract:')
+              for line in errors:
+                  print(line)
+              sys.exit(1)
+          PY
+
+      - name: Compose has no top-level named volumes
+        run: |
+          set -euo pipefail
+          python -c "import yaml,sys; d=yaml.safe_load(open('deploy/docker-compose.yml')); sys.exit(0 if 'volumes' not in (d or {}) else 1)"
+
+      - name: No volume-destructive ops in workflows or compose
+        run: |
+          set -euo pipefail
+          # Pattern parts kept apart so this gate file does not match
+          # itself when the grep walks .github/workflows/*.yml. The
+          # PATTERN definition lines below are safe via ${SP}/${DASH};
+          # every other line in this file (comments, error messages)
+          # also avoids the literal phrasing so the grep can scan this
+          # file alongside its siblings without --exclude — closing
+          # the loophole where a destructive op added inside this file
+          # itself would slip past a self-skipping scanner.
+          # P_DOWN_V / P_DOWN_VOL allow other flags to appear between
+          # the down subcommand and the destructive volume option.
+          DASH='-'
+          SP=' '
+          P_DOWN_V="down\\b.*[[:space:]]${DASH}v\\b"
+          P_DOWN_VOL="down\\b.*${DASH}${DASH}volumes\\b"
+          P_VRM="volume${SP}rm"
+          P_VPR="volume${SP}prune"
+          P_SYS="system${SP}prune"
+          PATTERN="${P_DOWN_V}|${P_DOWN_VOL}|${P_VRM}|${P_VPR}|${P_SYS}"
+          if grep -nE "$PATTERN" .github/workflows/*.yml deploy/*.yml; then
+            echo "::error::found destructive volume operation in workflow or compose"
+            exit 1
+          fi
+
+      - name: CLI exposes --host
+        run: |
+          set -euo pipefail
+          test "$(grep -c '\-\-host' experiment_runner/__main__.py)" -ge 1
+
+      - name: Dockerfile does not chown/chmod/rm /data
+        run: |
+          set -euo pipefail
+          if grep -nE 'rm -rf /data|chown -R /data|chmod -R /data' Dockerfile; then
+            echo "::error::Dockerfile contains a destructive operation against /data"
+            exit 1
+          fi
+
+      - name: Deploy workflow's host-data-root validator rejects non-allowlisted values
+        run: |
+          set -euo pipefail
+          # Behavioral check: extract the deploy workflow's
+          # `Validate host data root (allowlist)` step and execute its
+          # script against a battery of inputs. The good value must
+          # exit 0; every non-allowlisted value (typos, neighboring
+          # /data paths, sub-paths, empty) must exit non-zero. Regex
+          # over the workflow text is not enough — degraded case
+          # statements (e.g. an allow branch with no reject branch)
+          # would still match a regex but silently let bad values
+          # through. Running the script proves the rejection works.
+          python <<'PY'
+          import os, subprocess, sys, yaml
+
+          wf = yaml.safe_load(open('.github/workflows/deploy.yml'))
+          steps = wf['jobs']['deploy']['steps']
+          step = next((s for s in steps if s.get('name') == 'Validate host data root (allowlist)'), None)
+          if step is None or not step.get('run'):
+              print('::error::deploy.yml is missing the "Validate host data root (allowlist)" step')
+              sys.exit(1)
+          script = step['run']
+
+          cases = [
+              ('/data/experiments', 0),
+              ('/data/notebooks', 1),
+              ('/data/expriments', 1),
+              ('/data/experiments/sub', 1),
+              ('/data/experiments/', 1),
+              ('data/experiments', 1),
+              ('', 1),
+          ]
+          failures = []
+          for root, expected in cases:
+              env = os.environ.copy()
+              env['EXPERIMENT_RUNNER_HOST_DATA_ROOT'] = root
+              r = subprocess.run(['bash', '-c', script], env=env, capture_output=True, text=True)
+              status = 'pass' if (r.returncode == 0) == (expected == 0) else 'FAIL'
+              if status == 'FAIL':
+                  failures.append(f'  root={root!r}: expected exit {expected}, got {r.returncode}; stderr={r.stderr!r}')
+          if failures:
+              print('::error::host-data-root validator does not match required behavior:')
+              for line in failures:
+                  print(line)
+              sys.exit(1)
+          PY
