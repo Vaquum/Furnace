@@ -120,24 +120,56 @@ jobs:
           DEPLOY_DIR: ${{ env.DEPLOY_DIR }}
           REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REGISTRY_USER: ${{ github.actor }}
+          DEPLOY_APP_USERNAME: ${{ secrets.APP_USERNAME }}
+          DEPLOY_APP_PASSWORD: ${{ secrets.APP_PASSWORD }}
+          DEPLOY_API_SECRET: ${{ secrets.API_SECRET }}
         with:
           host: ${{ secrets.TDW_IP }}
           username: ${{ secrets.TDW_USER }}
           key: ${{ secrets.TDW_KEY }}
-          envs: DEPLOY_IMAGE,DEPLOY_PORT,DEPLOY_DATA_ROOT,DEPLOY_DIR,REGISTRY_TOKEN,REGISTRY_USER
+          envs: DEPLOY_IMAGE,DEPLOY_PORT,DEPLOY_DATA_ROOT,DEPLOY_DIR,REGISTRY_TOKEN,REGISTRY_USER,DEPLOY_APP_USERNAME,DEPLOY_APP_PASSWORD,DEPLOY_API_SECRET
           script: |
             set -euo pipefail
             cd "$DEPLOY_DIR"
             test -d "$DEPLOY_DATA_ROOT" || { echo "host data root $DEPLOY_DATA_ROOT does not exist"; exit 1; }
+            # Reject any auth-secret value that contains a newline. Multi-line
+            # values would corrupt the line-oriented .env format below
+            # (compose would treat the trailing line as a separate KEY=VALUE
+            # entry, or fail to interpolate at all). Username/password/API
+            # secret must be single-line strings — fail fast if they are not.
+            for var_name in DEPLOY_APP_USERNAME DEPLOY_APP_PASSWORD DEPLOY_API_SECRET; do
+              # Bash indirect expansion (`${!var_name}`) treats the value as
+              # data; never `eval`, which would re-parse the secret as shell.
+              value="${!var_name}"
+              case "$value" in
+                *$'\n'*|*$'\r'*)
+                  echo "::error::$var_name contains a newline; refusing to write multiline value to .env"
+                  exit 1
+                  ;;
+              esac
+            done
             # Persist resolved values to .env so subsequent operator-run
             # `docker compose -f /opt/experiment_runner/docker-compose.yml ps`
             # commands (run without these vars exported) interpolate cleanly.
+            # Auth secrets are written to .env too so compose substitutes
+            # them into the container environment; the file is mode 0600
+            # via umask and lives under the operator-controlled
+            # /opt/experiment_runner directory.
             umask 077
-            printf 'EXPERIMENT_RUNNER_IMAGE=%s\nEXPERIMENT_RUNNER_PORT=%s\nEXPERIMENT_RUNNER_HOST_DATA_ROOT=%s\n' \
-              "$DEPLOY_IMAGE" "$DEPLOY_PORT" "$DEPLOY_DATA_ROOT" > .env
+            {
+              printf 'EXPERIMENT_RUNNER_IMAGE=%s\n' "$DEPLOY_IMAGE"
+              printf 'EXPERIMENT_RUNNER_PORT=%s\n' "$DEPLOY_PORT"
+              printf 'EXPERIMENT_RUNNER_HOST_DATA_ROOT=%s\n' "$DEPLOY_DATA_ROOT"
+              printf 'APP_USERNAME=%s\n' "$DEPLOY_APP_USERNAME"
+              printf 'APP_PASSWORD=%s\n' "$DEPLOY_APP_PASSWORD"
+              printf 'API_SECRET=%s\n' "$DEPLOY_API_SECRET"
+            } > .env
             export EXPERIMENT_RUNNER_IMAGE="$DEPLOY_IMAGE"
             export EXPERIMENT_RUNNER_PORT="$DEPLOY_PORT"
             export EXPERIMENT_RUNNER_HOST_DATA_ROOT="$DEPLOY_DATA_ROOT"
+            export APP_USERNAME="$DEPLOY_APP_USERNAME"
+            export APP_PASSWORD="$DEPLOY_APP_PASSWORD"
+            export API_SECRET="$DEPLOY_API_SECRET"
             echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$REGISTRY_USER" --password-stdin
             docker compose -p experiment_runner -f docker-compose.yml pull
             docker compose -p experiment_runner -f docker-compose.yml up -d --wait

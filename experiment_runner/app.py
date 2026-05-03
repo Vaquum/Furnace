@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import difflib
 import hashlib
 import io
 import json
 import os
 import re
+import secrets
 import signal
 import subprocess
 import sys
@@ -371,6 +374,17 @@ def _experiment_rounds(experiment_dir: Path) -> list[dict]:
 
 
 def create_app(root: Path) -> FastAPI:
+    # Auth credentials must be in the environment before the app builds.
+    # Refuse to start if any are missing — there is no "no auth" mode.
+    app_username = os.environ.get("APP_USERNAME", "")
+    app_password = os.environ.get("APP_PASSWORD", "")
+    api_secret = os.environ.get("API_SECRET", "")
+    if not (app_username and app_password and api_secret):
+        raise RuntimeError(
+            "experiment_runner requires APP_USERNAME, APP_PASSWORD, and "
+            "API_SECRET environment variables; refusing to start"
+        )
+
     templates = Jinja2Templates(directory=str(PKG_DIR / "templates"))
     templates.env.globals["asset_version"] = ASSET_VERSION
     for k, v in _BUILD_META.items():
@@ -380,6 +394,50 @@ def create_app(root: Path) -> FastAPI:
 
     app = FastAPI()
     app.mount("/static", StaticFiles(directory=str(PKG_DIR / "static")), name="static")
+
+    @app.middleware("http")
+    async def _auth_middleware(request: Request, call_next):
+        # Exempt the healthcheck path, the static-file mount, and the
+        # already-public HEAD / smoke-check (per slice S02). Every other
+        # request must carry either HTTP Basic with APP_USERNAME/APP_PASSWORD
+        # or `Authorization: Bearer <API_SECRET>`.
+        path = request.url.path
+        if path == "/health" or path == "/static" or path.startswith("/static/"):
+            return await call_next(request)
+        if request.method == "HEAD" and path == "/":
+            return await call_next(request)
+        auth = request.headers.get("authorization", "")
+        # RFC 7235 says auth scheme names are case-insensitive; split on the
+        # first space and lowercase the scheme so e.g. `bearer <token>` is
+        # accepted just like `Bearer <token>`.
+        scheme, _, credentials = auth.partition(" ")
+        scheme_lc = scheme.lower()
+        if scheme_lc == "basic":
+            try:
+                decoded = base64.b64decode(credentials, validate=True).decode(
+                    "utf-8", errors="strict",
+                )
+            except (binascii.Error, ValueError, UnicodeDecodeError):
+                decoded = ""
+            user, sep, password = decoded.partition(":")
+            if (
+                sep
+                and secrets.compare_digest(user, app_username)
+                and secrets.compare_digest(password, app_password)
+            ):
+                return await call_next(request)
+        elif scheme_lc == "bearer":
+            if secrets.compare_digest(credentials, api_secret):
+                return await call_next(request)
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "authentication required"},
+            headers={"WWW-Authenticate": 'Basic realm="experiment_runner"'},
+        )
+
+    @app.get("/health")
+    def health():
+        return {"status": "ok"}
 
     @app.on_event("shutdown")
     def _on_shutdown() -> None:

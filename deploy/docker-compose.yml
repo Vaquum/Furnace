@@ -1,6 +1,10 @@
 services:
   experiment_runner:
     image: ${EXPERIMENT_RUNNER_IMAGE:?EXPERIMENT_RUNNER_IMAGE must be set}
+    environment:
+      APP_USERNAME: ${APP_USERNAME:?APP_USERNAME must be set}
+      APP_PASSWORD: ${APP_PASSWORD:?APP_PASSWORD must be set}
+      API_SECRET: ${API_SECRET:?API_SECRET must be set}
     ports:
       - "127.0.0.1:${EXPERIMENT_RUNNER_PORT:-8502}:8502"
     volumes:
@@ -9,7 +13,7 @@ services:
         target: /data/experiments
         read_only: false
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8502/', timeout=5)"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8502/health', timeout=5)"]
       interval: 10s
       timeout: 5s
       retries: 12
