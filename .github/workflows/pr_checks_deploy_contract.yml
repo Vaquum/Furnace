@@ -61,20 +61,19 @@ jobs:
           set -euo pipefail
           test "$(grep -cE '"--port", "8502"' Dockerfile)" -ge 1
 
-      - name: Compose host port bound to loopback
+      - name: Compose ports all bind container port 8502 with an explicit host port
         run: |
           set -euo pipefail
-          test "$(grep -cE '127\.0\.0\.1:(\$\{[^}]+\}|[0-9]+):8502' deploy/docker-compose.yml)" -ge 1
-
-      - name: Compose ports are all loopback-only on 8502
-        run: |
-          set -euo pipefail
-          # The line-count grep above proves at least one loopback mapping
-          # exists, but does not prevent a future PR from adding a second
-          # non-loopback entry (e.g. "0.0.0.0:8502:8502") alongside the
-          # loopback line. Iterate every entry under
-          # services.experiment_runner.ports and require each one binds
-          # host_ip 127.0.0.1 and container port 8502 — short or long form.
+          # Walk every entry under services.experiment_runner.ports and
+          # require each one (a) targets container port 8502 and (b) has
+          # an explicit host port. The container port must not drift —
+          # otherwise the deploy.yml + Dockerfile + healthcheck contract
+          # silently breaks. The explicit host port is what the operator
+          # controls via vars.EXPERIMENT_RUNNER_PORT; without it Docker
+          # would publish on a random ephemeral port and bypass that
+          # control entirely. Host IP is intentionally unconstrained so
+          # an operator can pick loopback for dev or all-interfaces in
+          # production.
           python <<'PY'
           import re, sys, yaml
           d = yaml.safe_load(open('deploy/docker-compose.yml'))
@@ -83,23 +82,42 @@ jobs:
           if not ports:
               print('::error::experiment_runner service has no ports')
               sys.exit(1)
-          short = re.compile(
-              r'127\.0\.0\.1:(\$\{[A-Z_][A-Z0-9_]*(\s*:-\s*[0-9]+)?\}|[0-9]+):8502'
-          )
+          # Mask `${VAR:-DEFAULT}` blocks before splitting so their inner
+          # `:` doesn't fool the segment count. After masking, an empty
+          # token between two colons is a real "no host port" bypass
+          # (e.g. `127.0.0.1::8502`).
+          var_block_re = re.compile(r'\$\{[^}]*\}')
+          # `0` (and `'0'`) tells Docker to pick a random ephemeral port
+          # — same bypass as omitting the host port — so reject it too.
+          BAD_HOST_PORTS = {'', '0'}
           errors = []
           for entry in ports:
               if isinstance(entry, str):
-                  if not short.fullmatch(entry):
-                      errors.append(f'  port {entry!r}: must match 127.0.0.1:HOST:8502')
+                  # Short form: HOST_PORT:CONTAINER_PORT or HOST_IP:HOST_PORT:CONTAINER_PORT.
+                  masked = var_block_re.sub('<VAR>', entry)
+                  parts = masked.split(':')
+                  if len(parts) == 2:
+                      host_port = parts[0]
+                  elif len(parts) == 3:
+                      host_port = parts[1]
+                  else:
+                      errors.append(f'  port {entry!r}: expected HOST:CONTAINER or HOST_IP:HOST:CONTAINER form')
+                      continue
+                  if host_port in BAD_HOST_PORTS:
+                      errors.append(f'  port {entry!r}: host port must be set (not empty, not 0)')
+                  container = parts[-1]
+                  if container != '8502':
+                      errors.append(f'  port {entry!r}: container side must be 8502')
               elif isinstance(entry, dict):
-                  if entry.get('host_ip') != '127.0.0.1':
-                      errors.append(f'  port {entry!r}: host_ip must be 127.0.0.1')
                   if str(entry.get('target')) != '8502':
                       errors.append(f'  port {entry!r}: target must be 8502')
+                  published = entry.get('published')
+                  if published is None or str(published) in BAD_HOST_PORTS:
+                      errors.append(f'  port {entry!r}: published (host port) must be set (not empty, not 0)')
               else:
                   errors.append(f'  port {entry!r}: unrecognized form')
           if errors:
-              print('::error::experiment_runner ports must all be loopback-bound to 8502:')
+              print('::error::experiment_runner ports must all target 8502 with an explicit host port:')
               for line in errors:
                   print(line)
               sys.exit(1)
