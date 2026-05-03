@@ -1,3 +1,7 @@
+# v0.5.2
+
+- Fix the runner's container-startup crash: `_load_build_meta()` reads `pyproject.toml` from `PKG_DIR.parent` at app import time, but the Dockerfile copied only the `experiment_runner/` package — `/app/pyproject.toml` did not exist and the import raised `FileNotFoundError` before uvicorn could start. The container exited with status 1, `compose up -d --wait` reported "is unhealthy" within a second, and the deploy workflow failed. The Dockerfile now `COPY`s `pyproject.toml` into the image. The deploy workflow also passes `GIT_SHA=${{ github.sha }}` as a Docker build arg, which the Dockerfile bakes into a `GIT_SHA` env var so the build-stamp in the page footer renders the deployed commit (the in-container `git rev-parse HEAD` previously failed silently because there is no `.git` directory).
+
 # v0.5.1
 
 - Migrate all `TemplateResponse(...)` calls in `experiment_runner/app.py` to the starlette 1.0 signature (`request` is now the first positional arg). The previous old-style `(name, context)` form was a silent runtime failure on starlette 1.0.0+: the template name was being read as `request` (a string), the context dict was being read as `name`, and the unhashable dict propagated into jinja2's template cache as `TypeError: unhashable type: 'dict'` — every HTML page returned 500 (jobs page, experiment page, search page, round page, results page, and the `_partials/*` rows). Pin `starlette>=1.0.0` in `experiment_runner/requirements.txt` so the contract is explicit at install time.
