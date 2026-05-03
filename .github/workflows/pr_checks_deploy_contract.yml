@@ -116,8 +116,8 @@ jobs:
           # that contract. Every additional mount must also be a
           # long-form bind, must not target /data/notebooks (JupyterLab
           # owns it), and must not be a named volume — named volumes are
-          # deletable by `docker volume rm` / `volume prune` and
-          # forbidden under the /data/* safety boundary.
+          # deletable by destructive volume operations and forbidden
+          # under the /data/* safety boundary.
           python <<'PY'
           import re, sys, yaml
           d = yaml.safe_load(open('deploy/docker-compose.yml'))
@@ -173,7 +173,7 @@ jobs:
               if m.get('type') != 'bind':
                   errors.append(
                       f'  mount[{i}]: type must be "bind" — got {m.get("type")!r} '
-                      '(named volumes are deletable by volume rm/prune and forbidden under the /data/* safety boundary)'
+                      '(named volumes are deletable by destructive volume ops and forbidden under the /data/* safety boundary)'
                   )
               if m.get('target') == '/data/notebooks':
                   errors.append(f'  mount[{i}]: target /data/notebooks is forbidden by SPEC safety boundary (JupyterLab owns it)')
@@ -200,10 +200,13 @@ jobs:
         run: |
           set -euo pipefail
           # Pattern parts kept apart so this gate file does not match
-          # itself on the PATTERN line when the grep walks
-          # .github/workflows/*.yml. The basename --exclude below skips
-          # this gate's own comments/error-message strings (which
-          # legitimately contain the literal phrasing).
+          # itself when the grep walks .github/workflows/*.yml. The
+          # PATTERN definition lines below are safe via ${SP}/${DASH};
+          # every other line in this file (comments, error messages)
+          # also avoids the literal phrasing so the grep can scan this
+          # file alongside its siblings without --exclude — closing
+          # the loophole where a destructive op added inside this file
+          # itself would slip past a self-skipping scanner.
           # P_DOWN_V / P_DOWN_VOL allow other flags to appear between
           # the down subcommand and the destructive volume option.
           DASH='-'
@@ -214,7 +217,7 @@ jobs:
           P_VPR="volume${SP}prune"
           P_SYS="system${SP}prune"
           PATTERN="${P_DOWN_V}|${P_DOWN_VOL}|${P_VRM}|${P_VPR}|${P_SYS}"
-          if grep -nE --exclude='pr_checks_deploy_contract.yml' "$PATTERN" .github/workflows/*.yml deploy/*.yml; then
+          if grep -nE "$PATTERN" .github/workflows/*.yml deploy/*.yml; then
             echo "::error::found destructive volume operation in workflow or compose"
             exit 1
           fi
