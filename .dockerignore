@@ -1,0 +1,15 @@
+.git
+.github
+.venv
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.playwright-mcp/
+.claude
+tests
+docs
+new_repository_template
+scripts
+tools
+Design-System.md

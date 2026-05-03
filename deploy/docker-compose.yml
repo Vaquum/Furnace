@@ -1,0 +1,17 @@
+services:
+  experiment_runner:
+    image: ${EXPERIMENT_RUNNER_IMAGE:?EXPERIMENT_RUNNER_IMAGE must be set}
+    ports:
+      - "127.0.0.1:${EXPERIMENT_RUNNER_PORT:-8502}:8502"
+    volumes:
+      - type: bind
+        source: ${EXPERIMENT_RUNNER_HOST_DATA_ROOT:-/data/experiments}
+        target: /data/experiments
+        read_only: false
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8502/', timeout=5)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
