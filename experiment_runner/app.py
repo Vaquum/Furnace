@@ -402,7 +402,7 @@ def create_app(root: Path) -> FastAPI:
         # request must carry either HTTP Basic with APP_USERNAME/APP_PASSWORD
         # or `Authorization: Bearer <API_SECRET>`.
         path = request.url.path
-        if path == "/health" or path.startswith("/static/"):
+        if path == "/health" or path == "/static" or path.startswith("/static/"):
             return await call_next(request)
         if request.method == "HEAD" and path == "/":
             return await call_next(request)
@@ -414,7 +414,7 @@ def create_app(root: Path) -> FastAPI:
         scheme_lc = scheme.lower()
         if scheme_lc == "basic":
             try:
-                decoded = base64.b64decode(credentials, validate=False).decode(
+                decoded = base64.b64decode(credentials, validate=True).decode(
                     "utf-8", errors="strict",
                 )
             except (binascii.Error, ValueError, UnicodeDecodeError):

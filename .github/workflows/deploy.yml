@@ -138,7 +138,9 @@ jobs:
             # entry, or fail to interpolate at all). Username/password/API
             # secret must be single-line strings — fail fast if they are not.
             for var_name in DEPLOY_APP_USERNAME DEPLOY_APP_PASSWORD DEPLOY_API_SECRET; do
-              eval "value=\${$var_name}"
+              # Bash indirect expansion (`${!var_name}`) treats the value as
+              # data; never `eval`, which would re-parse the secret as shell.
+              value="${!var_name}"
               case "$value" in
                 *$'\n'*|*$'\r'*)
                   echo "::error::$var_name contains a newline; refusing to write multiline value to .env"
