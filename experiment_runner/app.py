@@ -6,6 +6,7 @@ import io
 import json
 import os
 import re
+import secrets
 import signal
 import subprocess
 import sys
@@ -371,6 +372,17 @@ def _experiment_rounds(experiment_dir: Path) -> list[dict]:
 
 
 def create_app(root: Path) -> FastAPI:
+    # Auth credentials must be in the environment before the app builds.
+    # Refuse to start if any are missing — there is no "no auth" mode.
+    app_username = os.environ.get("APP_USERNAME", "")
+    app_password = os.environ.get("APP_PASSWORD", "")
+    api_secret = os.environ.get("API_SECRET", "")
+    if not (app_username and app_password and api_secret):
+        raise RuntimeError(
+            "experiment_runner requires APP_USERNAME, APP_PASSWORD, and "
+            "API_SECRET environment variables; refusing to start"
+        )
+
     templates = Jinja2Templates(directory=str(PKG_DIR / "templates"))
     templates.env.globals["asset_version"] = ASSET_VERSION
     for k, v in _BUILD_META.items():
@@ -380,6 +392,44 @@ def create_app(root: Path) -> FastAPI:
 
     app = FastAPI()
     app.mount("/static", StaticFiles(directory=str(PKG_DIR / "static")), name="static")
+
+    @app.middleware("http")
+    async def _auth_middleware(request: Request, call_next):
+        # Exempt the healthcheck path, the static-file mount, and the
+        # already-public HEAD / smoke-check (per slice S02). Every other
+        # request must carry either HTTP Basic with APP_USERNAME/APP_PASSWORD
+        # or `Authorization: Bearer <API_SECRET>`.
+        path = request.url.path
+        if path == "/health" or path.startswith("/static/"):
+            return await call_next(request)
+        if request.method == "HEAD" and path == "/":
+            return await call_next(request)
+        auth = request.headers.get("authorization", "")
+        if auth.startswith("Basic "):
+            import base64
+            try:
+                decoded = base64.b64decode(auth[6:]).decode("utf-8", errors="strict")
+            except (ValueError, UnicodeDecodeError):
+                decoded = ""
+            user, sep, password = decoded.partition(":")
+            if (
+                sep
+                and secrets.compare_digest(user, app_username)
+                and secrets.compare_digest(password, app_password)
+            ):
+                return await call_next(request)
+        elif auth.startswith("Bearer "):
+            if secrets.compare_digest(auth[7:], api_secret):
+                return await call_next(request)
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "authentication required"},
+            headers={"WWW-Authenticate": 'Basic realm="experiment_runner"'},
+        )
+
+    @app.get("/health")
+    def health():
+        return {"status": "ok"}
 
     @app.on_event("shutdown")
     def _on_shutdown() -> None:
