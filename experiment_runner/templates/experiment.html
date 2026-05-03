@@ -31,7 +31,7 @@
       <fieldset class="args-group">
         <legend>data source</legend>
         <div id="data-source-controls" class="row"></div>
-        <p id="data-source-empty" class="atom-small" style="color: var(--ink-mute); display: none;">Save the experiment to populate from your SFD's manifest.</p>
+        <p id="data-source-empty" class="atom-small" style="color: var(--ink-mute); display: none;">No data-source controls — set <code>sfd_identifier</code> to a class in the editor whose <code>manifest()</code> calls <code>set_data_source(...)</code>, or check the server log if the inspect endpoint is failing.</p>
       </fieldset>
 
       <fieldset class="args-group">
@@ -252,7 +252,13 @@ function renderDataSourceControls(schema) {
 }
 
 let inspectInflight = null;
+let inspectGen = 0;
 async function refreshInspect() {
+  // Each call bumps the generation; renderDataSourceControls only fires for
+  // the latest generation. Without this guard, two refreshInspects in flight
+  // (e.g. page-load + sfd_identifier change) could render in completion
+  // order rather than request order, leaving the form on a stale schema.
+  const myGen = ++inspectGen;
   const code = document.getElementById('code-editor').value;
   const sfdId = document.getElementById('f-sfd').value.trim();
   const p = (async () => {
@@ -274,6 +280,7 @@ async function refreshInspect() {
       return;
     }
     const schema = await r.json();
+    if (myGen !== inspectGen) return;  // a newer inspect superseded us
     renderDataSourceControls(schema.data_source || {});
   })();
   inspectInflight = p;
@@ -356,6 +363,13 @@ async function save() {
   try {
     while (pending && !saveBlocked) {
       pending = false;
+      // Wait for any in-flight inspect before serializing the form. Without
+      // this, clicking Save during the page-load inspect (or during an
+      // sfd_identifier-triggered refresh) would persist either {} or the
+      // previous control set into args.json before the new schema rendered.
+      if (inspectInflight) {
+        try { await inspectInflight; } catch (_) {}
+      }
       const ok = await doSaveOnce();
       if (!ok) break;
     }
@@ -413,8 +427,12 @@ document.getElementById('save-btn').addEventListener('click', save);
 document.getElementById('start-btn').addEventListener('click', start);
 const editor = document.getElementById('code-editor');
 editor.addEventListener('blur', async () => {
-  await save();
+  // Inspect first, then save: the new code may have changed the SFD's
+  // manifest, which changes the data-source schema. Saving first would
+  // persist the old control set into args.json (and into SAVED_OVERRIDES),
+  // masking the manifest change until the user manually saved again.
   await refreshInspect();
+  await save();
 });
 document.getElementById('f-sfd').addEventListener('change', () => refreshInspect());
 document.getElementById('args-form').addEventListener('change', () => save());

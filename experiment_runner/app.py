@@ -130,7 +130,12 @@ def _inspect_round_args(code: str, sfd_identifier: str) -> dict:
     SFD's manifest to find which HistoricalData method it declares (e.g.
     `set_data_source(method="get_spot_klines", params={...})`), then
     introspects that method's signature for the per-parameter library
-    defaults that drive the placeholder text in the UI."""
+    defaults that drive the placeholder text in the UI.
+
+    Fail-loud: a missing limen import or an un-introspectable method
+    propagates so the inspect endpoint returns 500. The previous silent
+    except masked real failures behind an empty-schema 200, which made
+    the client save `{}` against a working SFD without any signal."""
     import inspect as _inspect_mod
     extracted = _extract_manifest_data_source(code, sfd_identifier) or {}
     manifest_method = extracted.get("method")
@@ -143,14 +148,15 @@ def _inspect_round_args(code: str, sfd_identifier: str) -> dict:
         },
     }
     method_name = manifest_method or "get_spot_klines"
-    try:
-        import limen
-        method = getattr(limen.HistoricalData, method_name, None)
-        if method is None:
-            return out
-        sig = _inspect_mod.signature(method)
-    except Exception:
+    import limen
+    method = getattr(limen.HistoricalData, method_name, None)
+    if method is None:
+        # Manifest declared an unknown method name. Returning the
+        # extracted manifest_method/manifest_params with an empty
+        # signature lets the client render the readout without
+        # synthesising controls for a method we can't introspect.
         return out
+    sig = _inspect_mod.signature(method)
     sentinel = _inspect_mod.Parameter.empty
     for name, param in sig.parameters.items():
         if name == "self" or param.kind in (
