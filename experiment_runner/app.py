@@ -46,6 +46,162 @@ LAUNCHER_PATH = PKG_DIR / "run_round.py"
 ASSET_VERSION = str(int(time.time()))
 
 
+def _load_build_meta() -> dict[str, str]:
+    """Resolve package version and git SHA at import time so every template
+    can stamp the running build."""
+    import tomllib
+    repo_root = PKG_DIR.parent
+    pp = tomllib.loads((repo_root / "pyproject.toml").read_text())
+    pkg_ver = pp["project"]["version"]
+    sha_full = os.environ.get("GIT_SHA", "").strip()
+    if not sha_full:
+        try:
+            sha_full = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=repo_root, text=True,
+            ).strip()
+        except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+            sha_full = ""
+    sha_short = sha_full[:7] if sha_full else ""
+    return {
+        "package_version": pkg_ver,
+        "git_full_sha": sha_full,
+        "git_short_sha": sha_short,
+        "repo_url": "https://github.com/Vaquum/experiment_runner",
+    }
+
+
+_BUILD_META = _load_build_meta()
+
+
+def _ast_dict_to_python(d: _ast.Dict) -> dict | None:
+    out: dict = {}
+    for k, v in zip(d.keys, d.values):
+        try:
+            key = _ast.literal_eval(k) if k is not None else None
+            val = _ast.literal_eval(v)
+        except (ValueError, SyntaxError):
+            return None
+        out[key] = val
+    return out
+
+
+def _extract_manifest_data_source(code: str, sfd_identifier: str) -> dict | None:
+    """AST-walk: find `class <sfd_identifier>:`, find its `manifest` method,
+    locate any `set_data_source(...)` call anywhere in its body, return
+    {"method": <str|None>, "params": <dict|None>}. Handles both
+    `return Manifest().set_data_source(...)` and the assignment form
+    `manifest = Manifest().set_data_source(...)`. Returns None when no
+    set_data_source(...) call is found."""
+    if not code or not sfd_identifier:
+        return None
+    try:
+        tree = _ast.parse(code)
+    except SyntaxError:
+        return None
+    for node in tree.body:
+        if not (isinstance(node, _ast.ClassDef) and node.name == sfd_identifier):
+            continue
+        for item in node.body:
+            if not (isinstance(item, _ast.FunctionDef) and item.name == "manifest"):
+                continue
+            for sub in _ast.walk(item):
+                if not (isinstance(sub, _ast.Call) and isinstance(sub.func, _ast.Attribute)):
+                    continue
+                if sub.func.attr != "set_data_source":
+                    continue
+                method: str | None = None
+                params: dict | None = {}
+                for kw in sub.keywords:
+                    if kw.arg == "method":
+                        try:
+                            v = _ast.literal_eval(kw.value)
+                        except (ValueError, SyntaxError):
+                            v = None
+                        if isinstance(v, str):
+                            method = v
+                    elif kw.arg == "params" and isinstance(kw.value, _ast.Dict):
+                        params = _ast_dict_to_python(kw.value)
+                return {"method": method, "params": params}
+    return None
+
+
+def _inspect_round_args(code: str, sfd_identifier: str) -> dict:
+    """Return the schema for the experiment-edit controls. The SFD's
+    `manifest()` is the source of truth: we AST-walk for the chained
+    `set_data_source(method=..., params={...})` and introspect that
+    method's signature for the per-parameter library defaults that drive
+    the placeholder text in the UI.
+
+    Fail-loud: a missing limen import or an un-introspectable method
+    propagates so the inspect endpoint returns 500. The previous silent
+    except masked real failures behind an empty-schema 200, which made
+    the client save `{}` against a working SFD without any signal.
+
+    No-manifest-no-schema: if the SFD class isn't in the code, doesn't
+    define `manifest`, or doesn't call `set_data_source`, the response
+    carries an empty signature. The client shows the empty-state
+    message instead of synthesising controls for a default method
+    unrelated to the current code (which would otherwise become real
+    `args.json` overrides on the next save and mask the real manifest
+    after the code is fixed)."""
+    import inspect as _inspect_mod
+    empty: dict = {
+        "data_source": {
+            "manifest_method": None,
+            "manifest_params": {},
+            "library_signature": [],
+        },
+    }
+    extracted = _extract_manifest_data_source(code, sfd_identifier)
+    if extracted is None:
+        return empty
+    manifest_method = extracted.get("method")
+    manifest_params = extracted.get("params") or {}
+    out: dict = {
+        "data_source": {
+            "manifest_method": manifest_method,
+            "manifest_params": manifest_params,
+            "library_signature": [],
+        },
+    }
+    # Manifest matched but didn't name a method. Default to the legacy
+    # `get_spot_klines` for introspection — UEL would do the same at run
+    # time when method is unspecified.
+    method_name = manifest_method or "get_spot_klines"
+    import limen
+    method = getattr(limen.HistoricalData, method_name, None)
+    if method is None:
+        # Manifest declared a method that doesn't exist on HistoricalData.
+        # Fail loud at inspect time so the user can fix the manifest before
+        # starting a round — otherwise run_round would crash on the same
+        # getattr() with a less actionable traceback.
+        raise HTTPException(
+            400,
+            f"manifest declares data_source.method={method_name!r} which is "
+            f"not available on limen.HistoricalData",
+        )
+    sig = _inspect_mod.signature(method)
+    sentinel = _inspect_mod.Parameter.empty
+    for name, param in sig.parameters.items():
+        if name == "self" or param.kind in (
+            _inspect_mod.Parameter.VAR_POSITIONAL,
+            _inspect_mod.Parameter.VAR_KEYWORD,
+        ):
+            continue
+        has_default = param.default is not sentinel
+        default = param.default if has_default else None
+        if callable(default):
+            default = None
+        annotation = str(param.annotation) if param.annotation is not sentinel else "Any"
+        out["data_source"]["library_signature"].append({
+            "name": name,
+            "default": default,
+            "has_default": has_default,
+            "annotation": annotation,
+        })
+    return out
+
+
 _WARNING_HEADER = re.compile(r"^[/\\].+?:\d+:\s+\w*Warning:.*$")
 _TRACEBACK_HEADER = re.compile(r"^Traceback \(most recent call last\):")
 
@@ -217,6 +373,8 @@ def _experiment_rounds(experiment_dir: Path) -> list[dict]:
 def create_app(root: Path) -> FastAPI:
     templates = Jinja2Templates(directory=str(PKG_DIR / "templates"))
     templates.env.globals["asset_version"] = ASSET_VERSION
+    for k, v in _BUILD_META.items():
+        templates.env.globals[k] = v
     sm = StateMachine(root)
     reconcile_at_startup(sm)
 
@@ -279,6 +437,20 @@ def create_app(root: Path) -> FastAPI:
         (exp_dir / "args.json").write_text(json.dumps(seeded_args, indent=2))
         write_version_atomic(exp_dir, 0)
         return RedirectResponse(f"/experiments/{eid}", status_code=303)
+
+    @app.post("/experiments/{experiment_id}/inspect")
+    async def inspect_args(experiment_id: str, request: Request):
+        _exp_dir(experiment_id)
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(400, "request body must be a JSON object")
+        code = body.get("code", "")
+        sfd_id = body.get("sfd_identifier", "")
+        if not isinstance(code, str):
+            raise HTTPException(400, "code must be a string")
+        if not isinstance(sfd_id, str):
+            raise HTTPException(400, "sfd_identifier must be a string")
+        return JSONResponse(_inspect_round_args(code, sfd_id))
 
     @app.get("/experiments/{experiment_id}", response_class=HTMLResponse)
     def experiment_page(request: Request, experiment_id: str):

@@ -175,8 +175,20 @@ textarea.atom-code-block {
   white-space: pre;
   word-wrap: normal;
   overflow: auto;
+  overscroll-behavior: contain;
   tab-size: 4;
   -moz-tab-size: 4;
+}
+textarea.atom-code-block.compact {
+  min-height: 0;
+}
+.build-stamp {
+  margin-left: var(--gap-s);
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
 }
 textarea.atom-code-block:focus {
   border-color: var(--ink-soft);
@@ -334,6 +346,25 @@ input[type="checkbox"]:checked::after {
   margin-bottom: var(--gap-s);
 }
 
+/* Field grouping per Design-System Field atom: fieldset with legend rendered
+   as h-label, 1 px rule top border above the legend, no decorative border. */
+fieldset.args-group {
+  border: none;
+  border-top: 1px solid var(--rule);
+  padding: var(--gap-s) 0 0 0;
+  margin: 0 0 var(--gap-m) 0;
+}
+fieldset.args-group legend {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+  font-weight: 500;
+  padding: 0;
+  margin-bottom: var(--gap-s);
+}
+
 .static-value {
   font-family: var(--font-mono);
   font-size: var(--t-code);
@@ -379,7 +410,7 @@ button.primary:hover, .btn.primary:hover {
   color: var(--paper);
 }
 
-.button-row { display: flex; gap: var(--gap-s); margin-top: var(--gap-m); }
+.button-row { display: flex; gap: var(--gap-s); margin-top: var(--gap-m); margin-bottom: var(--gap-l); }
 
 /* ---- Experiments table (jobs page) ---- */
 

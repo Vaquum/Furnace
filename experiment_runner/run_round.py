@@ -69,13 +69,12 @@ def main() -> None:
         sfd = sfd()
 
     import limen
-    historical = limen.HistoricalData()
     method_name = sfd_args["data_source"]["method"]
     method_params = sfd_args["data_source"]["params"]
+    historical = limen.HistoricalData()
     data = getattr(historical, method_name)(**method_params)
     if data is None:
         data = historical.data  # older Limen versions stored result on instance
-
     uel = limen.UniversalExperimentLoop(data=data, sfd=sfd)
 
     round_id = round_dir.name
