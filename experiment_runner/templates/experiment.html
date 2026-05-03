@@ -87,7 +87,15 @@
 <script>
 const EXP_ID = {{ experiment_id | tojson }};
 let SAVED_OVERRIDES = {{ args.data_source.params | tojson }};
+let SAVED_METHOD = {{ args.data_source.method | tojson }};
 let LAST_SCHEMA = null;
+let LAST_MANIFEST_METHOD = null;
+
+function effectiveMethod() {
+  // Manifest is canonical when the SFD code declares one; otherwise the
+  // saved value wins; otherwise the legacy default.
+  return LAST_MANIFEST_METHOD || SAVED_METHOD || 'get_spot_klines';
+}
 
 function gatherDataSourceParams() {
   // What the form shows is what gets used. Whatever value sits in a control
@@ -107,7 +115,10 @@ function gatherDataSourceParams() {
     if (f.type === 'number') {
       const n = Number(s);
       if (Number.isNaN(n)) return;
-      params[name] = n;
+      // Honour the integer hint stamped on the control during render. Browsers
+      // accept "12.5" in <input type="number"> regardless of step, so int-typed
+      // params would otherwise reach the backend as floats.
+      params[name] = (f.dataset.numKind === 'int') ? Math.trunc(n) : n;
       return;
     }
     params[name] = s;
@@ -123,7 +134,7 @@ function gatherWorking() {
     args: {
       sfd_identifier: form.elements['sfd_identifier'].value.trim(),
       data_source: {
-        method: 'get_spot_klines',
+        method: effectiveMethod(),
         params: gatherDataSourceParams(),
       },
       uel_run: {
@@ -160,6 +171,7 @@ function effectivePrefill(name, manifest, libraryDefault) {
 
 function renderDataSourceControls(schema) {
   LAST_SCHEMA = schema;
+  LAST_MANIFEST_METHOD = (schema && schema.manifest_method) || null;
   const container = document.getElementById('data-source-controls');
   const emptyMsg = document.getElementById('data-source-empty');
   container.innerHTML = '';
@@ -175,7 +187,9 @@ function renderDataSourceControls(schema) {
     const name = param.name;
     const ann = (param.annotation || '').toLowerCase();
     const isBool = /\bbool\b/.test(ann);
-    const isNum = /\bint\b|\bfloat\b/.test(ann);
+    const isInt = /\bint\b/.test(ann) && !/\bfloat\b/.test(ann);
+    const isFloat = /\bfloat\b/.test(ann);
+    const isNum = isInt || isFloat;
 
     const cell = document.createElement('div');
     cell.className = 'col field';
@@ -216,35 +230,54 @@ function renderDataSourceControls(schema) {
       } else if (!param.has_default) {
         el.placeholder = '(required)';
       }
-      if (isNum && STEP_HINTS[name] !== undefined) {
-        el.step = String(STEP_HINTS[name]);
-        el.min = String(STEP_HINTS[name]);
+      if (isNum) {
+        if (STEP_HINTS[name] !== undefined) {
+          el.step = String(STEP_HINTS[name]);
+          el.min = String(STEP_HINTS[name]);
+        } else if (isInt) {
+          el.step = '1';
+        }
       }
     }
     el.id = `ds-${name}`;
     el.dataset.paramName = name;
+    if (isInt) el.dataset.numKind = 'int';
+    else if (isFloat) el.dataset.numKind = 'float';
     el.dataset.manifestValue = (manifest[name] !== undefined && manifest[name] !== null) ? String(manifest[name]) : '';
     el.dataset.libraryDefault = (param.default !== null && param.default !== undefined) ? String(param.default) : '';
-    el.addEventListener('change', () => save());
     cell.appendChild(el);
 
     container.appendChild(cell);
   }
 }
 
+let inspectInflight = null;
 async function refreshInspect() {
   const code = document.getElementById('code-editor').value;
   const sfdId = document.getElementById('f-sfd').value.trim();
-  try {
-    const r = await fetch(`/experiments/${encodeURIComponent(EXP_ID)}/inspect`, {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({code, sfd_identifier: sfdId}),
-    });
-    if (!r.ok) return;
+  const p = (async () => {
+    let r;
+    try {
+      r = await fetch(`/experiments/${encodeURIComponent(EXP_ID)}/inspect`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({code, sfd_identifier: sfdId}),
+      });
+    } catch (e) {
+      console.error('inspect fetch failed:', e);
+      return;
+    }
+    if (!r.ok) {
+      let detail = '';
+      try { detail = await r.text(); } catch (_) {}
+      console.error('inspect failed:', r.status, detail);
+      return;
+    }
     const schema = await r.json();
     renderDataSourceControls(schema.data_source || {});
-  } catch (_) {}
+  })();
+  inspectInflight = p;
+  try { await p; } finally { if (inspectInflight === p) inspectInflight = null; }
 }
 
 function flashStatus(text, error) {
@@ -293,6 +326,10 @@ async function doSaveOnce() {
   if (r.status === 200) {
     const data = await r.json();
     wrap.dataset.baseVersion = String(data.version);
+    // Refresh saved-state mirrors so the next refreshInspect() doesn't fall
+    // back to the stale page-load values.
+    SAVED_OVERRIDES = body.args.data_source.params;
+    SAVED_METHOD = body.args.data_source.method;
     flashStatus(`Saved at version ${data.version}`, false);
     return true;
   }
@@ -335,6 +372,13 @@ async function start() {
   if (saveBlocked) {
     flashStatus('Resolve the conflict above before starting a round.', true);
     return;
+  }
+  // The textarea blur handler kicks off save() AND refreshInspect() in
+  // parallel; if the user clicks Start immediately after, we must wait for
+  // both — otherwise gatherWorking() would serialize the previous control
+  // set even though the editor's manifest/signature has already changed.
+  if (inspectInflight) {
+    try { await inspectInflight; } catch (_) {}
   }
   await save();
   await waitForIdleSave();

@@ -85,27 +85,13 @@ def _ast_dict_to_python(d: _ast.Dict) -> dict | None:
     return out
 
 
-def _find_set_data_source_params(call_chain) -> dict | None:
-    node = call_chain
-    while node is not None:
-        if isinstance(node, _ast.Call) and isinstance(node.func, _ast.Attribute):
-            if node.func.attr == "set_data_source":
-                for kw in node.keywords:
-                    if kw.arg == "params" and isinstance(kw.value, _ast.Dict):
-                        return _ast_dict_to_python(kw.value)
-                return {}
-            node = node.func.value
-        else:
-            return None
-    return None
-
-
-def _extract_manifest_data_source_params(code: str, sfd_identifier: str) -> dict | None:
+def _extract_manifest_data_source(code: str, sfd_identifier: str) -> dict | None:
     """AST-walk: find `class <sfd_identifier>:`, find its `manifest` method,
-    locate any `set_data_source(...)` call anywhere in its body, return its
-    `params={...}` dict literal if extractable. Handles both
+    locate any `set_data_source(...)` call anywhere in its body, return
+    {"method": <str|None>, "params": <dict|None>}. Handles both
     `return Manifest().set_data_source(...)` and the assignment form
-    `manifest = Manifest().set_data_source(...)`."""
+    `manifest = Manifest().set_data_source(...)`. Returns None when no
+    set_data_source(...) call is found."""
     if not code or not sfd_identifier:
         return None
     try:
@@ -123,27 +109,46 @@ def _extract_manifest_data_source_params(code: str, sfd_identifier: str) -> dict
                     continue
                 if sub.func.attr != "set_data_source":
                     continue
+                method: str | None = None
+                params: dict | None = {}
                 for kw in sub.keywords:
-                    if kw.arg == "params" and isinstance(kw.value, _ast.Dict):
-                        return _ast_dict_to_python(kw.value)
-                return {}
+                    if kw.arg == "method":
+                        try:
+                            v = _ast.literal_eval(kw.value)
+                        except (ValueError, SyntaxError):
+                            v = None
+                        if isinstance(v, str):
+                            method = v
+                    elif kw.arg == "params" and isinstance(kw.value, _ast.Dict):
+                        params = _ast_dict_to_python(kw.value)
+                return {"method": method, "params": params}
     return None
 
 
 def _inspect_round_args(code: str, sfd_identifier: str) -> dict:
-    """Return the schema for the experiment-edit controls:
-    library signature for get_spot_klines (placeholder defaults) and the
-    SFD's declared manifest params (pre-fills)."""
+    """Return the schema for the experiment-edit controls. Looks at the
+    SFD's manifest to find which HistoricalData method it declares (e.g.
+    `set_data_source(method="get_spot_klines", params={...})`), then
+    introspects that method's signature for the per-parameter library
+    defaults that drive the placeholder text in the UI."""
     import inspect as _inspect_mod
+    extracted = _extract_manifest_data_source(code, sfd_identifier) or {}
+    manifest_method = extracted.get("method")
+    manifest_params = extracted.get("params") or {}
     out: dict = {
         "data_source": {
-            "manifest_params": _extract_manifest_data_source_params(code, sfd_identifier) or {},
+            "manifest_method": manifest_method,
+            "manifest_params": manifest_params,
             "library_signature": [],
         },
     }
+    method_name = manifest_method or "get_spot_klines"
     try:
         import limen
-        sig = _inspect_mod.signature(limen.HistoricalData.get_spot_klines)
+        method = getattr(limen.HistoricalData, method_name, None)
+        if method is None:
+            return out
+        sig = _inspect_mod.signature(method)
     except Exception:
         return out
     sentinel = _inspect_mod.Parameter.empty
@@ -407,6 +412,8 @@ def create_app(root: Path) -> FastAPI:
     async def inspect_args(experiment_id: str, request: Request):
         _exp_dir(experiment_id)
         body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(400, "request body must be a JSON object")
         code = body.get("code", "") or ""
         sfd_id = body.get("sfd_identifier", "") or ""
         return JSONResponse(_inspect_round_args(code, sfd_id))
