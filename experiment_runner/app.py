@@ -405,11 +405,19 @@ def create_app(root: Path) -> FastAPI:
         if request.method == "HEAD" and path == "/":
             return await call_next(request)
         auth = request.headers.get("authorization", "")
-        if auth.startswith("Basic "):
+        # RFC 7235 says auth scheme names are case-insensitive; split on the
+        # first space and lowercase the scheme so e.g. `bearer <token>` is
+        # accepted just like `Bearer <token>`.
+        scheme, _, credentials = auth.partition(" ")
+        scheme_lc = scheme.lower()
+        if scheme_lc == "basic":
             import base64
+            import binascii
             try:
-                decoded = base64.b64decode(auth[6:]).decode("utf-8", errors="strict")
-            except (ValueError, UnicodeDecodeError):
+                decoded = base64.b64decode(credentials, validate=False).decode(
+                    "utf-8", errors="strict",
+                )
+            except (binascii.Error, ValueError, UnicodeDecodeError):
                 decoded = ""
             user, sep, password = decoded.partition(":")
             if (
@@ -418,8 +426,8 @@ def create_app(root: Path) -> FastAPI:
                 and secrets.compare_digest(password, app_password)
             ):
                 return await call_next(request)
-        elif auth.startswith("Bearer "):
-            if secrets.compare_digest(auth[7:], api_secret):
+        elif scheme_lc == "bearer":
+            if secrets.compare_digest(credentials, api_secret):
                 return await call_next(request)
         return JSONResponse(
             status_code=401,

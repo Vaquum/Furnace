@@ -132,6 +132,20 @@ jobs:
             set -euo pipefail
             cd "$DEPLOY_DIR"
             test -d "$DEPLOY_DATA_ROOT" || { echo "host data root $DEPLOY_DATA_ROOT does not exist"; exit 1; }
+            # Reject any auth-secret value that contains a newline. Multi-line
+            # values would corrupt the line-oriented .env format below
+            # (compose would treat the trailing line as a separate KEY=VALUE
+            # entry, or fail to interpolate at all). Username/password/API
+            # secret must be single-line strings — fail fast if they are not.
+            for var_name in DEPLOY_APP_USERNAME DEPLOY_APP_PASSWORD DEPLOY_API_SECRET; do
+              eval "value=\${$var_name}"
+              case "$value" in
+                *$'\n'*|*$'\r'*)
+                  echo "::error::$var_name contains a newline; refusing to write multiline value to .env"
+                  exit 1
+                  ;;
+              esac
+            done
             # Persist resolved values to .env so subsequent operator-run
             # `docker compose -f /opt/experiment_runner/docker-compose.yml ps`
             # commands (run without these vars exported) interpolate cleanly.
