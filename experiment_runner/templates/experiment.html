@@ -437,7 +437,17 @@ async function start() {
 
 document.getElementById('save-btn').addEventListener('click', save);
 document.getElementById('start-btn').addEventListener('click', start);
-document.getElementById('f-sfd').addEventListener('change', () => refreshInspect());
+
+// Live preview: debounced refreshInspect on every keystroke so the controls
+// unlock as soon as the typed value matches a class in the saved code,
+// without requiring the user to blur the field first.
+let sfdInspectTimer = null;
+document.getElementById('f-sfd').addEventListener('input', () => {
+  if (sfdInspectTimer) clearTimeout(sfdInspectTimer);
+  sfdInspectTimer = setTimeout(() => refreshInspect(), 200);
+});
+// Persist on blur via the form's change bubble; the input listener above
+// runs in parallel for the live preview.
 document.getElementById('args-form').addEventListener('change', () => save());
 
 // Initial inspect on page load to populate the controls.
