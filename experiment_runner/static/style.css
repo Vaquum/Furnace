@@ -276,7 +276,7 @@ textarea.atom-code-block:focus {
      accent set (Design-System.md §Channel→Face/colour). */
 }
 .code-editor-highlight .tok-comment { color: var(--ink-mute); }
-.code-editor-highlight .tok-string  { color: var(--positive); }
+.code-editor-highlight .tok-string  { color: var(--ink-soft); }
 .code-editor-highlight .tok-number  { color: var(--negative); }
 .code-editor-highlight .tok-keyword { color: var(--accent); }
 
