@@ -540,19 +540,28 @@ def create_app(root: Path) -> FastAPI:
             {"experiment_id": experiment_id, "rounds": rounds},
         )
 
-    @app.post("/experiments/{experiment_id}/working")
-    async def save_working(experiment_id: str, request: Request):
+    @app.get("/experiments/{experiment_id}/code", response_class=HTMLResponse)
+    def code_page(request: Request, experiment_id: str):
+        exp_dir = _exp_dir(experiment_id)
+        code, _args, version = _read_working(exp_dir)
+        return templates.TemplateResponse(
+            request,
+            "code.html",
+            {
+                "experiment_id": experiment_id,
+                "code": code,
+                "version": version,
+            },
+        )
+
+    @app.put("/experiments/{experiment_id}/code")
+    async def save_code(experiment_id: str, request: Request):
         exp_dir = _exp_dir(experiment_id)
         body = await request.json()
         if_match = body.get("if_match")
         code = body.get("code", "")
-        args = body.get("args", {})
-        if not isinstance(args, dict):
-            raise HTTPException(400, "args must be an object")
-        # experiment_name is always derived from the experiment id; ignore client value
-        args.setdefault("uel_run", {})
-        if isinstance(args["uel_run"], dict):
-            args["uel_run"]["experiment_name"] = experiment_id
+        if not isinstance(code, str):
+            raise HTTPException(400, "code must be a string")
         with sm.exp_lock(experiment_id):
             with version_flock(exp_dir):
                 current = read_version(exp_dir)
@@ -561,9 +570,44 @@ def create_app(root: Path) -> FastAPI:
                 tmp_code = exp_dir / "code.py.tmp"
                 tmp_code.write_text(code)
                 os.replace(tmp_code, exp_dir / "code.py")
-                tmp_args = exp_dir / "args.json.tmp"
-                tmp_args.write_text(json.dumps(args, indent=2))
-                os.replace(tmp_args, exp_dir / "args.json")
+                new_version = current + 1
+                write_version_atomic(exp_dir, new_version)
+        return {"version": new_version}
+
+    @app.post("/experiments/{experiment_id}/working")
+    async def save_working(experiment_id: str, request: Request):
+        exp_dir = _exp_dir(experiment_id)
+        body = await request.json()
+        if_match = body.get("if_match")
+        # Both `code` and `args` are independently optional. Code editing now
+        # has its own page (PUT /experiments/{id}/code); the experiment page
+        # only saves args. Older callers that send both still work.
+        has_code = "code" in body
+        has_args = "args" in body
+        code = body.get("code", "")
+        args = body.get("args", {})
+        if has_code and not isinstance(code, str):
+            raise HTTPException(400, "code must be a string")
+        if has_args and not isinstance(args, dict):
+            raise HTTPException(400, "args must be an object")
+        if has_args:
+            # experiment_name is always derived from the experiment id; ignore client value
+            args.setdefault("uel_run", {})
+            if isinstance(args["uel_run"], dict):
+                args["uel_run"]["experiment_name"] = experiment_id
+        with sm.exp_lock(experiment_id):
+            with version_flock(exp_dir):
+                current = read_version(exp_dir)
+                if if_match != current:
+                    return JSONResponse({"current_version": current}, status_code=409)
+                if has_code:
+                    tmp_code = exp_dir / "code.py.tmp"
+                    tmp_code.write_text(code)
+                    os.replace(tmp_code, exp_dir / "code.py")
+                if has_args:
+                    tmp_args = exp_dir / "args.json.tmp"
+                    tmp_args.write_text(json.dumps(args, indent=2))
+                    os.replace(tmp_args, exp_dir / "args.json")
                 new_version = current + 1
                 write_version_atomic(exp_dir, new_version)
         return {"version": new_version}

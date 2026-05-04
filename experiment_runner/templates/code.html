@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}{{ experiment_id }} · code · experiment_runner{% endblock %}
+{% block meta %}code editor{% endblock %}
+{% block content %}
+
+<div class="bar">
+  <div>
+    <p class="atom-micro" style="margin: 0 0 var(--gap-s) 0;">{{ experiment_id }} / CODE</p>
+    <h1 class="atom-title">Code</h1>
+  </div>
+  <a class="atom-micro" href="/experiments/{{ experiment_id }}">← experiment</a>
+</div>
+
+<div class="atom-code-editor"
+     data-experiment-id="{{ experiment_id }}"
+     data-base-version="{{ version }}">
+  <div class="code-editor-gutter" id="code-gutter" aria-hidden="true"></div>
+  <div class="code-editor-buffer-wrap">
+    <div class="code-editor-active-line" id="code-active-line" aria-hidden="true"></div>
+    <textarea class="code-editor-buffer"
+              id="code-buffer"
+              spellcheck="false"
+              autocapitalize="off"
+              autocomplete="off"
+              autocorrect="off"
+              wrap="off">{{ code }}</textarea>
+  </div>
+</div>
+
+<div class="button-row">
+  <button id="code-save-btn" type="button" class="primary">Save</button>
+  <span id="code-save-dirty" class="atom-micro" style="margin-left: var(--gap-m); align-self: center; color: var(--accent-warm); display: none;">· UNSAVED</span>
+  <span id="code-save-status" class="atom-micro" style="margin-left: var(--gap-m); align-self: center; color: var(--ink-mute);"></span>
+</div>
+
+<script src="/static/code_editor.js?v={{ asset_version }}"></script>
+
+{% endblock %}

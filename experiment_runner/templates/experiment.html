@@ -15,7 +15,7 @@
 
   <div class="section">
     <h2 class="atom-heading"><span class="numeral">01</span><span>Code</span></h2>
-    <textarea id="code-editor" class="atom-code-block compact" rows="5" spellcheck="false">{{ code }}</textarea>
+    <p class="atom-paragraph"><a class="atom-micro" href="/experiments/{{ experiment_id }}/code">Open code editor →</a></p>
   </div>
 
   <div class="section section-narrow">
@@ -86,6 +86,11 @@
 
 <script>
 const EXP_ID = {{ experiment_id | tojson }};
+// Snapshot of the saved code, used only for inspect() to extract the SFD
+// manifest. Code editing happens on /experiments/{id}/code; this page never
+// mutates SAVED_CODE. If the editor saved newer code while this page was
+// open, the next page load picks it up.
+const SAVED_CODE = {{ code | tojson }};
 let SAVED_OVERRIDES = {{ args.data_source.params | tojson }};
 let SAVED_METHOD = {{ args.data_source.method | tojson }};
 let LAST_SCHEMA = null;
@@ -139,9 +144,7 @@ function gatherDataSourceParams() {
 
 function gatherWorking() {
   const form = document.getElementById('args-form');
-  const code = document.getElementById('code-editor').value;
   return {
-    code,
     args: {
       sfd_identifier: form.elements['sfd_identifier'].value.trim(),
       data_source: {
@@ -268,7 +271,7 @@ async function refreshInspect() {
   // (e.g. page-load + sfd_identifier change) could render in completion
   // order rather than request order, leaving the form on a stale schema.
   const myGen = ++inspectGen;
-  const code = document.getElementById('code-editor').value;
+  const code = SAVED_CODE;
   const sfdId = document.getElementById('f-sfd').value.trim();
   const p = (async () => {
     let r;
@@ -434,26 +437,8 @@ async function start() {
 
 document.getElementById('save-btn').addEventListener('click', save);
 document.getElementById('start-btn').addEventListener('click', start);
-const editor = document.getElementById('code-editor');
-editor.addEventListener('blur', async () => {
-  // Inspect first, then save: the new code may have changed the SFD's
-  // manifest, which changes the data-source schema. Saving first would
-  // persist the old control set into args.json (and into SAVED_OVERRIDES),
-  // masking the manifest change until the user manually saved again.
-  await refreshInspect();
-  await save();
-});
 document.getElementById('f-sfd').addEventListener('change', () => refreshInspect());
 document.getElementById('args-form').addEventListener('change', () => save());
-
-// Wheel routing: while the editor is not focused, page-scroll wins. Only
-// when the user has clicked into the editor does the textarea scroll.
-editor.addEventListener('wheel', (e) => {
-  if (document.activeElement !== editor) {
-    e.preventDefault();
-    window.scrollBy(0, e.deltaY);
-  }
-}, { passive: false });
 
 // Initial inspect on page load to populate the controls.
 refreshInspect();
