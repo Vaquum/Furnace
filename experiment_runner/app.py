@@ -642,22 +642,6 @@ def create_app(root: Path) -> FastAPI:
         exp_dir = _exp_dir(experiment_id)
         body = await request.json()
         if_match = body.get("if_match")
-        code = body.get("code", "")
-        args = body.get("args", {})
-        if not code.strip():
-            raise HTTPException(400, "code editor is empty — paste your SFD before starting a round")
-        if not isinstance(args, dict):
-            raise HTTPException(400, "args must be an object")
-        args.setdefault("uel_run", {})
-        if isinstance(args["uel_run"], dict):
-            args["uel_run"]["experiment_name"] = experiment_id
-        _validate_args(args)
-        sfd_id = args["sfd_identifier"]
-        if sfd_id not in code:
-            raise HTTPException(
-                400,
-                f"sfd_identifier '{sfd_id}' does not appear in the pasted code",
-            )
 
         with sm.exp_lock(experiment_id):
             with version_flock(exp_dir):
@@ -668,14 +652,44 @@ def create_app(root: Path) -> FastAPI:
                     return JSONResponse(
                         {"error": "another round is active"}, status_code=409,
                     )
-                tmp_code = exp_dir / "code.py.tmp"
-                tmp_code.write_text(code)
-                os.replace(tmp_code, exp_dir / "code.py")
-                tmp_args = exp_dir / "args.json.tmp"
-                tmp_args.write_text(json.dumps(args, indent=2))
-                os.replace(tmp_args, exp_dir / "args.json")
-                new_version = current_version + 1
-                write_version_atomic(exp_dir, new_version)
+                # Source of truth: code is saved via PUT /code, args via
+                # /working. We snapshot both under the same flock that gates
+                # the if_match check so the round is consistent with what
+                # the user saw when they clicked Start.
+                code_path = exp_dir / "code.py"
+                args_path = exp_dir / "args.json"
+                code = code_path.read_text() if code_path.exists() else ""
+                args = json.loads(args_path.read_text()) if args_path.exists() else {}
+                if not code.strip():
+                    raise HTTPException(
+                        400,
+                        "code is empty — open the code editor and paste your SFD before starting a round",
+                    )
+                try:
+                    _ast.parse(code)
+                except SyntaxError as exc:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "kind": "syntax_error",
+                            "line": exc.lineno if exc.lineno is not None else 0,
+                            "col": exc.offset if exc.offset is not None else 0,
+                            "msg": exc.msg,
+                        },
+                    ) from exc
+                if not isinstance(args, dict):
+                    raise HTTPException(400, "args must be an object")
+                args.setdefault("uel_run", {})
+                if isinstance(args["uel_run"], dict):
+                    args["uel_run"]["experiment_name"] = experiment_id
+                _validate_args(args)
+                sfd_id = args["sfd_identifier"]
+                if sfd_id not in code:
+                    raise HTTPException(
+                        400,
+                        f"sfd_identifier '{sfd_id}' does not appear in the saved code",
+                    )
+                new_version = current_version
 
             rounds_dir = exp_dir / "rounds"
             round_id = _allocate_round_id(rounds_dir)

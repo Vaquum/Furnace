@@ -429,20 +429,20 @@ async function start() {
     flashStatus('Resolve the conflict above before starting a round.', true);
     return;
   }
-  // The textarea blur handler kicks off save() AND refreshInspect() in
-  // parallel; if the user clicks Start immediately after, we must wait for
-  // both — otherwise gatherWorking() would serialize the previous control
-  // set even though the editor's manifest/signature has already changed.
+  // Settle any in-flight inspect (manifest may have just changed) and any
+  // pending args save, so the round runs against the user's most-recent
+  // committed state.
   if (inspectInflight) {
     try { await inspectInflight; } catch (_) {}
   }
   await save();
   await waitForIdleSave();
   if (saveBlocked) return;
-  let body;
-  try { body = gatherWorking(); } catch (_) { return; }
+  // Code and args live on disk (PUT /code, POST /working). /rounds reads
+  // them under the same flock that gates if_match, so the round is
+  // consistent with the version we just saw.
   const wrap = document.getElementById('editor-wrap');
-  body.if_match = parseInt(wrap.dataset.baseVersion, 10);
+  const body = { if_match: parseInt(wrap.dataset.baseVersion, 10) };
   flashStatus('Starting…', false);
   const r = await postJson(`/experiments/${EXP_ID}/rounds`, body);
   if (r.status === 200) {
