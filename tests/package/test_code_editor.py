@@ -50,3 +50,16 @@ def test_code_put_route_persists_atomically() -> None:
     assert 'write_version_atomic' in body
     # 409 conflict path on stale if_match.
     assert 'status_code=409' in body
+
+
+def test_code_put_rejects_syntax_error() -> None:
+    """The PUT handler validates Python via ast.parse and returns a 400 with
+    a structured detail (kind/line/col/msg) if the code does not parse, before
+    acquiring the lock or writing anything. Saving broken code would otherwise
+    leave the experiment in a confusing state where /inspect returns empty."""
+    text = (PKG_DIR / 'app.py').read_text()
+    put_idx = text.index('@app.put("/experiments/{experiment_id}/code"')
+    body = text[put_idx:put_idx + 5000]
+    assert '_ast.parse(code)' in body
+    assert 'except SyntaxError' in body
+    assert '"kind": "syntax_error"' in body

@@ -94,13 +94,14 @@ def _extract_manifest_data_source(code: str, sfd_identifier: str) -> dict | None
     {"method": <str|None>, "params": <dict|None>}. Handles both
     `return Manifest().set_data_source(...)` and the assignment form
     `manifest = Manifest().set_data_source(...)`. Returns None when no
-    set_data_source(...) call is found."""
+    set_data_source(...) call is found.
+
+    SyntaxError propagates to the caller — the inspect endpoint translates
+    it into a 400 with line/col info so a broken paste in the code editor
+    surfaces as a real error instead of an empty data-source schema."""
     if not code or not sfd_identifier:
         return None
-    try:
-        tree = _ast.parse(code)
-    except SyntaxError:
-        return None
+    tree = _ast.parse(code)
     for node in tree.body:
         if not (isinstance(node, _ast.ClassDef) and node.name == sfd_identifier):
             continue
@@ -155,7 +156,15 @@ def _inspect_round_args(code: str, sfd_identifier: str) -> dict:
             "library_signature": [],
         },
     }
-    extracted = _extract_manifest_data_source(code, sfd_identifier)
+    try:
+        extracted = _extract_manifest_data_source(code, sfd_identifier)
+    except SyntaxError as exc:
+        line = exc.lineno if exc.lineno is not None else 0
+        col = exc.offset if exc.offset is not None else 0
+        raise HTTPException(
+            400,
+            f"SyntaxError in code at line {line}, col {col}: {exc.msg}",
+        ) from exc
     if extracted is None:
         return empty
     manifest_method = extracted.get("method")
@@ -562,6 +571,22 @@ def create_app(root: Path) -> FastAPI:
         code = body.get("code", "")
         if not isinstance(code, str):
             raise HTTPException(400, "code must be a string")
+        # Validate Python syntax before writing. Saving broken code creates
+        # a confusing downstream state where the inspect endpoint returns an
+        # empty schema and run_round crashes; we'd rather block the save and
+        # tell the user exactly where the parse failed.
+        try:
+            _ast.parse(code)
+        except SyntaxError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "kind": "syntax_error",
+                    "line": exc.lineno if exc.lineno is not None else 0,
+                    "col": exc.offset if exc.offset is not None else 0,
+                    "msg": exc.msg,
+                },
+            ) from exc
         with sm.exp_lock(experiment_id):
             with version_flock(exp_dir):
                 current = read_version(exp_dir)

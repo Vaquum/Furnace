@@ -287,12 +287,42 @@ async function refreshInspect() {
     }
     if (!r.ok) {
       let detail = '';
-      try { detail = await r.text(); } catch (_) {}
+      try {
+        const body = await r.json();
+        detail = body.detail || JSON.stringify(body);
+      } catch (_) {
+        try { detail = await r.text(); } catch (_) {}
+      }
       console.error('inspect failed:', r.status, detail);
+      if (myGen !== inspectGen) return;
+      // Surface the error in the empty-state slot so the user sees it
+      // instead of a blank data-source pane.
+      const container = document.getElementById('data-source-controls');
+      const emptyMsg = document.getElementById('data-source-empty');
+      container.innerHTML = '';
+      emptyMsg.textContent = detail || `inspect failed (${r.status})`;
+      emptyMsg.style.color = 'var(--negative)';
+      emptyMsg.style.display = '';
       return;
     }
     const schema = await r.json();
     if (myGen !== inspectGen) return;  // a newer inspect superseded us
+    // Reset any previous error styling on the empty-state slot.
+    const emptyMsg = document.getElementById('data-source-empty');
+    emptyMsg.style.color = '';
+    emptyMsg.textContent = 'No data-source controls — set ';
+    const codeEl = document.createElement('code');
+    codeEl.textContent = 'sfd_identifier';
+    emptyMsg.appendChild(codeEl);
+    emptyMsg.appendChild(document.createTextNode(' to a class in the editor whose '));
+    const codeEl2 = document.createElement('code');
+    codeEl2.textContent = 'manifest()';
+    emptyMsg.appendChild(codeEl2);
+    emptyMsg.appendChild(document.createTextNode(' calls '));
+    const codeEl3 = document.createElement('code');
+    codeEl3.textContent = 'set_data_source(...)';
+    emptyMsg.appendChild(codeEl3);
+    emptyMsg.appendChild(document.createTextNode(', or check the server log if the inspect endpoint is failing.'));
     renderDataSourceControls(schema.data_source || {});
   })();
   inspectInflight = p;

@@ -14,14 +14,35 @@
   let version = parseInt(editor.dataset.baseVersion, 10);
   let dirty = false;
   let saving = false;
+  let errorLine = null;
 
   // ---- Gutter ---------------------------------------------------------------
 
   function renderGutter() {
     const lineCount = (buffer.value.match(/\n/g) || []).length + 1;
-    const lines = new Array(lineCount);
-    for (let i = 0; i < lineCount; i++) lines[i] = i + 1;
-    gutter.textContent = lines.join('\n');
+    const parts = new Array(lineCount);
+    for (let i = 0; i < lineCount; i++) {
+      const n = i + 1;
+      parts[i] = (n === errorLine)
+        ? '<span class="gutter-error">' + n + '</span>'
+        : String(n);
+    }
+    gutter.innerHTML = parts.join('\n');
+  }
+  function setErrorLine(line) {
+    errorLine = line;
+    renderGutter();
+  }
+  function clearErrorLine() {
+    if (errorLine !== null) {
+      errorLine = null;
+      renderGutter();
+    }
+  }
+  function scrollToLine(line) {
+    const h = lineHeightPx();
+    const target = paddingTopPx() + Math.max(0, line - 1) * h - buffer.clientHeight / 3;
+    buffer.scrollTop = Math.max(0, target);
   }
 
   // ---- Syntax highlighting (Design-System closed accent palette) ------------
@@ -137,6 +158,7 @@
   // ---- Edit / caret events --------------------------------------------------
 
   buffer.addEventListener('input', () => {
+    clearErrorLine();
     renderGutter();
     renderHighlight();
     markDirty();
@@ -262,6 +284,7 @@
         const data = await r.json();
         version = data.version;
         clearDirty();
+        clearErrorLine();
         statusEl.textContent = `Saved · v${version}`;
         statusEl.style.color = 'var(--ink-mute)';
       } else if (r.status === 409) {
@@ -269,6 +292,20 @@
         statusEl.textContent =
           `Conflict — server is at v${data.current_version}; reload to merge.`;
         statusEl.style.color = 'var(--negative)';
+      } else if (r.status === 400) {
+        let body = null;
+        try { body = await r.json(); } catch (_) { /* fall through */ }
+        const detail = body && body.detail;
+        if (detail && detail.kind === 'syntax_error') {
+          statusEl.textContent =
+            `SyntaxError on line ${detail.line}, col ${detail.col}: ${detail.msg}`;
+          statusEl.style.color = 'var(--negative)';
+          setErrorLine(detail.line);
+          scrollToLine(detail.line);
+        } else {
+          statusEl.textContent = `400 ${(detail && JSON.stringify(detail)) || ''}`;
+          statusEl.style.color = 'var(--negative)';
+        }
       } else {
         const text = await r.text();
         statusEl.textContent = `${r.status} ${text.slice(0, 200)}`;

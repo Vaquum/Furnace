@@ -229,6 +229,10 @@ textarea.atom-code-block:focus {
   overflow: hidden;
   min-width: 4ch;
 }
+.code-editor-gutter .gutter-error {
+  color: var(--negative);
+  font-weight: 600;
+}
 .code-editor-buffer-wrap {
   flex: 1 1 auto;
   position: relative;
