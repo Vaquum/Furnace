@@ -274,12 +274,19 @@
     saveBtn.disabled = true;
     statusEl.textContent = 'Saving…';
     statusEl.style.color = 'var(--ink-mute)';
+    // Snapshot the buffer at request-time. If the user keeps typing during
+    // the round-trip, the post-200 clearDirty() must NOT fire — otherwise
+    // those keystrokes lose their dirty marker, beforeunload stops warning,
+    // and the tail of the edit silently drops on tab close. We compare
+    // buffer.value back to the snapshot when the response lands; only a
+    // bit-identical buffer is safe to clear.
+    const snapshot = buffer.value;
     let r;
     try {
       r = await fetch(`/experiments/${encodeURIComponent(expId)}/code`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: buffer.value, if_match: version }),
+        body: JSON.stringify({ code: snapshot, if_match: version }),
       });
     } catch (e) {
       // Network unreachable / aborted / DNS failure — surface and bail out.
@@ -293,9 +300,16 @@
       if (r.status === 200) {
         const data = await r.json();
         version = data.version;
-        clearDirty();
-        clearErrorLine();
-        statusEl.textContent = `Saved · v${version}`;
+        if (buffer.value === snapshot) {
+          clearDirty();
+          clearErrorLine();
+          statusEl.textContent = `Saved · v${version}`;
+        } else {
+          // The buffer drifted under us. The snapshot version is now on
+          // disk; the tail keystrokes are still in the textarea. Keep
+          // `dirty` true so beforeunload + the next save catch them.
+          statusEl.textContent = `Saved · v${version} (unsaved tail)`;
+        }
         statusEl.style.color = 'var(--ink-mute)';
       } else if (r.status === 409) {
         const data = await r.json();
