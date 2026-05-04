@@ -6,6 +6,7 @@
   const gutter = document.getElementById('code-gutter');
   const highlight = document.getElementById('code-highlight');
   const activeLine = document.getElementById('code-active-line');
+  const copyBtn = document.getElementById('code-copy-btn');
   const saveBtn = document.getElementById('code-save-btn');
   const dirtyIndicator = document.getElementById('code-save-dirty');
   const statusEl = document.getElementById('code-save-status');
@@ -279,6 +280,23 @@
     }
   }
   saveBtn.addEventListener('click', save);
+
+  // ---- Copy-all -------------------------------------------------------------
+
+  const COPY_GLYPH = '⧉';
+  const COPIED_GLYPH = '✓';
+  let copyResetTimer = null;
+
+  copyBtn.addEventListener('click', async () => {
+    await navigator.clipboard.writeText(buffer.value);
+    copyBtn.textContent = COPIED_GLYPH;
+    copyBtn.classList.add('copied');
+    if (copyResetTimer) clearTimeout(copyResetTimer);
+    copyResetTimer = setTimeout(() => {
+      copyBtn.textContent = COPY_GLYPH;
+      copyBtn.classList.remove('copied');
+    }, 1200);
+  });
 
   // ---- Init -----------------------------------------------------------------
 
