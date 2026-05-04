@@ -567,8 +567,12 @@ def create_app(root: Path) -> FastAPI:
     async def save_code(experiment_id: str, request: Request):
         exp_dir = _exp_dir(experiment_id)
         body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(400, "request body must be a JSON object")
+        if "code" not in body:
+            raise HTTPException(400, "request must include 'code'")
         if_match = body.get("if_match")
-        code = body.get("code", "")
+        code = body["code"]
         if not isinstance(code, str):
             raise HTTPException(400, "code must be a string")
         # Validate Python syntax before writing. Saving broken code creates
@@ -603,12 +607,18 @@ def create_app(root: Path) -> FastAPI:
     async def save_working(experiment_id: str, request: Request):
         exp_dir = _exp_dir(experiment_id)
         body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(400, "request body must be a JSON object")
         if_match = body.get("if_match")
         # Both `code` and `args` are independently optional. Code editing now
         # has its own page (PUT /experiments/{id}/code); the experiment page
-        # only saves args. Older callers that send both still work.
+        # only saves args. Older callers that send both still work. The
+        # request must carry at least one of them — otherwise the version
+        # would bump with no actual write, creating spurious 409s elsewhere.
         has_code = "code" in body
         has_args = "args" in body
+        if not (has_code or has_args):
+            raise HTTPException(400, "request must include 'code', 'args', or both")
         code = body.get("code", "")
         args = body.get("args", {})
         if has_code and not isinstance(code, str):
@@ -641,6 +651,8 @@ def create_app(root: Path) -> FastAPI:
     async def start_round(experiment_id: str, request: Request):
         exp_dir = _exp_dir(experiment_id)
         body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(400, "request body must be a JSON object")
         if_match = body.get("if_match")
 
         with sm.exp_lock(experiment_id):

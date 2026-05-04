@@ -274,12 +274,22 @@
     saveBtn.disabled = true;
     statusEl.textContent = 'Saving…';
     statusEl.style.color = 'var(--ink-mute)';
+    let r;
     try {
-      const r = await fetch(`/experiments/${encodeURIComponent(expId)}/code`, {
+      r = await fetch(`/experiments/${encodeURIComponent(expId)}/code`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ code: buffer.value, if_match: version }),
       });
+    } catch (e) {
+      // Network unreachable / aborted / DNS failure — surface and bail out.
+      statusEl.textContent = `Save failed: ${e.message || e}`;
+      statusEl.style.color = 'var(--negative)';
+      saving = false;
+      saveBtn.disabled = false;
+      return;
+    }
+    try {
       if (r.status === 200) {
         const data = await r.json();
         version = data.version;
@@ -294,7 +304,7 @@
         statusEl.style.color = 'var(--negative)';
       } else if (r.status === 400) {
         let body = null;
-        try { body = await r.json(); } catch (_) { /* fall through */ }
+        try { body = await r.json(); } catch (_) { /* response was not JSON */ }
         const detail = body && body.detail;
         if (detail && detail.kind === 'syntax_error') {
           statusEl.textContent =
@@ -325,14 +335,30 @@
   let copyResetTimer = null;
 
   copyBtn.addEventListener('click', async () => {
-    await navigator.clipboard.writeText(buffer.value);
-    copyBtn.textContent = COPIED_GLYPH;
-    copyBtn.classList.add('copied');
     if (copyResetTimer) clearTimeout(copyResetTimer);
-    copyResetTimer = setTimeout(() => {
-      copyBtn.textContent = COPY_GLYPH;
-      copyBtn.classList.remove('copied');
-    }, 1200);
+    try {
+      await navigator.clipboard.writeText(buffer.value);
+      copyBtn.textContent = COPIED_GLYPH;
+      copyBtn.classList.add('copied');
+      copyBtn.title = 'Copied';
+      copyResetTimer = setTimeout(() => {
+        copyBtn.textContent = COPY_GLYPH;
+        copyBtn.classList.remove('copied');
+        copyBtn.title = 'Copy all';
+      }, 1200);
+    } catch (e) {
+      // navigator.clipboard requires a secure context — http origins
+      // outside localhost can deny the call. Surface the failure rather
+      // than silently flashing ✓ as if the copy succeeded.
+      copyBtn.textContent = '×';
+      copyBtn.title = `Copy failed: ${e && e.message || e}`;
+      copyBtn.style.color = 'var(--negative)';
+      copyResetTimer = setTimeout(() => {
+        copyBtn.textContent = COPY_GLYPH;
+        copyBtn.style.color = '';
+        copyBtn.title = 'Copy all';
+      }, 1500);
+    }
   });
 
   // ---- Init -----------------------------------------------------------------
