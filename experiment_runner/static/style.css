@@ -234,28 +234,52 @@ textarea.atom-code-block:focus {
   position: relative;
   overflow: hidden;
 }
-.code-editor-buffer {
+/* Highlight layer and textarea share an identical type-grid so visible
+   characters (rendered by the <pre>) align with caret position (rendered
+   by the textarea). Diverging any of font/size/weight/line-height/padding
+   or whitespace handling causes mis-registration on long lines. */
+.code-editor-buffer,
+.code-editor-highlight {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
-  background: transparent;
-  border: 0;
-  outline: none;
-  padding: var(--gap-s) var(--gap-m);
   margin: 0;
-  resize: none;
+  padding: var(--gap-s) var(--gap-m);
   font-family: var(--font-mono);
   font-size: var(--t-code);
   font-weight: 400;
   line-height: 1.65;
   font-variant-numeric: tabular-nums slashed-zero;
-  color: var(--ink);
+  letter-spacing: 0;
   white-space: pre;
-  overflow: auto;
   tab-size: 4;
   -moz-tab-size: 4;
+  border: 0;
+  background: transparent;
+  overflow: auto;
+}
+.code-editor-buffer {
+  outline: none;
+  resize: none;
+  /* Text rendered by <pre>; textarea owns caret and selection only. */
+  color: transparent;
   caret-color: var(--accent);
 }
 .code-editor-buffer:focus { outline: none; }
+.code-editor-buffer::selection { background: rgba(220, 101, 166, 0.18); }
+.code-editor-buffer::-moz-selection { background: rgba(220, 101, 166, 0.18); }
+.code-editor-highlight {
+  pointer-events: none;
+  color: var(--ink);
+  /* The pre is the visible text. Token colours below come from the closed
+     accent set (Design-System.md §Channel→Face/colour). */
+}
+.code-editor-highlight .tok-comment { color: var(--ink-mute); }
+.code-editor-highlight .tok-string  { color: var(--positive); }
+.code-editor-highlight .tok-number  { color: var(--negative); }
+.code-editor-highlight .tok-keyword { color: var(--accent); }
+
 .code-editor-active-line {
   position: absolute;
   left: 0;
@@ -263,6 +287,7 @@ textarea.atom-code-block:focus {
   border-left: 1px solid var(--accent);
   pointer-events: none;
   display: none;
+  z-index: 1;
 }
 
 /* ---- Layout primitives ---- */

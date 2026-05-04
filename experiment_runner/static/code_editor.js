@@ -4,6 +4,7 @@
   const expId = editor.dataset.experimentId;
   const buffer = document.getElementById('code-buffer');
   const gutter = document.getElementById('code-gutter');
+  const highlight = document.getElementById('code-highlight');
   const activeLine = document.getElementById('code-active-line');
   const saveBtn = document.getElementById('code-save-btn');
   const dirtyIndicator = document.getElementById('code-save-dirty');
@@ -20,6 +21,82 @@
     const lines = new Array(lineCount);
     for (let i = 0; i < lineCount; i++) lines[i] = i + 1;
     gutter.textContent = lines.join('\n');
+  }
+
+  // ---- Syntax highlighting (Design-System closed accent palette) ------------
+  //
+  // Four token categories, each painted in a colour from the closed palette:
+  //   comments → ink-mute, strings → positive (yellow-green),
+  //   numbers + True/False/None → negative (coral),
+  //   keywords → accent (pink). Everything else stays default ink.
+  // The textarea renders its text as `color: transparent`, so what the user
+  // *sees* is the <pre> behind it; the textarea owns caret + selection only.
+
+  const PY_KEYWORDS = new Set([
+    'def', 'class', 'if', 'elif', 'else', 'for', 'while', 'return',
+    'import', 'from', 'as', 'with', 'try', 'except', 'finally', 'raise',
+    'pass', 'break', 'continue', 'yield', 'lambda', 'async', 'await',
+    'global', 'nonlocal', 'assert', 'del', 'in', 'is', 'not', 'and', 'or',
+    'self', 'cls',
+  ]);
+  const PY_CONSTANTS = new Set(['True', 'False', 'None']);
+
+  // Master regex with named alternatives. Order matters:
+  //   triple-quoted strings before single/double, comments before identifiers.
+  const PY_TOKENIZER = new RegExp(
+    [
+      '(?<comment>#[^\\n]*)',
+      '(?<string>"""[\\s\\S]*?"""|\'\'\'[\\s\\S]*?\'\'\'' +
+        '|"(?:[^"\\\\\\n]|\\\\.)*"|\'(?:[^\'\\\\\\n]|\\\\.)*\')',
+      '(?<number>\\b\\d[\\d_]*(?:\\.\\d[\\d_]*)?(?:[eE][+-]?\\d+)?[jJ]?\\b)',
+      '(?<ident>\\b[A-Za-z_][A-Za-z0-9_]*\\b)',
+    ].join('|'),
+    'g',
+  );
+
+  function escapeHtml(s) {
+    return s
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
+  function highlightPython(text) {
+    let out = '';
+    let lastIndex = 0;
+    PY_TOKENIZER.lastIndex = 0;
+    let m;
+    while ((m = PY_TOKENIZER.exec(text)) !== null) {
+      const offset = m.index;
+      if (offset > lastIndex) out += escapeHtml(text.slice(lastIndex, offset));
+      const g = m.groups;
+      if (g.comment) {
+        out += '<span class="tok-comment">' + escapeHtml(g.comment) + '</span>';
+      } else if (g.string) {
+        out += '<span class="tok-string">' + escapeHtml(g.string) + '</span>';
+      } else if (g.number) {
+        out += '<span class="tok-number">' + escapeHtml(g.number) + '</span>';
+      } else if (g.ident) {
+        const w = g.ident;
+        if (PY_KEYWORDS.has(w)) {
+          out += '<span class="tok-keyword">' + escapeHtml(w) + '</span>';
+        } else if (PY_CONSTANTS.has(w)) {
+          out += '<span class="tok-number">' + escapeHtml(w) + '</span>';
+        } else {
+          out += escapeHtml(w);
+        }
+      }
+      lastIndex = offset + m[0].length;
+    }
+    if (lastIndex < text.length) out += escapeHtml(text.slice(lastIndex));
+    // The textarea always renders one extra blank line after a trailing newline;
+    // mirror that in the <pre> so the layers stay aligned at end-of-buffer.
+    if (out.endsWith('\n') || out.length === 0) out += ' ';
+    return out;
+  }
+
+  function renderHighlight() {
+    highlight.innerHTML = highlightPython(buffer.value);
   }
 
   // ---- Active-line marker ---------------------------------------------------
@@ -51,6 +128,8 @@
 
   buffer.addEventListener('scroll', () => {
     gutter.scrollTop = buffer.scrollTop;
+    highlight.scrollTop = buffer.scrollTop;
+    highlight.scrollLeft = buffer.scrollLeft;
     updateActiveLine();
   });
 
@@ -58,6 +137,7 @@
 
   buffer.addEventListener('input', () => {
     renderGutter();
+    renderHighlight();
     markDirty();
     updateActiveLine();
   });
@@ -121,6 +201,7 @@
     }
     markDirty();
     renderGutter();
+    renderHighlight();
     updateActiveLine();
   }
 
@@ -202,6 +283,7 @@
   // ---- Init -----------------------------------------------------------------
 
   renderGutter();
+  renderHighlight();
   // Active-line is hidden until the user clicks into the buffer; that's
   // intentional — DS canon hairline marker only when the surface is "live".
 })();
