@@ -279,10 +279,14 @@ textarea.atom-code-block:focus {
   /* The pre is the visible text. Token colours below come from the closed
      accent set (Design-System.md §Channel→Face/colour). */
 }
-.code-editor-highlight .tok-comment { color: var(--ink-mute); }
-.code-editor-highlight .tok-string  { color: var(--ink-soft); }
-.code-editor-highlight .tok-number  { color: var(--negative); }
-.code-editor-highlight .tok-keyword { color: var(--accent); }
+/* Global token colours from the closed palette — applied wherever the
+   shared PythonHighlight renders tokens (code editor, diff view, frozen-
+   code snapshot). Kept un-scoped so any future read-only Python panel
+   gets the same paint without bespoke selectors. */
+.tok-comment { color: var(--ink-mute); }
+.tok-string  { color: var(--ink-soft); }
+.tok-number  { color: var(--negative); }
+.tok-keyword { color: var(--accent); }
 
 .code-editor-active-line {
   position: absolute;
