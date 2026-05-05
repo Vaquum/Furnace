@@ -24,14 +24,14 @@ def test_code_editor_js_exists() -> None:
 
 
 def test_experiment_page_no_inline_code_textarea() -> None:
-    text = (PKG_DIR / 'templates' / 'experiment.html').read_text()
+    text = (PKG_DIR / 'templates' / 'experiment.html').read_text(encoding='utf-8')
     assert 'id="code-editor"' not in text
     assert 'rows="5"' not in text
     assert '/experiments/{{ experiment_id }}/code' in text
 
 
 def test_code_get_route_renders() -> None:
-    text = (PKG_DIR / 'app.py').read_text()
+    text = (PKG_DIR / 'app.py').read_text(encoding='utf-8')
     pattern = r'@app\.get\("/experiments/\{experiment_id\}/code"'
     assert re.search(pattern, text) is not None
     # The handler renders the new template.
@@ -39,7 +39,7 @@ def test_code_get_route_renders() -> None:
 
 
 def test_code_put_route_persists_atomically() -> None:
-    text = (PKG_DIR / 'app.py').read_text()
+    text = (PKG_DIR / 'app.py').read_text(encoding='utf-8')
     pattern = r'@app\.put\("/experiments/\{experiment_id\}/code"'
     assert re.search(pattern, text) is not None
     # The handler writes via temp + os.replace (atomic) and version-bumps.
@@ -58,7 +58,7 @@ def test_code_put_does_not_block_invalid_syntax() -> None:
     or in a side scratch buffer. Validation lives at /inspect (controls
     preview) and /rounds (round start), where broken code actually causes
     downstream failure."""
-    text = (PKG_DIR / 'app.py').read_text()
+    text = (PKG_DIR / 'app.py').read_text(encoding='utf-8')
     put_idx = text.index('@app.put("/experiments/{experiment_id}/code"')
     body = text[put_idx:put_idx + 5000]
     assert '_ast.parse(code)' not in body
@@ -70,7 +70,7 @@ def test_start_round_reads_from_disk_not_request_body() -> None:
     that gates if_match. Pre-S08 it required `code` in the request body, which
     broke after the experiment page stopped sending it. Round start is the
     natural validation gate — broken code there is a real, blocking error."""
-    text = (PKG_DIR / 'app.py').read_text()
+    text = (PKG_DIR / 'app.py').read_text(encoding='utf-8')
     rounds_idx = text.index('@app.post("/experiments/{experiment_id}/rounds"')
     # The handler is long — extend the window to cover the final return.
     body = text[rounds_idx:rounds_idx + 10000]
@@ -95,7 +95,7 @@ def test_experiment_start_button_sends_only_if_match() -> None:
     """experiment.html start() must post only {if_match} to /rounds. If it
     starts sending {code} or {args} again, /rounds' disk-read invariant is
     superseded by client-supplied state."""
-    text = (PKG_DIR / 'templates' / 'experiment.html').read_text()
+    text = (PKG_DIR / 'templates' / 'experiment.html').read_text(encoding='utf-8')
     start_idx = text.index('async function start()')
     block = text[start_idx:start_idx + 3000]
     # body literal contains only if_match — no code or args fields.
@@ -108,7 +108,7 @@ def test_experiment_start_button_sends_only_if_match() -> None:
 def test_save_endpoints_reject_non_object_body() -> None:
     """Both PUT /code and POST /working should reject non-object JSON bodies
     with a 400 instead of crashing on body.get(...)."""
-    text = (PKG_DIR / 'app.py').read_text()
+    text = (PKG_DIR / 'app.py').read_text(encoding='utf-8')
     for marker in (
         '@app.put("/experiments/{experiment_id}/code"',
         '@app.post("/experiments/{experiment_id}/working"',
@@ -122,7 +122,7 @@ def test_save_endpoints_reject_non_object_body() -> None:
 def test_save_working_rejects_empty_body() -> None:
     """save_working must reject requests with neither code nor args, otherwise
     the version bumps with no actual write."""
-    text = (PKG_DIR / 'app.py').read_text()
+    text = (PKG_DIR / 'app.py').read_text(encoding='utf-8')
     idx = text.index('@app.post("/experiments/{experiment_id}/working"')
     block = text[idx:idx + 2500]
     assert 'has_code or has_args' in block
