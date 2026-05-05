@@ -52,35 +52,43 @@ def test_code_put_route_persists_atomically() -> None:
     assert 'status_code=409' in body
 
 
-def test_code_put_rejects_syntax_error() -> None:
-    """The PUT handler validates Python via ast.parse and returns a 400 with
-    a structured detail (kind/line/col/msg) if the code does not parse, before
-    acquiring the lock or writing anything. Saving broken code would otherwise
-    leave the experiment in a confusing state where /inspect returns empty."""
+def test_code_put_does_not_block_invalid_syntax() -> None:
+    """The PUT handler accepts any text. Mid-edit drafts may not parse;
+    blocking save would force the user to keep broken Python in their head
+    or in a side scratch buffer. Validation lives at /inspect (controls
+    preview) and /rounds (round start), where broken code actually causes
+    downstream failure."""
     text = (PKG_DIR / 'app.py').read_text()
     put_idx = text.index('@app.put("/experiments/{experiment_id}/code"')
     body = text[put_idx:put_idx + 5000]
-    assert '_ast.parse(code)' in body
-    assert 'except SyntaxError' in body
-    assert '"kind": "syntax_error"' in body
+    assert '_ast.parse(code)' not in body
+    assert '"kind": "syntax_error"' not in body
 
 
 def test_start_round_reads_from_disk_not_request_body() -> None:
     """The /rounds endpoint snapshots code+args from disk under the same flock
     that gates if_match. Pre-S08 it required `code` in the request body, which
-    broke after the experiment page stopped sending it."""
+    broke after the experiment page stopped sending it. Round start is the
+    natural validation gate — broken code there is a real, blocking error."""
     text = (PKG_DIR / 'app.py').read_text()
     rounds_idx = text.index('@app.post("/experiments/{experiment_id}/rounds"')
-    body = text[rounds_idx:rounds_idx + 5000]
+    # The handler is long — extend the window to cover the final return.
+    body = text[rounds_idx:rounds_idx + 10000]
     # Reads code+args from disk under flock — not from request body.
     assert 'code_path = exp_dir / "code.py"' in body
     assert 'args_path = exp_dir / "args.json"' in body
-    # Validates the snapshot the same way PUT /code does.
+    # Round start validates the snapshot (PUT /code does NOT — that's the
+    # editor's "accept any text" contract).
     assert '_ast.parse(code)' in body
     assert 'sfd_id' in body and 'not in code' in body
     # Doesn't try to read code or args from the request body any more.
     assert 'code = body.get("code"' not in body
     assert 'args = body.get("args"' not in body
+    # Version-passive: no version bump, response uses current_version
+    # (matching the 409 key) rather than a misleading "version" field.
+    assert '"current_version": current_version' in body
+    assert '"version": new_version' not in body
+    assert 'new_version = current_version' not in body
 
 
 def test_experiment_start_button_sends_only_if_match() -> None:

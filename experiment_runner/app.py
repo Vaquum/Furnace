@@ -575,22 +575,11 @@ def create_app(root: Path) -> FastAPI:
         code = body["code"]
         if not isinstance(code, str):
             raise HTTPException(400, "code must be a string")
-        # Validate Python syntax before writing. Saving broken code creates
-        # a confusing downstream state where the inspect endpoint returns an
-        # empty schema and run_round crashes; we'd rather block the save and
-        # tell the user exactly where the parse failed.
-        try:
-            _ast.parse(code)
-        except SyntaxError as exc:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "kind": "syntax_error",
-                    "line": exc.lineno if exc.lineno is not None else 0,
-                    "col": exc.offset if exc.offset is not None else 0,
-                    "msg": exc.msg,
-                },
-            ) from exc
+        # The editor accepts any text — partial / mid-edit drafts may not
+        # parse, and the slice's floor is "safely save", not "save only valid
+        # Python". Syntax validation runs at /inspect (controls preview) and
+        # /rounds (round start), which is where a broken file actually causes
+        # downstream failure.
         with sm.exp_lock(experiment_id):
             with version_flock(exp_dir):
                 current = read_version(exp_dir)
@@ -769,6 +758,10 @@ def create_app(root: Path) -> FastAPI:
 
             start_watcher(popen, round_dir, sm)
 
+        # /rounds is version-passive — it never bumps the working version,
+        # only freezes a snapshot into a new round dir. The response uses
+        # `current_version` (matching the 409 path's key) rather than a
+        # `version` field that suggests advancement.
         return {"current_version": current_version, "round_id": round_id}
 
     @app.get("/experiments/{experiment_id}/rounds/{round_id}", response_class=HTMLResponse)
