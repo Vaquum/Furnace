@@ -94,13 +94,14 @@ def _extract_manifest_data_source(code: str, sfd_identifier: str) -> dict | None
     {"method": <str|None>, "params": <dict|None>}. Handles both
     `return Manifest().set_data_source(...)` and the assignment form
     `manifest = Manifest().set_data_source(...)`. Returns None when no
-    set_data_source(...) call is found."""
+    set_data_source(...) call is found.
+
+    SyntaxError propagates to the caller — the inspect endpoint translates
+    it into a 400 with line/col info so a broken paste in the code editor
+    surfaces as a real error instead of an empty data-source schema."""
     if not code or not sfd_identifier:
         return None
-    try:
-        tree = _ast.parse(code)
-    except SyntaxError:
-        return None
+    tree = _ast.parse(code)
     for node in tree.body:
         if not (isinstance(node, _ast.ClassDef) and node.name == sfd_identifier):
             continue
@@ -155,7 +156,15 @@ def _inspect_round_args(code: str, sfd_identifier: str) -> dict:
             "library_signature": [],
         },
     }
-    extracted = _extract_manifest_data_source(code, sfd_identifier)
+    try:
+        extracted = _extract_manifest_data_source(code, sfd_identifier)
+    except SyntaxError as exc:
+        line = exc.lineno if exc.lineno is not None else 0
+        col = exc.offset if exc.offset is not None else 0
+        raise HTTPException(
+            400,
+            f"SyntaxError in code at line {line}, col {col}: {exc.msg}",
+        ) from exc
     if extracted is None:
         return empty
     manifest_method = extracted.get("method")
@@ -540,19 +549,49 @@ def create_app(root: Path) -> FastAPI:
             {"experiment_id": experiment_id, "rounds": rounds},
         )
 
-    @app.post("/experiments/{experiment_id}/working")
-    async def save_working(experiment_id: str, request: Request):
+    @app.get("/experiments/{experiment_id}/code", response_class=HTMLResponse)
+    def code_page(request: Request, experiment_id: str):
+        exp_dir = _exp_dir(experiment_id)
+        code, _args, version = _read_working(exp_dir)
+        return templates.TemplateResponse(
+            request,
+            "code.html",
+            {
+                "experiment_id": experiment_id,
+                "code": code,
+                "version": version,
+            },
+        )
+
+    @app.put("/experiments/{experiment_id}/code")
+    async def save_code(experiment_id: str, request: Request):
         exp_dir = _exp_dir(experiment_id)
         body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(400, "request body must be a JSON object")
+        if "code" not in body:
+            raise HTTPException(400, "request must include 'code'")
         if_match = body.get("if_match")
-        code = body.get("code", "")
-        args = body.get("args", {})
-        if not isinstance(args, dict):
-            raise HTTPException(400, "args must be an object")
-        # experiment_name is always derived from the experiment id; ignore client value
-        args.setdefault("uel_run", {})
-        if isinstance(args["uel_run"], dict):
-            args["uel_run"]["experiment_name"] = experiment_id
+        code = body["code"]
+        if not isinstance(code, str):
+            raise HTTPException(400, "code must be a string")
+        # Save refuses broken Python so the user catches syntax errors at the
+        # moment they hit Save, not at /inspect (controls quietly empty) or
+        # at /rounds (round-start fails after the user already moved on).
+        # The 400 detail is structured so the editor can paint the offending
+        # line in the gutter and scroll to it.
+        try:
+            _ast.parse(code)
+        except SyntaxError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "kind": "syntax_error",
+                    "line": exc.lineno if exc.lineno is not None else 0,
+                    "col": exc.offset if exc.offset is not None else 0,
+                    "msg": exc.msg,
+                },
+            ) from exc
         with sm.exp_lock(experiment_id):
             with version_flock(exp_dir):
                 current = read_version(exp_dir)
@@ -561,9 +600,50 @@ def create_app(root: Path) -> FastAPI:
                 tmp_code = exp_dir / "code.py.tmp"
                 tmp_code.write_text(code)
                 os.replace(tmp_code, exp_dir / "code.py")
-                tmp_args = exp_dir / "args.json.tmp"
-                tmp_args.write_text(json.dumps(args, indent=2))
-                os.replace(tmp_args, exp_dir / "args.json")
+                new_version = current + 1
+                write_version_atomic(exp_dir, new_version)
+        return {"version": new_version}
+
+    @app.post("/experiments/{experiment_id}/working")
+    async def save_working(experiment_id: str, request: Request):
+        exp_dir = _exp_dir(experiment_id)
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(400, "request body must be a JSON object")
+        if_match = body.get("if_match")
+        # Both `code` and `args` are independently optional. Code editing now
+        # has its own page (PUT /experiments/{id}/code); the experiment page
+        # only saves args. Older callers that send both still work. The
+        # request must carry at least one of them — otherwise the version
+        # would bump with no actual write, creating spurious 409s elsewhere.
+        has_code = "code" in body
+        has_args = "args" in body
+        if not (has_code or has_args):
+            raise HTTPException(400, "request must include 'code', 'args', or both")
+        code = body.get("code", "")
+        args = body.get("args", {})
+        if has_code and not isinstance(code, str):
+            raise HTTPException(400, "code must be a string")
+        if has_args and not isinstance(args, dict):
+            raise HTTPException(400, "args must be an object")
+        if has_args:
+            # experiment_name is always derived from the experiment id; ignore client value
+            args.setdefault("uel_run", {})
+            if isinstance(args["uel_run"], dict):
+                args["uel_run"]["experiment_name"] = experiment_id
+        with sm.exp_lock(experiment_id):
+            with version_flock(exp_dir):
+                current = read_version(exp_dir)
+                if if_match != current:
+                    return JSONResponse({"current_version": current}, status_code=409)
+                if has_code:
+                    tmp_code = exp_dir / "code.py.tmp"
+                    tmp_code.write_text(code)
+                    os.replace(tmp_code, exp_dir / "code.py")
+                if has_args:
+                    tmp_args = exp_dir / "args.json.tmp"
+                    tmp_args.write_text(json.dumps(args, indent=2))
+                    os.replace(tmp_args, exp_dir / "args.json")
                 new_version = current + 1
                 write_version_atomic(exp_dir, new_version)
         return {"version": new_version}
@@ -572,23 +652,9 @@ def create_app(root: Path) -> FastAPI:
     async def start_round(experiment_id: str, request: Request):
         exp_dir = _exp_dir(experiment_id)
         body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(400, "request body must be a JSON object")
         if_match = body.get("if_match")
-        code = body.get("code", "")
-        args = body.get("args", {})
-        if not code.strip():
-            raise HTTPException(400, "code editor is empty — paste your SFD before starting a round")
-        if not isinstance(args, dict):
-            raise HTTPException(400, "args must be an object")
-        args.setdefault("uel_run", {})
-        if isinstance(args["uel_run"], dict):
-            args["uel_run"]["experiment_name"] = experiment_id
-        _validate_args(args)
-        sfd_id = args["sfd_identifier"]
-        if sfd_id not in code:
-            raise HTTPException(
-                400,
-                f"sfd_identifier '{sfd_id}' does not appear in the pasted code",
-            )
 
         with sm.exp_lock(experiment_id):
             with version_flock(exp_dir):
@@ -599,14 +665,43 @@ def create_app(root: Path) -> FastAPI:
                     return JSONResponse(
                         {"error": "another round is active"}, status_code=409,
                     )
-                tmp_code = exp_dir / "code.py.tmp"
-                tmp_code.write_text(code)
-                os.replace(tmp_code, exp_dir / "code.py")
-                tmp_args = exp_dir / "args.json.tmp"
-                tmp_args.write_text(json.dumps(args, indent=2))
-                os.replace(tmp_args, exp_dir / "args.json")
-                new_version = current_version + 1
-                write_version_atomic(exp_dir, new_version)
+                # Source of truth: code is saved via PUT /code, args via
+                # /working. We snapshot both under the same flock that gates
+                # the if_match check so the round is consistent with what
+                # the user saw when they clicked Start.
+                code_path = exp_dir / "code.py"
+                args_path = exp_dir / "args.json"
+                code = code_path.read_text() if code_path.exists() else ""
+                args = json.loads(args_path.read_text()) if args_path.exists() else {}
+                if not code.strip():
+                    raise HTTPException(
+                        400,
+                        "code is empty — open the code editor and paste your SFD before starting a round",
+                    )
+                try:
+                    _ast.parse(code)
+                except SyntaxError as exc:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "kind": "syntax_error",
+                            "line": exc.lineno if exc.lineno is not None else 0,
+                            "col": exc.offset if exc.offset is not None else 0,
+                            "msg": exc.msg,
+                        },
+                    ) from exc
+                if not isinstance(args, dict):
+                    raise HTTPException(400, "args must be an object")
+                args.setdefault("uel_run", {})
+                if isinstance(args["uel_run"], dict):
+                    args["uel_run"]["experiment_name"] = experiment_id
+                _validate_args(args)
+                sfd_id = args["sfd_identifier"]
+                if sfd_id not in code:
+                    raise HTTPException(
+                        400,
+                        f"sfd_identifier '{sfd_id}' does not appear in the saved code",
+                    )
 
             rounds_dir = exp_dir / "rounds"
             round_id = _allocate_round_id(rounds_dir)
@@ -675,7 +770,11 @@ def create_app(root: Path) -> FastAPI:
 
             start_watcher(popen, round_dir, sm)
 
-        return {"version": new_version, "round_id": round_id}
+        # /rounds is version-passive — it never bumps the working version,
+        # only freezes a snapshot into a new round dir. The response uses
+        # `current_version` (matching the 409 path's key) rather than a
+        # `version` field that suggests advancement.
+        return {"current_version": current_version, "round_id": round_id}
 
     @app.get("/experiments/{experiment_id}/rounds/{round_id}", response_class=HTMLResponse)
     def round_page(request: Request, experiment_id: str, round_id: str):
