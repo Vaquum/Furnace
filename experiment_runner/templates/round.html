@@ -60,22 +60,26 @@
        data-log-url="/experiments/{{ experiment_id }}/rounds/{{ round_id }}/log?source=stdout"></pre>
 </div>
 
-{% if diff_text %}
-<div class="section">
-  <h2 class="atom-heading"><span class="numeral">04</span><span>Diff vs previous round</span></h2>
-  <pre class="diff">{{ diff_text }}</pre>
-</div>
-{% endif %}
+<details class="section collapsible"{% if diff_text %} open{% endif %}>
+  <summary class="atom-heading"><span class="numeral">04</span><span>Diff vs previous round</span></summary>
+  {% if diff_text %}
+  <div class="atom-diff-view">
+    <pre id="diff-source" data-diff>{{ diff_text }}</pre>
+  </div>
+  {% endif %}
+</details>
 
 <details class="section collapsible">
-  <summary class="atom-heading"><span class="numeral">{% if diff_text %}05{% else %}04{% endif %}</span><span>Frozen args</span></summary>
+  <summary class="atom-heading"><span class="numeral">05</span><span>Frozen args</span></summary>
   <pre class="atom-code-block">{{ frozen_args_json }}</pre>
 </details>
 
 <details class="section collapsible">
-  <summary class="atom-heading"><span class="numeral">{% if diff_text %}06{% else %}05{% endif %}</span><span>Frozen code</span></summary>
+  <summary class="atom-heading"><span class="numeral">06</span><span>Frozen code</span></summary>
   <pre class="atom-code-block">{{ frozen_code }}</pre>
 </details>
+
+<script defer src="/static/diff_view.js?v={{ asset_version }}"></script>
 
 <script>
 const EXP_ID = {{ experiment_id | tojson }};
