@@ -24,14 +24,23 @@ def test_python_highlight_module_exists() -> None:
 
 
 def test_diff_view_module_exists() -> None:
-    """The diff renderer is a small standalone script that hydrates the
-    server-rendered <pre id="diff-source"> on the round page."""
+    """The round-page hydration script paints the diff (#diff-source) and
+    the frozen-code snapshot (#frozen-code), both using the shared
+    PythonHighlight tokenizer."""
     js = PKG_DIR / 'static' / 'diff_view.js'
     assert js.is_file()
     text = js.read_text(encoding='utf-8')
     assert "getElementById('diff-source')" in text
+    assert "getElementById('frozen-code')" in text
     # Uses the shared highlighter, not its own copy.
     assert 'window.PythonHighlight' in text
+
+
+def test_round_page_frozen_code_has_highlight_target() -> None:
+    """The frozen-code <pre> carries the id the round-page script looks for,
+    so the snapshot reads the same as the editor's live buffer."""
+    html = (PKG_DIR / 'templates' / 'round.html').read_text(encoding='utf-8')
+    assert 'id="frozen-code"' in html
 
 
 def test_round_page_uses_collapsible_diff_view() -> None:

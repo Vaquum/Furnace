@@ -1,28 +1,19 @@
-// Diff view — paints a server-rendered unified diff with the same closed-
-// palette syntax highlighting the code editor uses, plus a per-line marker
-// for added / removed / context / hunk-header lines.
+// Round-page hydration — paints two read-only Python views with the same
+// closed-palette syntax highlighting the code editor uses:
 //
-// Looked-for shape (set by round.html):
-//   <div class="atom-diff-view"><pre id="diff-source" data-diff>{diff_text}</pre></div>
+//   1. The unified diff (#diff-source). Each line is wrapped in
+//      <span class="diff-line diff-{add,del,ctx,hunk,meta}"> so the leading
+//      +/- prefix character is coloured semantically and the rest of the
+//      line gets full Python token colouring.
 //
-// Each line is wrapped in a <span class="diff-line diff-{add,del,ctx,hunk,meta}">
-// so the line-prefix character can be coloured semantically. The content
-// portion (after the prefix char) gets PythonHighlight applied.
+//   2. The frozen-code snapshot (#frozen-code). Plain-Python with the same
+//      tokenizer — no diff prefixes, no per-line wrappers, just the painted
+//      buffer inside the existing .atom-code-block panel chrome.
 
 (function () {
-  const el = document.getElementById('diff-source');
-  if (!el) return;
   if (!window.PythonHighlight) return;
   const escape = window.PythonHighlight.escapeHtml;
   const highlight = window.PythonHighlight.highlightPython;
-
-  const text = el.textContent;
-  if (!text) return;
-
-  const lines = text.split('\n');
-  // The original split keeps a trailing empty entry when the diff ends in
-  // '\n'; drop it so we don't render a blank line at the bottom.
-  if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
 
   function classifyLine(line) {
     if (line.startsWith('@@')) return 'hunk';
@@ -32,7 +23,7 @@
     return 'ctx';
   }
 
-  function renderLine(line) {
+  function renderDiffLine(line) {
     const kind = classifyLine(line);
     if (kind === 'hunk' || kind === 'meta') {
       // Hunk headers and file-name metadata are rendered as a single
@@ -51,5 +42,24 @@
     );
   }
 
-  el.innerHTML = lines.map(renderLine).join('\n');
+  function paintDiff() {
+    const el = document.getElementById('diff-source');
+    if (!el) return;
+    const text = el.textContent;
+    if (!text) return;
+    const lines = text.split('\n');
+    // split() on a trailing newline yields an empty entry; drop it so we
+    // don't render a blank line at the bottom.
+    if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+    el.innerHTML = lines.map(renderDiffLine).join('\n');
+  }
+
+  function paintFrozenCode() {
+    const el = document.getElementById('frozen-code');
+    if (!el) return;
+    el.innerHTML = highlight(el.textContent);
+  }
+
+  paintDiff();
+  paintFrozenCode();
 })();
