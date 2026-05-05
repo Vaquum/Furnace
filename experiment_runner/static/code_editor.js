@@ -323,8 +323,16 @@
         let body = null;
         try { body = await r.json(); } catch (_) { /* response was not JSON */ }
         const detail = body && body.detail;
-        statusEl.textContent = `400 ${(typeof detail === 'string' ? detail : JSON.stringify(detail)) || ''}`;
-        statusEl.style.color = 'var(--negative)';
+        if (detail && detail.kind === 'syntax_error') {
+          statusEl.textContent =
+            `SyntaxError on line ${detail.line}, col ${detail.col}: ${detail.msg}`;
+          statusEl.style.color = 'var(--negative)';
+          setErrorLine(detail.line);
+          scrollToLine(detail.line);
+        } else {
+          statusEl.textContent = `400 ${(typeof detail === 'string' ? detail : JSON.stringify(detail)) || ''}`;
+          statusEl.style.color = 'var(--negative)';
+        }
       } else {
         const text = await r.text();
         statusEl.textContent = `${r.status} ${text.slice(0, 200)}`;

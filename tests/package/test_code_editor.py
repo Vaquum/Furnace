@@ -52,17 +52,18 @@ def test_code_put_route_persists_atomically() -> None:
     assert 'status_code=409' in body
 
 
-def test_code_put_does_not_block_invalid_syntax() -> None:
-    """The PUT handler accepts any text. Mid-edit drafts may not parse;
-    blocking save would force the user to keep broken Python in their head
-    or in a side scratch buffer. Validation lives at /inspect (controls
-    preview) and /rounds (round start), where broken code actually causes
-    downstream failure."""
+def test_code_put_rejects_syntax_error() -> None:
+    """The PUT handler validates Python via ast.parse and returns a 400 with
+    a structured detail (kind/line/col/msg) if the code does not parse, before
+    acquiring the lock or writing anything. Save refuses broken Python so the
+    user catches the error at Save-time, not at /inspect (empty controls) or
+    /rounds (round-start failure after they moved on)."""
     text = (PKG_DIR / 'app.py').read_text(encoding='utf-8')
     put_idx = text.index('@app.put("/experiments/{experiment_id}/code"')
     body = text[put_idx:put_idx + 5000]
-    assert '_ast.parse(code)' not in body
-    assert '"kind": "syntax_error"' not in body
+    assert '_ast.parse(code)' in body
+    assert 'except SyntaxError' in body
+    assert '"kind": "syntax_error"' in body
 
 
 def test_start_round_reads_from_disk_not_request_body() -> None:

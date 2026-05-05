@@ -575,11 +575,23 @@ def create_app(root: Path) -> FastAPI:
         code = body["code"]
         if not isinstance(code, str):
             raise HTTPException(400, "code must be a string")
-        # The editor accepts any text — partial / mid-edit drafts may not
-        # parse, and the slice's floor is "safely save", not "save only valid
-        # Python". Syntax validation runs at /inspect (controls preview) and
-        # /rounds (round start), which is where a broken file actually causes
-        # downstream failure.
+        # Save refuses broken Python so the user catches syntax errors at the
+        # moment they hit Save, not at /inspect (controls quietly empty) or
+        # at /rounds (round-start fails after the user already moved on).
+        # The 400 detail is structured so the editor can paint the offending
+        # line in the gutter and scroll to it.
+        try:
+            _ast.parse(code)
+        except SyntaxError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "kind": "syntax_error",
+                    "line": exc.lineno if exc.lineno is not None else 0,
+                    "col": exc.offset if exc.offset is not None else 0,
+                    "msg": exc.msg,
+                },
+            ) from exc
         with sm.exp_lock(experiment_id):
             with version_flock(exp_dir):
                 current = read_version(exp_dir)
