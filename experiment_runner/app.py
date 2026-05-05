@@ -701,7 +701,6 @@ def create_app(root: Path) -> FastAPI:
                         400,
                         f"sfd_identifier '{sfd_id}' does not appear in the saved code",
                     )
-                new_version = current_version
 
             rounds_dir = exp_dir / "rounds"
             round_id = _allocate_round_id(rounds_dir)
@@ -770,7 +769,7 @@ def create_app(root: Path) -> FastAPI:
 
             start_watcher(popen, round_dir, sm)
 
-        return {"version": new_version, "round_id": round_id}
+        return {"current_version": current_version, "round_id": round_id}
 
     @app.get("/experiments/{experiment_id}/rounds/{round_id}", response_class=HTMLResponse)
     def round_page(request: Request, experiment_id: str, round_id: str):
