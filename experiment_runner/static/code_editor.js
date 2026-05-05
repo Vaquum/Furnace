@@ -45,14 +45,17 @@
     buffer.scrollTop = Math.max(0, target);
   }
 
-  // ---- Syntax highlighting (Design-System closed accent palette) ------------
+  // ---- Syntax highlighting (Design-System closed palette) -------------------
   //
-  // Four token categories, each painted in a colour from the closed palette:
-  //   comments → ink-mute, strings → positive (yellow-green),
-  //   numbers + True/False/None → negative (coral),
-  //   keywords → accent (pink). Everything else stays default ink.
-  // The textarea renders its text as `color: transparent`, so what the user
-  // *sees* is the <pre> behind it; the textarea owns caret + selection only.
+  // Four token categories, each painted in a colour that reads as long-form
+  // text on paper:
+  //   comments → --ink-mute,
+  //   strings → --ink-soft (slightly above default ink, no flash),
+  //   numbers + True/False/None → --negative (coral),
+  //   keywords → --accent (pink).
+  // Everything else stays default --ink. The textarea renders its text as
+  // `color: transparent`, so what the user *sees* is the <pre> behind it;
+  // the textarea owns caret + selection only.
 
   const PY_KEYWORDS = new Set([
     'def', 'class', 'if', 'elif', 'else', 'for', 'while', 'return',
