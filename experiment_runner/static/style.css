@@ -941,6 +941,13 @@ table.results-table tbody tr.row-enter {
 .atom-diff-view .diff-add .diff-prefix { color: var(--accent); }
 .atom-diff-view .diff-del .diff-prefix { color: var(--negative); }
 .atom-diff-view .diff-del { color: var(--negative); }
+/* Removed lines stay uniformly coral — neutralise the global .tok-* rules
+   inside .diff-del so the line's keywords/strings/numbers inherit the
+   line's own --negative colour rather than each token painting itself. */
+.atom-diff-view .diff-del .tok-comment,
+.atom-diff-view .diff-del .tok-string,
+.atom-diff-view .diff-del .tok-number,
+.atom-diff-view .diff-del .tok-keyword { color: inherit; }
 .atom-diff-view .diff-hunk { color: var(--ink-mute); }
 .atom-diff-view .diff-meta { color: var(--ink-mute); }
 
