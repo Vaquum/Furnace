@@ -279,10 +279,14 @@ textarea.atom-code-block:focus {
   /* The pre is the visible text. Token colours below come from the closed
      accent set (Design-System.md §Channel→Face/colour). */
 }
-.code-editor-highlight .tok-comment { color: var(--ink-mute); }
-.code-editor-highlight .tok-string  { color: var(--ink-soft); }
-.code-editor-highlight .tok-number  { color: var(--negative); }
-.code-editor-highlight .tok-keyword { color: var(--accent); }
+/* Global token colours from the closed palette — applied wherever the
+   shared PythonHighlight renders tokens (code editor, diff view, frozen-
+   code snapshot). Kept un-scoped so any future read-only Python panel
+   gets the same paint without bespoke selectors. */
+.tok-comment { color: var(--ink-mute); }
+.tok-string  { color: var(--ink-soft); }
+.tok-number  { color: var(--negative); }
+.tok-keyword { color: var(--accent); }
 
 .code-editor-active-line {
   position: absolute;
@@ -892,6 +896,63 @@ table.results-table tbody tr.row-enter {
 
 /* ---- Diff ---- */
 
+/* ---- Diff view (round page) -------------------------------------------------
+   Read-only panel that mirrors the .atom-code-editor look (paper-2 + accent
+   left-border + mono) and uses the shared Python highlighter for token
+   colours. Each line carries an extra class to mark its diff role:
+   .diff-add (added), .diff-del (removed), .diff-ctx (context, no marker),
+   .diff-hunk (@@ ... @@), .diff-meta (--- / +++ file headers). The leading
+   +/- prefix character is wrapped in .diff-prefix so it can be coloured
+   independently of the line content (which still gets full Python syntax).
+   No background tint — DS canon is hairline-only; the prefix character +
+   coral text on removed lines does the signalling. */
+
+.atom-diff-view {
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--accent);
+  margin: 0 0 var(--gap-m) 0;
+  overflow: hidden;
+}
+.atom-diff-view pre {
+  margin: 0;
+  padding: var(--gap-s) var(--gap-m);
+  font-family: var(--font-mono);
+  font-size: var(--t-code);
+  font-weight: 400;
+  line-height: 1.65;
+  font-variant-numeric: tabular-nums slashed-zero;
+  color: var(--ink);
+  white-space: pre;
+  overflow-x: auto;
+  max-height: 540px;
+  overflow-y: auto;
+}
+/* Per-line markers. Each .diff-line is rendered as an inline <span> followed
+   by a literal newline in the parent <pre>; using `display: inline` keeps
+   the natural <pre> line-break behaviour while letting us colour the prefix
+   and the row's text. */
+.atom-diff-view .diff-line { display: inline; }
+.atom-diff-view .diff-prefix {
+  display: inline-block;
+  width: 1ch;
+  color: var(--ink-mute);
+}
+.atom-diff-view .diff-add .diff-prefix { color: var(--accent); }
+.atom-diff-view .diff-del .diff-prefix { color: var(--negative); }
+.atom-diff-view .diff-del { color: var(--negative); }
+/* Removed lines stay uniformly coral — neutralise the global .tok-* rules
+   inside .diff-del so the line's keywords/strings/numbers inherit the
+   line's own --negative colour rather than each token painting itself. */
+.atom-diff-view .diff-del .tok-comment,
+.atom-diff-view .diff-del .tok-string,
+.atom-diff-view .diff-del .tok-number,
+.atom-diff-view .diff-del .tok-keyword { color: inherit; }
+.atom-diff-view .diff-hunk { color: var(--ink-mute); }
+.atom-diff-view .diff-meta { color: var(--ink-mute); }
+
+/* Legacy plain-pre diff style — kept for any caller still using <pre class="diff">.
+   round.html has migrated to .atom-diff-view. */
 .diff {
   background: var(--paper-2);
   border-left: 3px solid var(--accent);
