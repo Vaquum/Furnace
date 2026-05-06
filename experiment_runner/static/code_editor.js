@@ -1,4 +1,4 @@
-(function () {
+function startEditor() {
   const editor = document.querySelector('.atom-code-editor');
   if (!editor) return;
   const expId = editor.dataset.experimentId;
@@ -321,4 +321,16 @@
   renderHighlight();
   // Active-line is hidden until the user clicks into the buffer; that's
   // intentional — DS canon hairline marker only when the surface is "live".
-})();
+}
+
+// PythonHighlight is loaded with `defer` from base.html, but this file is
+// not necessarily deferred; in that case it could execute before
+// PythonHighlight is defined. Defer-scripts always finish before
+// DOMContentLoaded, so wait for that event when the highlighter isn't
+// ready yet — and start immediately if it already is (covers the case
+// where this script also happens to be deferred and runs late).
+if (window.PythonHighlight) {
+  startEditor();
+} else {
+  document.addEventListener('DOMContentLoaded', startEditor);
+}
