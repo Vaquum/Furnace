@@ -60,6 +60,45 @@
     el.innerHTML = highlight(el.textContent);
   }
 
+  // Wire every .code-block-copy button on the round page to the <pre> it
+  // names via data-copy-target. Falls back to surfacing the failure on
+  // the icon when navigator.clipboard is denied (non-secure context).
+  function wireCopyButtons() {
+    const COPY_GLYPH = '⧉';
+    const OK_GLYPH = '✓';
+    const ERR_GLYPH = '×';
+    document.querySelectorAll('.code-block-copy').forEach((btn) => {
+      let resetTimer = null;
+      btn.addEventListener('click', async () => {
+        const target = document.getElementById(btn.dataset.copyTarget);
+        if (!target) return;
+        if (resetTimer) clearTimeout(resetTimer);
+        const original = btn.title || 'Copy';
+        try {
+          await navigator.clipboard.writeText(target.textContent);
+          btn.textContent = OK_GLYPH;
+          btn.classList.add('copied');
+          btn.title = 'Copied';
+          resetTimer = setTimeout(() => {
+            btn.textContent = COPY_GLYPH;
+            btn.classList.remove('copied');
+            btn.title = original;
+          }, 1200);
+        } catch (e) {
+          btn.textContent = ERR_GLYPH;
+          btn.classList.add('copy-failed');
+          btn.title = 'Copy failed: ' + ((e && e.message) || e);
+          resetTimer = setTimeout(() => {
+            btn.textContent = COPY_GLYPH;
+            btn.classList.remove('copy-failed');
+            btn.title = original;
+          }, 1500);
+        }
+      });
+    });
+  }
+
   paintDiff();
   paintFrozenCode();
+  wireCopyButtons();
 })();

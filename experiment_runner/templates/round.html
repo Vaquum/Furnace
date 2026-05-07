@@ -64,6 +64,7 @@
   <summary class="atom-heading"><span class="numeral">04</span><span>Diff vs previous round</span></summary>
   {% if diff_text %}
   <div class="atom-diff-view">
+    <button class="code-block-copy" type="button" data-copy-target="diff-source" title="Copy diff" aria-label="Copy diff">⧉</button>
     <pre id="diff-source" data-diff>{{ diff_text }}</pre>
   </div>
   {% endif %}
@@ -71,12 +72,18 @@
 
 <details class="section collapsible">
   <summary class="atom-heading"><span class="numeral">05</span><span>Frozen args</span></summary>
-  <pre class="atom-code-block">{{ frozen_args_json }}</pre>
+  <div class="code-block-wrap">
+    <button class="code-block-copy" type="button" data-copy-target="frozen-args" title="Copy args" aria-label="Copy frozen args">⧉</button>
+    <pre class="atom-code-block" id="frozen-args">{{ frozen_args_json }}</pre>
+  </div>
 </details>
 
 <details class="section collapsible">
   <summary class="atom-heading"><span class="numeral">06</span><span>Frozen code</span></summary>
-  <pre class="atom-code-block" id="frozen-code">{{ frozen_code }}</pre>
+  <div class="code-block-wrap">
+    <button class="code-block-copy" type="button" data-copy-target="frozen-code" title="Copy code" aria-label="Copy frozen code">⧉</button>
+    <pre class="atom-code-block" id="frozen-code">{{ frozen_code }}</pre>
+  </div>
 </details>
 
 <script defer src="/static/diff_view.js?v={{ asset_version }}"></script>

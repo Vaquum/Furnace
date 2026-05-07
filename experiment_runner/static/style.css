@@ -908,12 +908,49 @@ table.results-table tbody tr.row-enter {
    coral text on removed lines does the signalling. */
 
 .atom-diff-view {
+  position: relative;
   background: var(--paper-2);
   border: 1px solid var(--rule);
   border-left: 3px solid var(--accent);
   margin: 0 0 var(--gap-m) 0;
   overflow: hidden;
 }
+/* Copy-to-clipboard wrapper for the round page's other code blocks
+   (.atom-code-block <pre>s). Provides the relative positioning the
+   absolute-positioned .code-block-copy needs. */
+.code-block-wrap {
+  position: relative;
+}
+/* Generic copy-icon button shared by every read-only code block on the
+   round page. Hairline-only, mono glyph, ink-mute → accent on hover. The
+   dynamic .copied / .copy-failed states are toggled by diff_view.js. */
+.code-block-copy {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 2;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink-mute);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 18px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: color var(--motion);
+}
+.code-block-copy:hover { color: var(--accent); }
+.code-block-copy:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+}
+.code-block-copy.copied { color: var(--accent); }
+.code-block-copy.copy-failed { color: var(--negative); }
 .atom-diff-view pre {
   margin: 0;
   padding: var(--gap-s) var(--gap-m);
