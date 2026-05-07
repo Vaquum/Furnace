@@ -76,6 +76,7 @@
         <th>Ended</th>
         <th class="num">Exit</th>
         <th></th>
+        <th class="col-actions"></th>
       </tr>
     </thead>
     <tbody id="rounds-rows">
@@ -467,6 +468,25 @@ async function start() {
 
 document.getElementById('save-btn').addEventListener('click', save);
 document.getElementById('start-btn').addEventListener('click', start);
+
+// Delete-round handler: event-delegated on document.body because the rounds
+// tbody is replaced on every poll cycle, so per-button listeners would go
+// stale. Confirm → DELETE → reload (200) or surface "<status>: <detail>".
+document.body.addEventListener('click', async (e) => {
+  const btn = e.target.closest('.delete-round');
+  if (!btn) return;
+  e.preventDefault();
+  const roundId = btn.dataset.round;
+  if (!confirm(`Delete round ${roundId}? Logs, frozen code, and results will be removed.`)) return;
+  const r = await fetch(`/experiments/${encodeURIComponent(EXP_ID)}/rounds/${encodeURIComponent(roundId)}`, { method: 'DELETE' });
+  if (r.ok) {
+    location.reload();
+    return;
+  }
+  let detail = `Delete failed (${r.status})`;
+  try { detail = `${r.status}: ${(await r.json()).detail || detail}`; } catch (_) {}
+  alert(detail);
+});
 
 // Live preview: debounced refreshInspect on every keystroke so the controls
 // unlock as soon as the typed value matches a class in the saved code,

@@ -49,3 +49,47 @@ def test_diff_view_wires_copy_buttons() -> None:
     assert 'data-copy-target' in js or 'dataset.copyTarget' in js
     # Failure path flashes the icon; same pattern as the editor's copy button.
     assert "'copy-failed'" in js or '"copy-failed"' in js
+
+
+def test_delete_round_endpoint_exists() -> None:
+    """app.py declares DELETE /experiments/{id}/rounds/{round_id}, refuses
+    when the round is in an active state, and rmtrees the round dir
+    otherwise."""
+    text = (PKG_DIR / 'app.py').read_text(encoding='utf-8')
+    pattern = r'@app\.delete\("/experiments/\{experiment_id\}/rounds/\{round_id\}"\)'
+    assert re.search(pattern, text) is not None
+    idx = text.index('@app.delete("/experiments/{experiment_id}/rounds/{round_id}"')
+    body = text[idx:idx + 1500]
+    assert 'ACTIVE_STATES' in body
+    assert 'shutil.rmtree(round_dir)' in body
+    assert 'status_code=409' in body
+
+
+def test_round_row_renders_delete_button() -> None:
+    """The rounds-table partial includes a .delete-round button per row,
+    carrying data-round=<round_id>. Header column for the action exists in
+    experiment.html."""
+    rows = (PKG_DIR / 'templates' / '_round_rows.html').read_text(encoding='utf-8')
+    assert 'class="delete-round"' in rows
+    assert 'data-round="{{ r.round_id }}"' in rows
+    exp = (PKG_DIR / 'templates' / 'experiment.html').read_text(encoding='utf-8')
+    # Two col-actions thead entries are present today (one for the existing
+    # blank action column and the new delete column on the rounds table).
+    # Easier mechanical check: the experiment page has at least one
+    # col-actions header on the rounds table — the only table on that page.
+    assert 'col-actions' in exp
+    # Event-delegated handler is wired to body (so it survives polling
+    # re-renders of #rounds-rows).
+    assert ".delete-round" in exp
+    assert "method: 'DELETE'" in exp
+
+
+def test_delete_round_css_shares_delete_exp_chrome() -> None:
+    """The .delete-round button reuses the same icon-button rules as the
+    existing .delete-exp on the Jobs page — combined selector, no
+    duplication."""
+    css = (PKG_DIR / 'static' / 'style.css').read_text(encoding='utf-8')
+    # Combined base selector
+    assert '.delete-exp,\n.delete-round' in css
+    # Combined hover selector
+    assert '.delete-exp:hover,\n.delete-round:hover' in css

@@ -1,6 +1,7 @@
-# v0.9.1
+# v0.10.0
 
 - Add a copy-to-clipboard `⧉` icon button to every code block on the round page so the diff, frozen args, and frozen code can each be lifted out without manual select-and-copy. Each button declares its source `<pre>` via `data-copy-target="<id>"`; `diff_view.js` wires them generically (one selector, one handler) and surfaces failure (non-secure context, permission denied) by flashing the icon to `×` in coral with the error in the `title` attribute, the same pattern the editor's copy button already uses. Buttons sit absolutely top-right inside their panel with the same hairline-only chrome the editor's `⧉` has — no row backgrounds, no decorative SVG.
+- Add a delete-round `×` icon to every row of the experiment page's Rounds table, mirroring the existing delete-experiment chrome on the Jobs page. New `DELETE /experiments/{experiment_id}/rounds/{round_id}` endpoint refuses to delete a round whose state is `pending` / `running` / `terminating` (returns `409` — terminate it first); otherwise rmtrees the round directory. Click flow: confirm → fetch DELETE → reload on 200, surface `<status>: <detail>` on failure. Same `.delete-exp` icon styling is shared with `.delete-round` so the two actions read identically.
 
 # v0.9.0
 

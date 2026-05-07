@@ -601,8 +601,11 @@ table.experiments-table tr.rounds-row > td:first-child {
 .chevron.open { color: var(--accent); }
 .chevron.open::before { transform: rotate(90deg); }
 
-/* Delete icon button */
-.delete-exp {
+/* Delete icon button — shared chrome for the experiment-row × on the Jobs
+   page and the round-row × on the experiment page. Same hairline-only
+   ✕ glyph, ink-soft → negative on hover. */
+.delete-exp,
+.delete-round {
   width: 24px;
   height: 24px;
   padding: 0;
@@ -618,7 +621,8 @@ table.experiments-table tr.rounds-row > td:first-child {
   justify-content: center;
   transition: color var(--motion), border-color var(--motion);
 }
-.delete-exp:hover { color: var(--negative); border-color: var(--negative); }
+.delete-exp:hover,
+.delete-round:hover { color: var(--negative); border-color: var(--negative); }
 
 /* Sub-table inside expanded rounds-cell */
 table.rounds-sub-table {
