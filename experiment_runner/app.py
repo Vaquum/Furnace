@@ -810,6 +810,22 @@ def create_app(root: Path) -> FastAPI:
             },
         )
 
+    @app.delete("/experiments/{experiment_id}/rounds/{round_id}")
+    def delete_round(experiment_id: str, round_id: str):
+        # Refuse if the round is still active. The user must terminate first
+        # so the watcher and pid table aren't left referencing a removed dir.
+        round_dir = _round_dir(experiment_id, round_id)
+        st = read_status(round_dir)
+        state = st.get("state")
+        if state in ACTIVE_STATES:
+            raise HTTPException(
+                status_code=409,
+                detail=f"round {round_id} is {state}; terminate it first",
+            )
+        import shutil
+        shutil.rmtree(round_dir)
+        return {"deleted": True}
+
     @app.post("/experiments/{experiment_id}/rounds/{round_id}/terminate")
     def terminate_round(experiment_id: str, round_id: str):
         round_dir = _round_dir(experiment_id, round_id)

@@ -7,8 +7,11 @@
   <td class="time">{{ r.ended_at or "—" }}</td>
   <td class="num">{{ r.exit_code if r.exit_code is not none else "—" }}</td>
   <td><a class="atom-micro" href="/experiments/{{ experiment_id }}/rounds/{{ r.round_id }}">View</a></td>
+  <td class="col-actions">
+    <button type="button" class="delete-round" data-round="{{ r.round_id }}" aria-label="Delete round {{ r.round_id }}" title="Delete round">×</button>
+  </td>
 </tr>
 {% endfor %}
 {% if not rounds %}
-<tr><td colspan="7" class="empty-cell">No rounds yet for this experiment.</td></tr>
+<tr><td colspan="8" class="empty-cell">No rounds yet for this experiment.</td></tr>
 {% endif %}
