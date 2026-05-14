@@ -68,12 +68,19 @@
     const OK_GLYPH = '✓';
     const ERR_GLYPH = '×';
     document.querySelectorAll('.code-block-copy').forEach((btn) => {
+      // Capture the per-button title ONCE at wire-up time. Capturing inside
+      // the click handler would treat the transient "Copied" / "Copy
+      // failed: …" string as the new baseline on rapid re-clicks.
+      const original = btn.title || 'Copy';
       let resetTimer = null;
       btn.addEventListener('click', async () => {
         const target = document.getElementById(btn.dataset.copyTarget);
         if (!target) return;
         if (resetTimer) clearTimeout(resetTimer);
-        const original = btn.title || 'Copy';
+        // Always clear both flash classes at the start of each click so a
+        // re-click in the flash window can't leave conflicting classes
+        // (e.g. .copied + .copy-failed) on the button.
+        btn.classList.remove('copied', 'copy-failed');
         try {
           await navigator.clipboard.writeText(target.textContent);
           btn.textContent = OK_GLYPH;

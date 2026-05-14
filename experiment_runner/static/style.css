@@ -950,8 +950,12 @@ table.results-table tbody tr.row-enter {
 }
 .code-block-copy:hover { color: var(--accent); }
 .code-block-copy:focus-visible {
+  /* Negative offset draws the ring INSIDE the button so the focus
+     indicator isn't clipped by the panel's overflow:hidden (the diff
+     view container clips its content; the frozen-args/code wrappers
+     don't, but the inset ring reads identically in both). */
   outline: 1px solid var(--accent);
-  outline-offset: 2px;
+  outline-offset: -2px;
 }
 .code-block-copy.copied { color: var(--accent); }
 .code-block-copy.copy-failed { color: var(--negative); }
