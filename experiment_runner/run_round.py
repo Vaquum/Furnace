@@ -5,7 +5,7 @@ import inspect
 import json
 import os
 import sys
-from datetime import datetime
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
 from .ast_strip import strip_to_definitions
@@ -82,28 +82,28 @@ def main() -> None:
     # forward it into the manifest UEL just instantiated. The manifest's
     # `split_dates` (set here) takes precedence over the SFD's existing
     # `split_config` in Limen's `_run_prepare_setup` and `compute_test_bars`;
-    # when absent, the SFD's ratio split runs unchanged. Six ISO-8601 strings
-    # come over the wire — fail-loud parse via `datetime.fromisoformat` (the
-    # validate-on-save path in app.py already rejected un-parseable values,
-    # so reaching here with anything other than ISO-8601 is a bug, not a
-    # user-input case).
+    # when absent, the SFD's ratio split runs unchanged.
     #
-    # Z -> +00:00 (not strip) because the parsed datetimes flow straight
-    # into Polars filter comparisons (limen.split_by_dates issues
-    # `pl.col('datetime') >= literal`); the data column is
-    # `Datetime('ms', 'UTC')`, so a naive Python datetime hits a Polars
-    # SchemaError ("could not evaluate '>=' between Datetime('ms', 'UTC')
-    # and Datetime('μs')"). Keeping the UTC tzinfo on the literal makes
-    # the comparison apples-to-apples.
+    # The form collects YYYY-MM-DD date strings (app.py already validated
+    # the format + ordering). Here we expand each one to a UTC datetime
+    # with end-of-day-inclusive semantics:
+    #   start_*: YYYY-MM-DD 00:00:00 UTC  (beginning of the typed day)
+    #   end_*:   next-day   00:00:00 UTC  (end of the typed day, since
+    #                                      Limen's windows are [start, end))
+    # So typing train_end=2024-12-31 means "include all bars on Dec 31".
+    # The UTC tzinfo is required because the data column is
+    # `Datetime('ms', 'UTC')` — a naive Python datetime would trigger
+    # `polars.SchemaError: could not evaluate '>=' between
+    # Datetime('ms', 'UTC') and Datetime('μs')`.
     split_dates = sfd_args.get("split_dates")
     if split_dates:
         uel.manifest.set_split_dates(
-            datetime.fromisoformat(split_dates["train_start"].replace("Z", "+00:00")),
-            datetime.fromisoformat(split_dates["train_end"].replace("Z", "+00:00")),
-            datetime.fromisoformat(split_dates["val_start"].replace("Z", "+00:00")),
-            datetime.fromisoformat(split_dates["val_end"].replace("Z", "+00:00")),
-            datetime.fromisoformat(split_dates["test_start"].replace("Z", "+00:00")),
-            datetime.fromisoformat(split_dates["test_end"].replace("Z", "+00:00")),
+            _split_start_dt(split_dates["train_start"]),
+            _split_end_dt(split_dates["train_end"]),
+            _split_start_dt(split_dates["val_start"]),
+            _split_end_dt(split_dates["val_end"]),
+            _split_start_dt(split_dates["test_start"]),
+            _split_end_dt(split_dates["test_end"]),
         )
 
     round_id = round_dir.name
@@ -140,6 +140,18 @@ def main() -> None:
     except Exception:
         import traceback
         traceback.print_exc()
+
+
+def _split_start_dt(date_str: str) -> datetime:
+    return datetime.combine(date.fromisoformat(date_str), time.min, tzinfo=timezone.utc)
+
+
+def _split_end_dt(date_str: str) -> datetime:
+    # End-of-day-inclusive: typing "2024-12-31" means include all of Dec 31.
+    # Limen's split windows are half-open [start, end), so the end datetime
+    # we pass must be midnight of the NEXT day for the typed day to be
+    # included in full.
+    return _split_start_dt(date_str) + timedelta(days=1)
 
 
 def _collect_period_info(data, uel) -> dict:
