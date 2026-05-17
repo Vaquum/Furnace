@@ -15,7 +15,15 @@ PKG_DIR = REPO_ROOT / 'experiment_runner'
 def test_run_round_writes_period_json() -> None:
     """After uel.run() returns, run_round.py persists per-round metadata to
     <round_dir>/period.json — test-period bounds from uel._alignment plus
-    the authoritative kline_size derived from data row spacing."""
+    the authoritative kline_size derived from data row spacing.
+
+    The persist is wrapped in a try/except so a metadata-extraction
+    failure (private uel._alignment shape change, unusual data) does
+    NOT bubble out and let the watcher mark a successful round as
+    failed. The exception lands in stderr.log via traceback.print_exc
+    so it's visible, not swallowed. The write is atomic (temp +
+    os.replace) since round_page does exists() + json.loads() and a
+    partial-write window would raise JSONDecodeError."""
     text = (PKG_DIR / 'run_round.py').read_text(encoding='utf-8')
     assert 'period.json' in text
     # The alignment list is Limen's per-permutation source of truth for
@@ -26,6 +34,26 @@ def test_run_round_writes_period_json() -> None:
     assert 'total_seconds()' in text
     # _collect_period_info is the helper; it returns the dict we persist.
     assert '_collect_period_info' in text
+    # Atomic write: temp + os.replace, mirroring state.py / /working.
+    assert 'period.json.tmp' in text
+    assert 'os.replace(tmp, round_dir / "period.json")' in text
+    # Fail-loud-but-contained: traceback.print_exc is the visible-but-
+    # non-propagating handler. Not a bare except, not an empty handler.
+    assert 'traceback.print_exc' in text
+
+
+def test_round_page_reloads_once_when_period_appears() -> None:
+    """When the page was rendered before period.json existed (round still
+    in flight), the polling loop reloads on the first terminal state so
+    the user picks up the just-written file without a manual refresh.
+    The Cache-Control: no-store header on the route makes the reload
+    fetch fresh HTML, not the cached one."""
+    html = (PKG_DIR / 'templates' / 'round.html').read_text(encoding='utf-8')
+    assert 'NEEDS_REFRESH_ON_TERMINAL' in html
+    # The constant is True when period was None at render time.
+    assert '(period is none) | tojson' in html
+    # The loop branches on it before breaking out of the polling cycle.
+    assert 'if (NEEDS_REFRESH_ON_TERMINAL) location.reload();' in html
 
 
 def test_app_loads_period_json_into_round_context() -> None:

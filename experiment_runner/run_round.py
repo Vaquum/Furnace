@@ -88,11 +88,29 @@ def main() -> None:
     # authoritative kline_size derived from the row spacing of the data
     # the round was fed — not the nominal value from args.json, which
     # might disagree if the SFD massaged params before fetch.
-    period = _collect_period_info(data, uel)
-    if period:
-        (round_dir / "period.json").write_text(
-            json.dumps(period, indent=2, default=str)
-        )
+    #
+    # Scope this in try/except so a metadata-extraction failure does NOT
+    # propagate and cause the watcher to mark a successful round as
+    # "failed" (the real work — uel.run + results.csv — is already done
+    # by the time we get here). Limen's _alignment is a private
+    # attribute with no stability contract; Polars datetime ops can
+    # raise on unusual data shapes. Both are known-fragile relative to
+    # the core deliverable, so we contain the blast radius.
+    # traceback.print_exc() lands in stderr.log, so the failure is
+    # visible (fail-loud), not swallowed.
+    #
+    # Write is atomic: temp + os.replace, mirroring state.py and the
+    # /working endpoint — the reader (round_page) does exists() then
+    # json.loads(), so a partial-write window would yield JSONDecodeError.
+    try:
+        period = _collect_period_info(data, uel)
+        if period:
+            tmp = round_dir / "period.json.tmp"
+            tmp.write_text(json.dumps(period, indent=2, default=str))
+            os.replace(tmp, round_dir / "period.json")
+    except Exception:
+        import traceback
+        traceback.print_exc()
 
 
 def _collect_period_info(data, uel) -> dict:

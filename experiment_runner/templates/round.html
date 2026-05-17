@@ -100,6 +100,12 @@
 const EXP_ID = {{ experiment_id | tojson }};
 const ROUND_ID = {{ round_id | tojson }};
 const ACTIVE_STATES = new Set(['pending', 'running', 'terminating']);
+// True when the page was rendered before period.json existed (round
+// was still in flight). The poll loop reloads once it observes a
+// terminal state so the user picks up the just-written period.json
+// without a manual refresh. With Cache-Control: no-store on this
+// route, the reload pulls a fresh response (not the cached one).
+const NEEDS_REFRESH_ON_TERMINAL = {{ (period is none) | tojson }};
 const STATS_URL = `/experiments/${EXP_ID}/rounds/${ROUND_ID}/stats`;
 
 document.getElementById('terminate-btn').addEventListener('click', async () => {
@@ -194,7 +200,10 @@ async function pollStats() {
 (async function loop() {
   while (true) {
     const stillActive = await pollStats();
-    if (!stillActive) break;
+    if (!stillActive) {
+      if (NEEDS_REFRESH_ON_TERMINAL) location.reload();
+      break;
+    }
     await new Promise(r => setTimeout(r, 2000));
   }
 })();
