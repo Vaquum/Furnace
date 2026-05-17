@@ -13,9 +13,17 @@
   <dl class="status-grid">
     <dt>State</dt><dd><span id="status-state" class="state {{ status.state }}">{{ status.state }}</span></dd>
     <dt>PID</dt><dd id="status-pid">{{ status.pid if status.pid is not none else "—" }}</dd>
-    <dt>Started</dt><dd id="status-started">{{ status.started_at or "—" }}</dd>
-    <dt>Ended</dt><dd id="status-ended">{{ status.ended_at or "—" }}</dd>
     <dt>Exit code</dt><dd id="status-exit">{{ status.exit_code if status.exit_code is not none else "—" }}</dd>
+    {# Test-period dates and authoritative kline_size are written to
+       <round_dir>/period.json by run_round.py after uel.run(). Older
+       rounds (pre-S11) and rounds that crashed before the persist step
+       won't have it — show "—" so the section's shape is stable. #}
+    <dt>Kline size</dt><dd>{{ (period.kline_size_seconds if period else None) | kline_size_display }}</dd>
+    <dt>Test period start</dt><dd>{{ (period.test_period_start if period else None) or "—" }}</dd>
+    <dt>Test period end</dt><dd>{{ (period.test_period_end if period else None) or "—" }}</dd>
+    {% if period and period.all_permutations_same_period is sameas false %}
+    <dt></dt><dd class="atom-small" style="color: var(--ink-mute);">test-period varies per permutation; showing the widest window across {{ period.permutation_count }} permutations</dd>
+    {% endif %}
     <dt>Results</dt><dd><a class="atom-micro" href="/experiments/{{ experiment_id }}/rounds/{{ round_id }}/results">View</a></dd>
     <dt>Download</dt><dd><a class="atom-micro" href="/experiments/{{ experiment_id }}/rounds/{{ round_id }}/bundle" download="{{ experiment_id }}__r{{ round_id }}.zip">Bundle</a></dd>
   </dl>
@@ -145,10 +153,9 @@ async function pollStats() {
   if (pill) { pill.textContent = p.state; pill.className = 'state ' + p.state; }
   const pid = document.getElementById('status-pid');
   if (pid) pid.textContent = (p.pid !== null && p.pid !== undefined) ? p.pid : '—';
-  const started = document.getElementById('status-started');
-  if (started) started.textContent = p.started_at || '—';
-  const ended = document.getElementById('status-ended');
-  if (ended) ended.textContent = p.ended_at || '—';
+  // (the wall-clock started_at / ended_at fields were replaced by the
+  // test-period dates from period.json; the live-poll has nothing to
+  // refresh there since period.json is round-final, not progressive)
   const exit = document.getElementById('status-exit');
   if (exit) exit.textContent = (p.exit_code !== null && p.exit_code !== undefined) ? p.exit_code : '—';
   const term = document.getElementById('terminate-btn');

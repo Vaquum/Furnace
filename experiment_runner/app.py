@@ -292,6 +292,20 @@ DEFAULT_ARGS: dict = {
 }
 
 
+def _format_kline_size(seconds: int | None) -> str:
+    """Render a kline-size in seconds as the largest whole-unit string the
+    interval divides into evenly — '4h' for 14400, '15m' for 900, '1d' for
+    86400, fall back to '<n>s' for anything irregular. Returns '—' for
+    None / 0 so the template can pipe `period.kline_size_seconds` through
+    without an outer if-guard."""
+    if not seconds:
+        return '—'
+    for unit_seconds, suffix in ((86400, 'd'), (3600, 'h'), (60, 'm')):
+        if seconds % unit_seconds == 0:
+            return f'{seconds // unit_seconds}{suffix}'
+    return f'{seconds}s'
+
+
 def _slugify(name: str) -> str:
     s = SLUG_RE.sub("-", name.strip()).strip("-")
     return s or "experiment"
@@ -396,6 +410,7 @@ def create_app(root: Path) -> FastAPI:
 
     templates = Jinja2Templates(directory=str(PKG_DIR / "templates"))
     templates.env.globals["asset_version"] = ASSET_VERSION
+    templates.env.filters["kline_size_display"] = _format_kline_size
     for k, v in _BUILD_META.items():
         templates.env.globals[k] = v
     sm = StateMachine(root)
@@ -782,6 +797,12 @@ def create_app(root: Path) -> FastAPI:
         st = read_status(round_dir)
         frozen_code = (round_dir / "code.py").read_text()
         frozen_args = json.loads((round_dir / "args.json").read_text())
+        # period.json is written by run_round.py after uel.run completes:
+        # test-period bounds (from uel._alignment) + authoritative kline_size
+        # (from data row spacing). May be absent on pre-S11 rounds or on
+        # crashed runs that never reached the persist step.
+        period_path = round_dir / "period.json"
+        period = json.loads(period_path.read_text()) if period_path.exists() else None
         diff_text = ""
         prev_id = f"{int(round_id) - 1:04d}"
         prev_dir = round_dir.parent / prev_id
@@ -806,6 +827,7 @@ def create_app(root: Path) -> FastAPI:
                 "frozen_code": frozen_code,
                 "frozen_args_json": json.dumps(frozen_args, indent=2),
                 "diff_text": diff_text,
+                "period": period,
                 "active": st.get("state") in ACTIVE_STATES,
             },
         )
