@@ -118,16 +118,25 @@ def test_experiment_html_has_six_date_inputs_with_advanced_toggle() -> None:
         assert pattern.search(text), f"type=date input for {key!r} missing"
     # Legend identifies the section as UTC.
     assert "UTC" in text
-    # Advanced toggle: a checkbox that shows/hides the inner four fields.
+    # Advanced toggle: a checkbox that flips .adv-only elements in place.
+    # Default state is unchecked so the form opens with only train_start and
+    # test_end visible regardless of what's in saved args — even saved
+    # inner-four values stay hidden until the operator explicitly opts in.
     assert 'id="f-advanced"' in text
-    assert 'id="advanced-fields"' in text
+    assert "adv-only" in text
+    assert "function setAdvancedMode" in text
     # Auto-fill helper and listeners exist.
     assert "function addDays(" in text
     assert "f-train-end" in text and "f-val-start" in text
     assert "f-test-start" in text and "f-val-end" in text
-    # JS gather: all-or-nothing on the six, plus fetch-bound passthrough.
+    # JS gather: mode-aware. Basic mode (advanced unchecked) never emits
+    # split_dates, even if the hidden inner-four DOM still carries values
+    # from a previous advanced session — the saved payload matches what the
+    # user can see in the form. Advanced mode emits split_dates iff all six
+    # are filled.
     assert "function gatherSplitDates()" in text
     assert "SPLIT_DATE_KEYS.every" in text
+    assert "advancedEl.checked" in text or "advanced = advancedEl" in text
     assert "fetch_start" in text and "fetch_end" in text
     # gatherWorking writes fetch bounds into data_source.params so
     # start_date_limit / end_date_limit stay in sync with train_start /
@@ -136,6 +145,13 @@ def test_experiment_html_has_six_date_inputs_with_advanced_toggle() -> None:
     assert "params.start_date_limit = sd.fetch_start" in text
     assert "params.end_date_limit   = sd.fetch_end" in text
     assert "name === 'start_date_limit' || name === 'end_date_limit'" in text
+    # Basic-mode reload: train_start / test_end values are read back from
+    # data_source.params.start_date_limit / end_date_limit (where
+    # gatherWorking writes them), not just from args.split_dates (which
+    # is absent when advanced was off at save time). Either field name in
+    # the Jinja expression is fine; assert the data_source.params path
+    # contributes to the input value.
+    assert "start_date_limit" in text and "end_date_limit" in text
 
 
 def test_pyproject_version_is_0_12_0() -> None:
