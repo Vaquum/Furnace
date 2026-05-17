@@ -5,6 +5,7 @@ import inspect
 import json
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from .ast_strip import strip_to_definitions
@@ -76,6 +77,34 @@ def main() -> None:
     if data is None:
         data = historical.data  # older Limen versions stored result on instance
     uel = limen.UniversalExperimentLoop(data=data, sfd=sfd)
+
+    # Optional absolute-date split. When `split_dates` is set in args.json,
+    # forward it into the manifest UEL just instantiated. The manifest's
+    # `split_dates` (set here) takes precedence over the SFD's existing
+    # `split_config` in Limen's `_run_prepare_setup` and `compute_test_bars`;
+    # when absent, the SFD's ratio split runs unchanged. Six ISO-8601 strings
+    # come over the wire — fail-loud parse via `datetime.fromisoformat` (the
+    # validate-on-save path in app.py already rejected un-parseable values,
+    # so reaching here with anything other than ISO-8601 is a bug, not a
+    # user-input case).
+    #
+    # Z -> +00:00 (not strip) because the parsed datetimes flow straight
+    # into Polars filter comparisons (limen.split_by_dates issues
+    # `pl.col('datetime') >= literal`); the data column is
+    # `Datetime('ms', 'UTC')`, so a naive Python datetime hits a Polars
+    # SchemaError ("could not evaluate '>=' between Datetime('ms', 'UTC')
+    # and Datetime('μs')"). Keeping the UTC tzinfo on the literal makes
+    # the comparison apples-to-apples.
+    split_dates = sfd_args.get("split_dates")
+    if split_dates:
+        uel.manifest.set_split_dates(
+            datetime.fromisoformat(split_dates["train_start"].replace("Z", "+00:00")),
+            datetime.fromisoformat(split_dates["train_end"].replace("Z", "+00:00")),
+            datetime.fromisoformat(split_dates["val_start"].replace("Z", "+00:00")),
+            datetime.fromisoformat(split_dates["val_end"].replace("Z", "+00:00")),
+            datetime.fromisoformat(split_dates["test_start"].replace("Z", "+00:00")),
+            datetime.fromisoformat(split_dates["test_end"].replace("Z", "+00:00")),
+        )
 
     round_id = round_dir.name
     uel_kwargs = dict(sfd_args["uel_run"])
