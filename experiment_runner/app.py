@@ -817,7 +817,7 @@ def create_app(root: Path) -> FastAPI:
                 tofile=f"r{round_id}/code.py",
                 n=3,
             ))
-        return templates.TemplateResponse(
+        response = templates.TemplateResponse(
             request,
             "round.html",
             {
@@ -831,6 +831,12 @@ def create_app(root: Path) -> FastAPI:
                 "active": st.get("state") in ACTIVE_STATES,
             },
         )
+        # State on this page moves under the user (round transitions, diff
+        # appears, period.json gets written when the run finishes) — never
+        # serve a cached copy. Without this, a tab opened during `running`
+        # keeps showing the running-state HTML until a hard refresh.
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     @app.delete("/experiments/{experiment_id}/rounds/{round_id}")
     def delete_round(experiment_id: str, round_id: str):

@@ -54,6 +54,18 @@ def test_kline_size_display_filter_logic() -> None:
     assert "(60, 'm')" in body
 
 
+def test_round_page_sets_no_store_cache_control() -> None:
+    """The round page's state changes while a user has it open (running
+    → completed, diff appears, period.json gets written). Without
+    Cache-Control: no-store the browser serves the older HTML and the
+    user has to hard-refresh to see the new fields populate."""
+    text = (PKG_DIR / 'app.py').read_text(encoding='utf-8')
+    # The round_page route assigns its response to a name so it can set
+    # headers (rather than returning TemplateResponse(...) inline).
+    assert 'response = templates.TemplateResponse(' in text
+    assert 'response.headers["Cache-Control"] = "no-store"' in text
+
+
 def test_round_html_shows_test_period_and_kline_size() -> None:
     """round.html surfaces the new fields in the status grid and drops
     the old wall-clock Started/Ended labels (they were misleading — the
