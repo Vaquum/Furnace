@@ -168,6 +168,33 @@ def test_experiment_html_has_six_date_inputs_with_advanced_toggle() -> None:
     assert "start_date_limit" in text and "end_date_limit" in text
 
 
+def test_round_page_does_not_reload_loop_on_terminal_no_period() -> None:
+    """The round page used to reload-loop infinitely when opened on a
+    FAILED or TERMINATED round (period.json never written, so the JS
+    guard `NEEDS_REFRESH_ON_TERMINAL = (period is none)` was permanently
+    true; the poll loop's first tick observed the terminal state, fired
+    location.reload(), the new render hit the same condition, reloaded
+    again — locked the round page entirely and blocked the operator
+    from opening any failed round). Tightening the guard with `active
+    and period is none` means the reload only fires when the page was
+    rendered WHILE the round was active (the legitimate "pick up
+    period.json once the run finishes" case). For a terminal-at-render
+    round, active is False, NEEDS_REFRESH_ON_TERMINAL is False, no
+    reload happens.
+
+    Adjacent to S12 because the new split_dates feature encourages
+    iterating on rounds, which means hitting failed rounds (network
+    blips, mis-typed dates) more often — and every failed round would
+    otherwise hang the page."""
+    text = (PKG_DIR / "templates" / "round.html").read_text(encoding="utf-8")
+    # The guard MUST include `active and` so a failed/terminated round
+    # at render time doesn't trigger the reload loop.
+    assert "active and period is none" in text
+    # The plain `(period is none)` form (without the active gate) is the
+    # bug shape; assert we don't ship it.
+    assert "{{ (period is none) | tojson }}" not in text
+
+
 def test_pyproject_version_is_0_12_0() -> None:
     """Conventional Commits feat = minor bump. Version moves 0.11.0 → 0.12.0."""
     data = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))

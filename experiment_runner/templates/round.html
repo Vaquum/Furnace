@@ -100,12 +100,21 @@
 const EXP_ID = {{ experiment_id | tojson }};
 const ROUND_ID = {{ round_id | tojson }};
 const ACTIVE_STATES = new Set(['pending', 'running', 'terminating']);
-// True when the page was rendered before period.json existed (round
-// was still in flight). The poll loop reloads once it observes a
-// terminal state so the user picks up the just-written period.json
-// without a manual refresh. With Cache-Control: no-store on this
-// route, the reload pulls a fresh response (not the cached one).
-const NEEDS_REFRESH_ON_TERMINAL = {{ (period is none) | tojson }};
+// True when the page was rendered while the round was ACTIVE and
+// period.json hadn't been written yet — the poll loop then reloads
+// once the round completes, so the user picks up the just-written
+// period.json without a manual refresh. With Cache-Control: no-store
+// on this route, the reload pulls a fresh response (not the cached one).
+//
+// `active and` is the bug guard: a TERMINATED or FAILED round at page
+// render time has no period.json (run_round.py only writes it on the
+// successful-completion path) AND will never gain one. Without the
+// `active and` clause the poll loop would observe the (already)
+// terminal state on its first tick, fire location.reload(), the new
+// render would again see `period is none`, reload again — infinite
+// loop that locked the round page and blocked the operator from
+// opening any failed round.
+const NEEDS_REFRESH_ON_TERMINAL = {{ (active and period is none) | tojson }};
 const STATS_URL = `/experiments/${EXP_ID}/rounds/${ROUND_ID}/stats`;
 
 document.getElementById('terminate-btn').addEventListener('click', async () => {
