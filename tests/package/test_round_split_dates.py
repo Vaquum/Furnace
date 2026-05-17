@@ -45,11 +45,14 @@ def test_run_round_reads_split_dates_from_args() -> None:
     for key in ("train_start", "train_end", "val_start", "val_end", "test_start", "test_end"):
         # Each key is referenced exactly inside split_dates["..."]
         assert f'split_dates["{key}"]' in text, f"missing read of split_dates[{key!r}]"
-    # The datetime parsing path is the same as _parse_iso in app.py: strip
-    # trailing Z, then datetime.fromisoformat. The slice ships the import.
+    # Parse path: ISO-8601 with the 'Z' suffix rewritten to '+00:00' so the
+    # resulting Python datetimes are UTC-aware. This is *not* `_parse_iso`
+    # (which strips Z to a naive datetime) because the parsed values flow
+    # straight into Polars comparisons against `Datetime('ms', 'UTC')`
+    # data columns; a naive literal would hit a Polars SchemaError.
     assert "from datetime import datetime" in text
     assert "datetime.fromisoformat" in text
-    assert ".rstrip(\"Z\")" in text
+    assert '.replace("Z", "+00:00")' in text
 
 
 def test_app_validates_split_dates() -> None:
