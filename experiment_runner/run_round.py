@@ -82,6 +82,67 @@ def main() -> None:
     uel_kwargs["experiment_name"] = f"{uel_kwargs['experiment_name']}__r{round_id}"
     uel.run(**uel_kwargs)
 
+    # Persist round-level metadata for the round-status section to read.
+    # period.json carries the test-period dates Limen actually used
+    # (sourced from uel._alignment, populated per permutation) plus the
+    # authoritative kline_size derived from the row spacing of the data
+    # the round was fed — not the nominal value from args.json, which
+    # might disagree if the SFD massaged params before fetch.
+    #
+    # Scope this in try/except so a metadata-extraction failure does NOT
+    # propagate and cause the watcher to mark a successful round as
+    # "failed" (the real work — uel.run + results.csv — is already done
+    # by the time we get here). Limen's _alignment is a private
+    # attribute with no stability contract; Polars datetime ops can
+    # raise on unusual data shapes. Both are known-fragile relative to
+    # the core deliverable, so we contain the blast radius.
+    # traceback.print_exc() lands in stderr.log, so the failure is
+    # visible (fail-loud), not swallowed.
+    #
+    # Write is atomic: temp + os.replace, mirroring state.py and the
+    # /working endpoint — the reader (round_page) does exists() then
+    # json.loads(), so a partial-write window would yield JSONDecodeError.
+    try:
+        period = _collect_period_info(data, uel)
+        if period:
+            tmp = round_dir / "period.json.tmp"
+            tmp.write_text(json.dumps(period, indent=2, default=str))
+            os.replace(tmp, round_dir / "period.json")
+    except Exception:
+        import traceback
+        traceback.print_exc()
+
+
+def _collect_period_info(data, uel) -> dict:
+    out: dict = {}
+
+    # Kline size from actual data row spacing. Mode of consecutive
+    # datetime diffs is the bar size in seconds. Skip if the data has no
+    # 'datetime' column (custom SFD with non-time-series data).
+    if "datetime" in data.columns:
+        diffs = data["datetime"].diff().drop_nulls()
+        if len(diffs) > 0:
+            out["kline_size_seconds"] = int(diffs.dt.total_seconds().mode()[0])
+
+    # Test-period bounds across every permutation Limen ran. When
+    # split_config is fixed for the round, all entries match; when it is
+    # swept via round_params, taking min(first) / max(last) gives the
+    # widest window the round's results cover. all_permutations_same_period
+    # tells callers whether the round-level summary is exact or aggregate.
+    alignment = getattr(uel, "_alignment", None) or []
+    if alignment:
+        firsts = [a["first_test_datetime"] for a in alignment if "first_test_datetime" in a]
+        lasts = [a["last_test_datetime"] for a in alignment if "last_test_datetime" in a]
+        if firsts and lasts:
+            out["test_period_start"] = str(min(firsts))
+            out["test_period_end"] = str(max(lasts))
+            out["all_permutations_same_period"] = (
+                len(set(firsts)) == 1 and len(set(lasts)) == 1
+            )
+            out["permutation_count"] = len(alignment)
+
+    return out
+
 
 if __name__ == "__main__":
     main()
