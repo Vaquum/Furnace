@@ -53,9 +53,11 @@
         </div>
       </fieldset>
 
-      <fieldset class="args-group">
-        <legend>split_dates (UTC, optional — leave blank for ratio split)</legend>
-        <div class="row" style="align-items: flex-end;">
+      <details class="collapsible" style="border: none; border-top: 1px solid var(--rule); padding: var(--gap-s) 0 0 0; margin: 0 0 var(--gap-m) 0;"{% if args.split_dates %} open{% endif %}>
+        <summary style="display: flex; font-family: var(--font-mono); font-size: var(--t-micro); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-mute); font-weight: 500;">
+          <span>split_dates (UTC, optional — leave blank for ratio split)</span>
+        </summary>
+        <div class="row" style="align-items: flex-end; margin-top: var(--gap-s);">
           <div class="col field">
             <label for="f-train-start">train_start</label>
             <input id="f-train-start" type="datetime-local" step="60" name="train_start" value="{{ args.split_dates.train_start[:16] if args.split_dates and args.split_dates.train_start else '' }}">
@@ -85,7 +87,7 @@
             <input id="f-test-end" type="datetime-local" step="60" name="test_end" value="{{ args.split_dates.test_end[:16] if args.split_dates and args.split_dates.test_end else '' }}">
           </div>
         </div>
-      </fieldset>
+      </details>
     </form>
   </div>
 
