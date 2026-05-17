@@ -15,6 +15,7 @@ import sys
 import time
 import zipfile
 from datetime import datetime
+from itertools import pairwise
 from pathlib import Path
 
 import polars as pl
@@ -355,6 +356,16 @@ def _validate_args(args: dict) -> None:
     # ValueError otherwise; rejecting here means run_round.py never reaches
     # an unparseable or mis-ordered config. Absent (or empty-dict) -> the
     # SFD's existing split_config runs unchanged.
+    #
+    # Parse with `.replace("Z", "+00:00")` (not `_parse_iso`, which strips Z
+    # to a naive datetime). The reason is mixed-form input: a JS-sent payload
+    # always ends in Z, but a curl caller or direct args.json edit could
+    # carry "+00:00" or another offset. _parse_iso would give us a naive
+    # datetime for the Z form and a tz-aware datetime for the +00:00 form,
+    # and the `a > b` comparison would then raise TypeError ("can't compare
+    # offset-naive and offset-aware datetimes") and surface as a 500. The
+    # replace-then-parse always yields a tz-aware datetime, so the ordering
+    # check compares apples to apples.
     sd = args.get("split_dates")
     if sd is not None and sd != {}:
         if not isinstance(sd, dict):
@@ -363,17 +374,16 @@ def _validate_args(args: dict) -> None:
         missing = [k for k in required if not sd.get(k)]
         if missing:
             raise HTTPException(400, f"split_dates is missing or empty: {missing}")
-        parsed = []
+        parsed: list[tuple[str, datetime]] = []
         for k in required:
+            raw = sd[k]
+            if not isinstance(raw, str):
+                raise HTTPException(400, f"split_dates.{k}={raw!r} is not a string")
             try:
-                parsed.append(_parse_iso(sd[k]))
-            except (TypeError, ValueError) as exc:
-                raise HTTPException(400, f"split_dates.{k}={sd[k]!r} is not a valid ISO-8601 datetime") from exc
-        for (a_name, a), (b_name, b) in zip(
-            list(zip(required, parsed, strict=True))[:-1],
-            list(zip(required, parsed, strict=True))[1:],
-            strict=True,
-        ):
+                parsed.append((k, datetime.fromisoformat(raw.replace("Z", "+00:00"))))
+            except ValueError as exc:
+                raise HTTPException(400, f"split_dates.{k}={raw!r} is not a valid ISO-8601 datetime") from exc
+        for (a_name, a), (b_name, b) in pairwise(parsed):
             if a > b:
                 raise HTTPException(
                     400,

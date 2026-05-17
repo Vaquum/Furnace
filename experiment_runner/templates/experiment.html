@@ -54,35 +54,35 @@
       </fieldset>
 
       <fieldset class="args-group">
-        <legend>split_dates (optional — leave blank for ratio split)</legend>
+        <legend>split_dates (UTC, optional — leave blank for ratio split)</legend>
         <div class="row" style="align-items: flex-end;">
           <div class="col field">
             <label for="f-train-start">train_start</label>
-            <input id="f-train-start" type="datetime-local" name="train_start" value="{{ args.split_dates.train_start[:16] if args.split_dates and args.split_dates.train_start else '' }}">
+            <input id="f-train-start" type="datetime-local" step="60" name="train_start" value="{{ args.split_dates.train_start[:16] if args.split_dates and args.split_dates.train_start else '' }}">
           </div>
           <div class="col field">
             <label for="f-train-end">train_end</label>
-            <input id="f-train-end" type="datetime-local" name="train_end" value="{{ args.split_dates.train_end[:16] if args.split_dates and args.split_dates.train_end else '' }}">
+            <input id="f-train-end" type="datetime-local" step="60" name="train_end" value="{{ args.split_dates.train_end[:16] if args.split_dates and args.split_dates.train_end else '' }}">
           </div>
         </div>
         <div class="row" style="align-items: flex-end;">
           <div class="col field">
             <label for="f-val-start">val_start</label>
-            <input id="f-val-start" type="datetime-local" name="val_start" value="{{ args.split_dates.val_start[:16] if args.split_dates and args.split_dates.val_start else '' }}">
+            <input id="f-val-start" type="datetime-local" step="60" name="val_start" value="{{ args.split_dates.val_start[:16] if args.split_dates and args.split_dates.val_start else '' }}">
           </div>
           <div class="col field">
             <label for="f-val-end">val_end</label>
-            <input id="f-val-end" type="datetime-local" name="val_end" value="{{ args.split_dates.val_end[:16] if args.split_dates and args.split_dates.val_end else '' }}">
+            <input id="f-val-end" type="datetime-local" step="60" name="val_end" value="{{ args.split_dates.val_end[:16] if args.split_dates and args.split_dates.val_end else '' }}">
           </div>
         </div>
         <div class="row" style="align-items: flex-end;">
           <div class="col field">
             <label for="f-test-start">test_start</label>
-            <input id="f-test-start" type="datetime-local" name="test_start" value="{{ args.split_dates.test_start[:16] if args.split_dates and args.split_dates.test_start else '' }}">
+            <input id="f-test-start" type="datetime-local" step="60" name="test_start" value="{{ args.split_dates.test_start[:16] if args.split_dates and args.split_dates.test_start else '' }}">
           </div>
           <div class="col field">
             <label for="f-test-end">test_end</label>
-            <input id="f-test-end" type="datetime-local" name="test_end" value="{{ args.split_dates.test_end[:16] if args.split_dates and args.split_dates.test_end else '' }}">
+            <input id="f-test-end" type="datetime-local" step="60" name="test_end" value="{{ args.split_dates.test_end[:16] if args.split_dates and args.split_dates.test_end else '' }}">
           </div>
         </div>
       </fieldset>
@@ -182,15 +182,26 @@ function gatherSplitDates() {
   // if any field is empty, omit split_dates from the payload entirely so
   // the SFD's existing ratio split (set_split_config) runs unchanged.
   // Server-side _validate_args enforces ordering on the full six.
+  //
+  // Treat the typed values as UTC literally — no local-to-UTC conversion.
+  // The legend says "UTC" so an operator typing 09:00 means 09:00 UTC,
+  // and the data this drives is UTC-native (Bitcoin klines). The
+  // alternative (auto-converting via `new Date().toISOString()`) would
+  // shift the split boundaries by the operator's wall-clock offset, which
+  // is the opposite of what a person pinning data dates wants.
+  //
+  // datetime-local with step="60" emits "YYYY-MM-DDTHH:MM" (length 16) or
+  // "YYYY-MM-DDTHH:MM:SS" (length 19) depending on browser; normalize by
+  // length so the suffix gives "...:SS" exactly once before appending "Z".
   const form = document.getElementById('args-form');
   const names = ['train_start', 'train_end', 'val_start', 'val_end', 'test_start', 'test_end'];
   const values = names.map(n => form.elements[n].value.trim());
   if (values.some(v => !v)) return null;
-  // datetime-local serialises as "YYYY-MM-DDTHH:MM" with no TZ. Append the
-  // Z so the server's _parse_iso (which strips trailing Z) reads the value
-  // as UTC, matching how state.py stores started_at / ended_at.
   const out = {};
-  names.forEach((n, i) => { out[n] = values[i] + ':00Z'; });
+  names.forEach((n, i) => {
+    const v = values[i];
+    out[n] = (v.length === 16 ? v + ':00' : v) + 'Z';
+  });
   return out;
 }
 

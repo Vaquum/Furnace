@@ -57,9 +57,11 @@ def test_run_round_reads_split_dates_from_args() -> None:
 
 def test_app_validates_split_dates() -> None:
     """app.py::_validate_args treats split_dates as optional but, when
-    present, requires all six datetime keys to be non-empty, parseable
-    via _parse_iso (ISO-8601), and in non-decreasing order. The ordering
-    rule mirrors limen.Manifest.set_split_dates so the same contract is
+    present, requires all six datetime keys to be non-empty strings,
+    parseable as ISO-8601 (with `Z` rewritten to `+00:00` so every parse
+    yields a tz-aware datetime — naive vs aware would crash the ordering
+    `>` with TypeError), and in non-decreasing order. The ordering rule
+    mirrors limen.Manifest.set_split_dates so the same contract is
     enforced at the HTTP boundary as inside Limen."""
     text = (PKG_DIR / "app.py").read_text(encoding="utf-8")
     # Validation lives inside _validate_args, not as a standalone helper.
@@ -74,9 +76,15 @@ def test_app_validates_split_dates() -> None:
     # Six required keys named explicitly (so a refactor that drops one trips this).
     for key in ("train_start", "train_end", "val_start", "val_end", "test_start", "test_end"):
         assert f"'{key}'" in body or f'"{key}"' in body, f"split_dates required key {key!r} not validated"
-    # ISO parsing routes through _parse_iso so the format contract is shared
-    # with status.json / period.json date handling.
-    assert "_parse_iso" in body
+    # Parse path normalises Z -> +00:00 so every parsed datetime is tz-aware.
+    # Mixing naive (Z-stripped via _parse_iso) and aware (+00:00) datetimes
+    # would crash the ordering check with TypeError. `ast.unparse` normalises
+    # string-literal quotes, so check the canonicalised single-quoted form.
+    assert "datetime.fromisoformat" in body
+    assert ".replace('Z', '+00:00')" in body
+    # Adjacent-pair ordering check uses itertools.pairwise (no defensive
+    # double-zip).
+    assert "pairwise(" in body
     # Ordering check rejects out-of-order bounds.
     assert "ordering" in body or "must be <=" in body
 
@@ -100,6 +108,17 @@ def test_experiment_html_has_six_split_date_inputs() -> None:
     # The new helper is wired into the existing gatherWorking().
     assert "gatherSplitDates()" in text
     assert "args.split_dates = split_dates" in text
+    # The legend labels the inputs as UTC, so a wall-clock-aware operator
+    # knows the typed value is interpreted as UTC verbatim (no local-to-UTC
+    # conversion in JS). The HTML inputs set step="60" so the browser
+    # cannot submit seconds — datetime-local with step="60" emits
+    # "YYYY-MM-DDTHH:MM" (length 16), which the JS normalises to ":00Z".
+    assert "UTC" in text
+    assert 'step="60"' in text
+    # Length-based suffix normalisation so a stray seconds component
+    # ("YYYY-MM-DDTHH:MM:SS") still serialises to a valid ISO-8601 string
+    # ("...:SSZ") instead of the broken ":SS:00Z" the naive append would emit.
+    assert "v.length === 16" in text
 
 
 def test_pyproject_version_is_0_12_0() -> None:
