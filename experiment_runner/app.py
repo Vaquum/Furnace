@@ -348,6 +348,37 @@ def _validate_args(args: dict) -> None:
     params = args.get("data_source", {}).get("params", {})
     if not isinstance(params, dict):
         raise HTTPException(400, "data_source.params must be an object")
+    # Optional absolute-date split. When present, it must be a complete
+    # object — six ISO-8601 datetimes in non-decreasing order
+    # (train_start <= train_end <= val_start <= val_end <= test_start <= test_end).
+    # The ordering rule mirrors limen.Manifest.set_split_dates, which raises
+    # ValueError otherwise; rejecting here means run_round.py never reaches
+    # an unparseable or mis-ordered config. Absent (or empty-dict) -> the
+    # SFD's existing split_config runs unchanged.
+    sd = args.get("split_dates")
+    if sd is not None and sd != {}:
+        if not isinstance(sd, dict):
+            raise HTTPException(400, "split_dates must be an object")
+        required = ("train_start", "train_end", "val_start", "val_end", "test_start", "test_end")
+        missing = [k for k in required if not sd.get(k)]
+        if missing:
+            raise HTTPException(400, f"split_dates is missing or empty: {missing}")
+        parsed = []
+        for k in required:
+            try:
+                parsed.append(_parse_iso(sd[k]))
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(400, f"split_dates.{k}={sd[k]!r} is not a valid ISO-8601 datetime") from exc
+        for (a_name, a), (b_name, b) in zip(
+            list(zip(required, parsed, strict=True))[:-1],
+            list(zip(required, parsed, strict=True))[1:],
+            strict=True,
+        ):
+            if a > b:
+                raise HTTPException(
+                    400,
+                    f"split_dates ordering: {a_name}={sd[a_name]} must be <= {b_name}={sd[b_name]}",
+                )
 
 
 def _all_experiments(root: Path) -> list[dict]:
