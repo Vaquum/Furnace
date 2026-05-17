@@ -118,13 +118,27 @@ def test_experiment_html_has_six_date_inputs_with_advanced_toggle() -> None:
         assert pattern.search(text), f"type=date input for {key!r} missing"
     # Legend identifies the section as UTC.
     assert "UTC" in text
-    # Advanced toggle: a checkbox that flips .adv-only elements in place.
-    # Default state is unchecked so the form opens with only train_start and
-    # test_end visible regardless of what's in saved args — even saved
+    # Advanced toggle: a checkbox that swaps which layout block is visible.
+    # Default state is unchecked so the form opens with the basic block
+    # (split-basic) regardless of what's in saved args — even saved
     # inner-four values stay hidden until the operator explicitly opts in.
     assert 'id="f-advanced"' in text
-    assert "adv-only" in text
+    assert 'id="split-basic"' in text and 'id="split-advanced"' in text
     assert "function setAdvancedMode" in text
+    # Basic block has train_start + test_end side-by-side on one row, no
+    # form `name` attribute (those duplicates are read-only mirrors of the
+    # advanced-block inputs, kept in sync via data-sync handlers). The
+    # advanced-block inputs are the canonical ones (they carry the form
+    # name attributes that gatherSplitDates reads).
+    assert "data-sync=\"train_start\"" in text
+    assert "data-sync=\"test_end\"" in text
+    assert "function wireSplitDateSync" in text
+    # Scoped style block re-applies the existing input chrome to date
+    # inputs (style.css:417 doesn't include type="date" in its selector,
+    # so without this they'd render with browser-native controls and look
+    # visually disconnected from the rest of the form). The selector is
+    # scoped to .split-dates-field so it doesn't leak.
+    assert ".split-dates-field input[type=\"date\"]" in text
     # Auto-fill helper and listeners exist.
     assert "function addDays(" in text
     assert "f-train-end" in text and "f-val-start" in text
