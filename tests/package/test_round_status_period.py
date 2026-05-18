@@ -43,15 +43,28 @@ def test_run_round_writes_period_json() -> None:
 
 
 def test_round_page_reloads_once_when_period_appears() -> None:
-    """When the page was rendered before period.json existed (round still
-    in flight), the polling loop reloads on the first terminal state so
-    the user picks up the just-written file without a manual refresh.
-    The Cache-Control: no-store header on the route makes the reload
-    fetch fresh HTML, not the cached one."""
+    """When the page was rendered while the round was ACTIVE and
+    period.json hadn't been written yet, the polling loop reloads on
+    the first terminal state so the user picks up the just-written
+    file without a manual refresh. The Cache-Control: no-store header
+    on the route makes the reload fetch fresh HTML, not the cached one.
+
+    The `active and` clause is essential: without it, a TERMINATED or
+    FAILED round at page render time (period.json never written, since
+    run_round.py only writes it on the successful-completion path)
+    would observe (period is none) = True forever, fire location.reload
+    on the first poll tick, the new render would see the same
+    condition, and the page would reload-loop indefinitely — locking
+    the round view and blocking the operator. The gate ensures the
+    reload-on-finish behaviour only activates for the legitimate
+    "page opened while the round was running" case."""
     html = (PKG_DIR / 'templates' / 'round.html').read_text(encoding='utf-8')
     assert 'NEEDS_REFRESH_ON_TERMINAL' in html
-    # The constant is True when period was None at render time.
-    assert '(period is none) | tojson' in html
+    # Gated guard: True only when ACTIVE at page render time AND period
+    # was None. Plain `(period is none)` would re-fire on every terminal-
+    # at-render reload, creating the infinite-reload bug.
+    assert '(active and period is none) | tojson' in html
+    assert '(period is none) | tojson' not in html
     # The loop branches on it before breaking out of the polling cycle.
     assert 'if (NEEDS_REFRESH_ON_TERMINAL) location.reload();' in html
 

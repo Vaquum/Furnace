@@ -2,6 +2,29 @@
 {% block title %}{{ experiment_id }} · experiment_runner{% endblock %}
 {% block content %}
 
+<style>
+/* style.css:417 styles text / number / untyped inputs but not `date`, so
+   browser-native date controls would render visibly smaller and chrome'd
+   different from the rest of the form. Match the existing input style
+   here, scoped to the split_dates section so we don't touch static/**. */
+.split-dates-field input[type="date"] {
+  font-family: var(--font-mono);
+  font-size: var(--t-body);
+  font-weight: 400;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: 0;
+  padding: 8px 10px;
+  width: 100%;
+  outline: none;
+  font-variant-numeric: tabular-nums;
+  transition: border-color var(--motion);
+}
+.split-dates-field input[type="date"]:focus { border-color: var(--accent); }
+</style>
+
+
 <div class="bar">
   <h1 class="atom-title">{{ experiment_id }}</h1>
   <a class="atom-micro" href="/">← all jobs</a>
@@ -53,39 +76,88 @@
         </div>
       </fieldset>
 
-      <fieldset class="args-group">
-        <legend>split_dates (UTC, optional — leave blank for ratio split)</legend>
-        <div class="row" style="align-items: flex-end;">
+      {% set sd = args.split_dates or {} %}
+      {% set dsp = (args.data_source.params if args.data_source else {}) or {} %}
+      {# train_start / test_end have two persisted homes: split_dates (when
+         advanced was checked at save) and data_source.params.start_date_limit
+         / end_date_limit (always, since fetch bounds are auto-derived in
+         gatherWorking). Read the more authoritative source first. #}
+      {% set train_start_val = sd.get('train_start') or dsp.get('start_date_limit', '') %}
+      {% set test_end_val    = sd.get('test_end')    or dsp.get('end_date_limit',   '') %}
+      {# Advanced opens iff the saved split_dates has the inner-four bounds.
+         Without this, opening a page with all-six saved would render advanced
+         off (hiding inner-four), and the very next form change would autosave
+         a payload that drops split_dates entirely (silent loss of train/val/
+         test boundaries). Tying the checkbox to saved data — not to a
+         transient UI preference — matches the operator's expectation that
+         what was saved is what they see on revisit. #}
+      {% set advanced_open = sd.get('train_end') or sd.get('val_start') or sd.get('val_end') or sd.get('test_start') %}
+      <details class="collapsible split-dates-field" style="border: none; border-top: 1px solid var(--rule); padding: var(--gap-s) 0 0 0; margin: 0 0 var(--gap-m) 0;"{% if train_start_val or test_end_val %} open{% endif %}>
+        <summary style="display: flex; font-family: var(--font-mono); font-size: var(--t-micro); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-mute); font-weight: 500;">
+          <span>split_dates (UTC, optional)</span>
+        </summary>
+
+        {# Basic block: two date inputs side-by-side. Matches the rhythm of
+           uel_run's n_permutations + checkboxes row above — narrow values
+           filling the row from the left. Default-visible layout. #}
+        <div id="split-basic" class="row" style="align-items: flex-end; margin-top: var(--gap-s);">
           <div class="col field">
-            <label for="f-train-start">train_start</label>
-            <input id="f-train-start" type="datetime-local" step="60" name="train_start" value="{{ args.split_dates.train_start[:16] if args.split_dates and args.split_dates.train_start else '' }}">
+            <label for="f-basic-train-start">train_start</label>
+            <input id="f-basic-train-start" type="date" data-sync="train_start" value="{{ train_start_val }}">
           </div>
           <div class="col field">
-            <label for="f-train-end">train_end</label>
-            <input id="f-train-end" type="datetime-local" step="60" name="train_end" value="{{ args.split_dates.train_end[:16] if args.split_dates and args.split_dates.train_end else '' }}">
+            <label for="f-basic-test-end">test_end</label>
+            <input id="f-basic-test-end" type="date" data-sync="test_end" value="{{ test_end_val }}">
           </div>
         </div>
-        <div class="row" style="align-items: flex-end;">
-          <div class="col field">
-            <label for="f-val-start">val_start</label>
-            <input id="f-val-start" type="datetime-local" step="60" name="val_start" value="{{ args.split_dates.val_start[:16] if args.split_dates and args.split_dates.val_start else '' }}">
+
+        {# Advanced block: three timeline-grouped rows — train pair, val pair,
+           test pair. Hidden by default when the saved split_dates has only
+           the basic pair (or nothing); shown when the saved data carries the
+           inner-four bounds so a revisiting operator sees what they saved.
+           train_start / test_end values round-trip across the two blocks
+           via the data-sync JS handlers so neither view loses what the
+           other typed. #}
+        <div id="split-advanced" style="display: {% if advanced_open %}block{% else %}none{% endif %};">
+          <div class="row" style="align-items: flex-end; margin-top: var(--gap-s);">
+            <div class="col field">
+              <label for="f-train-start">train_start</label>
+              <input id="f-train-start" type="date" name="train_start" data-sync="train_start" value="{{ train_start_val }}">
+            </div>
+            <div class="col field">
+              <label for="f-train-end">train_end</label>
+              <input id="f-train-end" type="date" name="train_end" value="{{ sd.get('train_end', '') }}">
+            </div>
           </div>
-          <div class="col field">
-            <label for="f-val-end">val_end</label>
-            <input id="f-val-end" type="datetime-local" step="60" name="val_end" value="{{ args.split_dates.val_end[:16] if args.split_dates and args.split_dates.val_end else '' }}">
+          <div class="row" style="align-items: flex-end;">
+            <div class="col field">
+              <label for="f-val-start">val_start</label>
+              <input id="f-val-start" type="date" name="val_start" value="{{ sd.get('val_start', '') }}">
+            </div>
+            <div class="col field">
+              <label for="f-val-end">val_end</label>
+              <input id="f-val-end" type="date" name="val_end" value="{{ sd.get('val_end', '') }}">
+            </div>
+          </div>
+          <div class="row" style="align-items: flex-end;">
+            <div class="col field">
+              <label for="f-test-start">test_start</label>
+              <input id="f-test-start" type="date" name="test_start" value="{{ sd.get('test_start', '') }}">
+            </div>
+            <div class="col field">
+              <label for="f-test-end">test_end</label>
+              <input id="f-test-end" type="date" name="test_end" data-sync="test_end" value="{{ test_end_val }}">
+            </div>
           </div>
         </div>
-        <div class="row" style="align-items: flex-end;">
-          <div class="col field">
-            <label for="f-test-start">test_start</label>
-            <input id="f-test-start" type="datetime-local" step="60" name="test_start" value="{{ args.split_dates.test_start[:16] if args.split_dates and args.split_dates.test_start else '' }}">
-          </div>
-          <div class="col field">
-            <label for="f-test-end">test_end</label>
-            <input id="f-test-end" type="datetime-local" step="60" name="test_end" value="{{ args.split_dates.test_end[:16] if args.split_dates and args.split_dates.test_end else '' }}">
-          </div>
+
+        <div class="row" style="margin-top: var(--gap-s);">
+          <label class="checkbox-row">
+            <input type="checkbox" id="f-advanced"{% if advanced_open %} checked{% endif %}>
+            advanced (train / val / test boundaries)
+          </label>
         </div>
-      </fieldset>
+      </details>
     </form>
   </div>
 
@@ -177,41 +249,94 @@ function gatherDataSourceParams() {
   return params;
 }
 
+const SPLIT_DATE_KEYS = ['train_start', 'train_end', 'val_start', 'val_end', 'test_start', 'test_end'];
+
+function readSplitDateField(name) {
+  // Inputs in the advanced block carry the form `name` attribute. In
+  // basic mode, those inputs are display:none but still in the DOM (and
+  // their values stay in sync with the basic block via data-sync). So
+  // reading by form.elements[name] always gives the canonical value.
+  const el = document.getElementById('args-form').elements[name];
+  return el ? el.value.trim() : '';
+}
+
 function gatherSplitDates() {
-  // Six datetime-local inputs (train_start..test_end). All-or-nothing:
-  // if any field is empty, omit split_dates from the payload entirely so
-  // the SFD's existing ratio split (set_split_config) runs unchanged.
-  // Server-side _validate_args enforces ordering on the full six.
+  // Six <input type="date"> fields. The Advanced toggle picks the mode:
+  //   - basic (advanced unchecked): only train_start / test_end count. They
+  //     set the fetch range (data_source.params.start_date_limit /
+  //     end_date_limit) but split_dates is NEVER sent — the SFD's ratio
+  //     set_split_config divides whatever fetch returned. Any value still
+  //     sitting in the hidden inner-four DOM (from a previous advanced
+  //     session) is ignored deliberately so the saved payload matches what
+  //     the user can see in the form.
+  //   - advanced (checked): if all six are filled, send split_dates so
+  //     Limen partitions on absolute date boundaries
+  //     (Manifest.set_split_dates). If any inner-four is empty, split_dates
+  //     is omitted (degrades to fetch-bounds-only).
   //
-  // Treat the typed values as UTC literally — no local-to-UTC conversion.
-  // The legend says "UTC" so an operator typing 09:00 means 09:00 UTC,
-  // and the data this drives is UTC-native (Bitcoin klines). The
-  // alternative (auto-converting via `new Date().toISOString()`) would
-  // shift the split boundaries by the operator's wall-clock offset, which
-  // is the opposite of what a person pinning data dates wants.
-  //
-  // datetime-local with step="60" emits "YYYY-MM-DDTHH:MM" (length 16) or
-  // "YYYY-MM-DDTHH:MM:SS" (length 19) depending on browser; normalize by
-  // length so the suffix gives "...:SS" exactly once before appending "Z".
-  const form = document.getElementById('args-form');
-  const names = ['train_start', 'train_end', 'val_start', 'val_end', 'test_start', 'test_end'];
-  const values = names.map(n => form.elements[n].value.trim());
-  if (values.some(v => !v)) return null;
-  const out = {};
-  names.forEach((n, i) => {
-    const v = values[i];
-    out[n] = (v.length === 16 ? v + ':00' : v) + 'Z';
+  // Date strings (YYYY-MM-DD) go on the wire; run_round.py expands to UTC
+  // datetimes with end-of-day-inclusive semantics:
+  //   start_*: date 00:00:00 UTC          (beginning of typed day)
+  //   end_*:   (date + 1 day) 00:00:00 UTC (end of typed day, inclusive,
+  //                                         under Limen's half-open windows)
+  // So typing train_end = 2024-12-31 means "include all of Dec 31".
+  const advancedEl = document.getElementById('f-advanced');
+  const advanced = advancedEl && advancedEl.checked;
+  const train_start = readSplitDateField('train_start');
+  const test_end    = readSplitDateField('test_end');
+  if (!advanced) {
+    return {
+      split_dates: null,
+      fetch_start: train_start || null,
+      fetch_end:   test_end    || null,
+    };
+  }
+  const vals = {};
+  SPLIT_DATE_KEYS.forEach(k => { vals[k] = readSplitDateField(k); });
+  const allSix = SPLIT_DATE_KEYS.every(k => vals[k]);
+  return {
+    split_dates: allSix ? vals : null,
+    fetch_start: train_start || null,
+    fetch_end:   test_end    || null,
+  };
+}
+
+function wireSplitDateSync() {
+  // train_start and test_end live in BOTH the basic and advanced blocks
+  // (so each layout can show them in its own arrangement). Sync the
+  // duplicate pair via the data-sync attribute on input — typing in
+  // either block mirrors to the other. Initial values match by template
+  // render, so the sync handler only matters once the operator types.
+  document.querySelectorAll('[data-sync]').forEach(el => {
+    el.addEventListener('input', () => {
+      document.querySelectorAll(`[data-sync="${el.dataset.sync}"]`).forEach(other => {
+        if (other !== el) other.value = el.value;
+      });
+    });
   });
-  return out;
 }
 
 function gatherWorking() {
   const form = document.getElementById('args-form');
+  const params = gatherDataSourceParams();
+  const sd = gatherSplitDates();
+  // train_start / test_end drive the fetch bounds. Set AND clear is the rule
+  // here, not just set — when gatherDataSourceParams falls back to
+  // SAVED_OVERRIDES (e.g. inspect failed / no schema rendered), prior
+  // start_date_limit / end_date_limit values would otherwise persist and
+  // the operator couldn't remove a fetch bound from the UI by clearing the
+  // split-date field. Explicit delete keeps the split-dates UI the single
+  // source of truth in both directions: filling a date sets the bound,
+  // clearing a date removes it.
+  if (sd.fetch_start) params.start_date_limit = sd.fetch_start;
+  else                delete params.start_date_limit;
+  if (sd.fetch_end)   params.end_date_limit   = sd.fetch_end;
+  else                delete params.end_date_limit;
   const args = {
     sfd_identifier: form.elements['sfd_identifier'].value.trim(),
     data_source: {
       method: effectiveMethod(),
-      params: gatherDataSourceParams(),
+      params: params,
     },
     uel_run: {
       experiment_name: EXP_ID,
@@ -221,9 +346,16 @@ function gatherWorking() {
       maintain_details_in_params: form.elements['uel_run.maintain_details_in_params'].checked,
     },
   };
-  const split_dates = gatherSplitDates();
-  if (split_dates) args.split_dates = split_dates;
+  if (sd.split_dates) args.split_dates = sd.split_dates;
   return { args };
+}
+
+function addDays(dateStr, days) {
+  // dateStr is YYYY-MM-DD. Parse as UTC, add days, return YYYY-MM-DD.
+  // Using setUTCDate avoids any local-timezone drift.
+  const d = new Date(dateStr + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
 }
 
 // Step hints per known field — hardcoded knowledge of the data source.
@@ -259,6 +391,11 @@ function renderDataSourceControls(schema) {
   emptyMsg.style.display = 'none';
   for (const param of sig) {
     const name = param.name;
+    // start_date_limit / end_date_limit are derived from the split_dates
+    // fieldset (train_start / test_end). One source of truth — the user
+    // sets dates once in the split-dates UI and the fetch bounds follow.
+    // gatherWorking() writes both keys into data_source.params on save.
+    if (name === 'start_date_limit' || name === 'end_date_limit') continue;
     const ann = (param.annotation || '').toLowerCase();
     const isBool = /\bbool\b/.test(ann);
     const isInt = /\bint\b/.test(ann) && !/\bfloat\b/.test(ann);
@@ -531,6 +668,44 @@ async function start() {
 
 document.getElementById('save-btn').addEventListener('click', save);
 document.getElementById('start-btn').addEventListener('click', start);
+
+// split_dates Advanced toggle — swap which layout block is visible.
+// Basic shows ONE row with train_start + test_end side-by-side (matches
+// the visual rhythm of uel_run's n_permutations + checkboxes row above).
+// Advanced shows three timeline-grouped rows: [train_start, train_end],
+// [val_start, val_end], [test_start, test_end] — every split's start and
+// end together, no more train_start adjacent to test_end. The duplicate
+// train_start / test_end inputs across the two blocks stay synced via
+// wireSplitDateSync().
+function setAdvancedMode(on) {
+  document.getElementById('split-basic').style.display = on ? 'none' : '';
+  document.getElementById('split-advanced').style.display = on ? '' : 'none';
+}
+document.getElementById('f-advanced').addEventListener('change', e => {
+  setAdvancedMode(e.target.checked);
+});
+wireSplitDateSync();
+// Sync the panel visibility to the initial checkbox state at page load.
+// The template renders f-advanced checked when the saved split_dates has
+// the inner-four bounds, so the advanced panel must show on first paint
+// — otherwise the operator sees no inputs but the saved data is still
+// in the hidden DOM, and the next autosave would drop the boundaries.
+setAdvancedMode(document.getElementById('f-advanced').checked);
+
+// Auto-fill val boundaries when the adjacent split end / start is entered.
+// For non-overlapping contiguous splits with end-of-day-inclusive dates:
+//   val_start = train_end + 1 day  (day after train ends)
+//   val_end   = test_start - 1 day (day before test starts)
+// Only fills when val_start / val_end is currently empty — the user can
+// override either to leave a gap (those rows are intentionally dropped).
+document.getElementById('f-train-end').addEventListener('change', e => {
+  const vs = document.getElementById('f-val-start');
+  if (!vs.value && e.target.value) vs.value = addDays(e.target.value, 1);
+});
+document.getElementById('f-test-start').addEventListener('change', e => {
+  const ve = document.getElementById('f-val-end');
+  if (!ve.value && e.target.value) ve.value = addDays(e.target.value, -1);
+});
 
 // Delete-round handler: event-delegated on document.body because the rounds
 // tbody is replaced on every poll cycle, so per-button listeners would go
