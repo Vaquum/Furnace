@@ -84,6 +84,14 @@
          gatherWorking). Read the more authoritative source first. #}
       {% set train_start_val = sd.get('train_start') or dsp.get('start_date_limit', '') %}
       {% set test_end_val    = sd.get('test_end')    or dsp.get('end_date_limit',   '') %}
+      {# Advanced opens iff the saved split_dates has the inner-four bounds.
+         Without this, opening a page with all-six saved would render advanced
+         off (hiding inner-four), and the very next form change would autosave
+         a payload that drops split_dates entirely (silent loss of train/val/
+         test boundaries). Tying the checkbox to saved data — not to a
+         transient UI preference — matches the operator's expectation that
+         what was saved is what they see on revisit. #}
+      {% set advanced_open = sd.get('train_end') or sd.get('val_start') or sd.get('val_end') or sd.get('test_start') %}
       <details class="collapsible split-dates-field" style="border: none; border-top: 1px solid var(--rule); padding: var(--gap-s) 0 0 0; margin: 0 0 var(--gap-m) 0;"{% if train_start_val or test_end_val %} open{% endif %}>
         <summary style="display: flex; font-family: var(--font-mono); font-size: var(--t-micro); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-mute); font-weight: 500;">
           <span>split_dates (UTC, optional)</span>
@@ -104,11 +112,13 @@
         </div>
 
         {# Advanced block: three timeline-grouped rows — train pair, val pair,
-           test pair. Hidden by default. When the advanced toggle is on,
-           split-basic hides and this shows; train_start / test_end values
-           round-trip across the two blocks via the data-sync JS handlers
-           so neither view loses what the other typed. #}
-        <div id="split-advanced" style="display: none;">
+           test pair. Hidden by default when the saved split_dates has only
+           the basic pair (or nothing); shown when the saved data carries the
+           inner-four bounds so a revisiting operator sees what they saved.
+           train_start / test_end values round-trip across the two blocks
+           via the data-sync JS handlers so neither view loses what the
+           other typed. #}
+        <div id="split-advanced" style="display: {% if advanced_open %}block{% else %}none{% endif %};">
           <div class="row" style="align-items: flex-end; margin-top: var(--gap-s);">
             <div class="col field">
               <label for="f-train-start">train_start</label>
@@ -143,7 +153,7 @@
 
         <div class="row" style="margin-top: var(--gap-s);">
           <label class="checkbox-row">
-            <input type="checkbox" id="f-advanced">
+            <input type="checkbox" id="f-advanced"{% if advanced_open %} checked{% endif %}>
             advanced (train / val / test boundaries)
           </label>
         </div>
@@ -310,12 +320,18 @@ function gatherWorking() {
   const form = document.getElementById('args-form');
   const params = gatherDataSourceParams();
   const sd = gatherSplitDates();
-  // train_start / test_end always drive the fetch bounds when set, regardless
-  // of whether the full six split_dates are filled. Overriding here (rather
-  // than letting the user double-type) is why start_date_limit and
-  // end_date_limit are filtered out of the data-source dynamic controls.
+  // train_start / test_end drive the fetch bounds. Set AND clear is the rule
+  // here, not just set — when gatherDataSourceParams falls back to
+  // SAVED_OVERRIDES (e.g. inspect failed / no schema rendered), prior
+  // start_date_limit / end_date_limit values would otherwise persist and
+  // the operator couldn't remove a fetch bound from the UI by clearing the
+  // split-date field. Explicit delete keeps the split-dates UI the single
+  // source of truth in both directions: filling a date sets the bound,
+  // clearing a date removes it.
   if (sd.fetch_start) params.start_date_limit = sd.fetch_start;
+  else                delete params.start_date_limit;
   if (sd.fetch_end)   params.end_date_limit   = sd.fetch_end;
+  else                delete params.end_date_limit;
   const args = {
     sfd_identifier: form.elements['sfd_identifier'].value.trim(),
     data_source: {
@@ -669,6 +685,12 @@ document.getElementById('f-advanced').addEventListener('change', e => {
   setAdvancedMode(e.target.checked);
 });
 wireSplitDateSync();
+// Sync the panel visibility to the initial checkbox state at page load.
+// The template renders f-advanced checked when the saved split_dates has
+// the inner-four bounds, so the advanced panel must show on first paint
+// — otherwise the operator sees no inputs but the saved data is still
+// in the hidden DOM, and the next autosave would drop the boundaries.
+setAdvancedMode(document.getElementById('f-advanced').checked);
 
 // Auto-fill val boundaries when the adjacent split end / start is entered.
 // For non-overlapping contiguous splits with end-of-day-inclusive dates:

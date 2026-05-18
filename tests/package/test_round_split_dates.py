@@ -119,12 +119,26 @@ def test_experiment_html_has_six_date_inputs_with_advanced_toggle() -> None:
     # Legend identifies the section as UTC.
     assert "UTC" in text
     # Advanced toggle: a checkbox that swaps which layout block is visible.
-    # Default state is unchecked so the form opens with the basic block
-    # (split-basic) regardless of what's in saved args — even saved
-    # inner-four values stay hidden until the operator explicitly opts in.
+    # The checkbox state TRACKS saved data: checked when args.split_dates
+    # has any of the inner-four bounds (train_end / val_start / val_end /
+    # test_start), unchecked otherwise. The earlier "always unchecked at
+    # render" design caused silent data loss — a page reload on an
+    # all-six-saved experiment would render advanced off, hide the
+    # inner-four populated inputs, and the next autosave would drop
+    # split_dates entirely because gatherSplitDates only reads inner-four
+    # in advanced mode. Tying the checkbox to saved data keeps "what the
+    # operator sees" aligned with "what is saved" across reloads.
     assert 'id="f-advanced"' in text
     assert 'id="split-basic"' in text and 'id="split-advanced"' in text
     assert "function setAdvancedMode" in text
+    # The checkbox carries `{% if advanced_open %}checked{% endif %}`
+    # where advanced_open is derived from saved inner-four bounds; assert
+    # both the conditional checked and the derivation key.
+    assert '{% if advanced_open %} checked{% endif %}' in text
+    assert "set advanced_open" in text
+    # Page-load sync: setAdvancedMode runs once after the checkbox is in
+    # the DOM so the panel visibility matches the rendered checked state.
+    assert "setAdvancedMode(document.getElementById('f-advanced').checked)" in text
     # Basic block has train_start + test_end side-by-side on one row, no
     # form `name` attribute (those duplicates are read-only mirrors of the
     # advanced-block inputs, kept in sync via data-sync handlers). The
@@ -155,9 +169,15 @@ def test_experiment_html_has_six_date_inputs_with_advanced_toggle() -> None:
     # gatherWorking writes fetch bounds into data_source.params so
     # start_date_limit / end_date_limit stay in sync with train_start /
     # test_end — these two keys are also filtered out of the dynamic
-    # data-source render so the user has one source of truth.
+    # data-source render so the user has one source of truth. Set AND
+    # clear: when the split-date field is empty, gatherWorking explicitly
+    # deletes the corresponding fetch bound key (without this, prior
+    # values would persist via SAVED_OVERRIDES fallback and the operator
+    # couldn't clear a fetch bound from the UI by clearing the date).
     assert "params.start_date_limit = sd.fetch_start" in text
     assert "params.end_date_limit   = sd.fetch_end" in text
+    assert "delete params.start_date_limit" in text
+    assert "delete params.end_date_limit" in text
     assert "name === 'start_date_limit' || name === 'end_date_limit'" in text
     # Basic-mode reload: train_start / test_end values are read back from
     # data_source.params.start_date_limit / end_date_limit (where
