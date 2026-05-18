@@ -1108,19 +1108,43 @@ def create_app(root: Path) -> FastAPI:
     return app
 
 
+_BACKTEST_LEDGER_COLUMNS: tuple[str, ...] = (
+    # 22-column decoder-level metric ledger from Limen PR #520 (>= 3.2.1).
+    # 7 distribution metrics x p5/p50/p95 + 1 scalar cvar_95.
+    # All ship into the CSV with the `backtest_` prefix.
+    "backtest_edge_per_signal_bps_p5",
+    "backtest_edge_per_signal_bps_p50",
+    "backtest_edge_per_signal_bps_p95",
+    "backtest_trade_pnl_net_bps_p5",
+    "backtest_trade_pnl_net_bps_p50",
+    "backtest_trade_pnl_net_bps_p95",
+    "backtest_cost_drag_bps_p5",
+    "backtest_cost_drag_bps_p50",
+    "backtest_cost_drag_bps_p95",
+    "backtest_rolling_return_net_bps_p5",
+    "backtest_rolling_return_net_bps_p50",
+    "backtest_rolling_return_net_bps_p95",
+    "backtest_return_on_exposure_p5",
+    "backtest_return_on_exposure_p50",
+    "backtest_return_on_exposure_p95",
+    "backtest_drawdown_depth_bps_p5",
+    "backtest_drawdown_depth_bps_p50",
+    "backtest_drawdown_depth_bps_p95",
+    "backtest_drawdown_duration_days_p5",
+    "backtest_drawdown_duration_days_p50",
+    "backtest_drawdown_duration_days_p95",
+    "backtest_cvar_95_return_bps",
+)
+
 _RESULTS_COLUMNS: tuple[str, ...] = (
     "id",
-    "backtest_trades_count",
     "precision",
     "recall",
     "confusion_tp_mean_return_pct",
     "confusion_fp_mean_return_pct",
-    "backtest_total_return_net_pct",
-    "backtest_sharpe_per_bar",
-    "backtest_max_drawdown_pct",
-    "backtest_mean_kelly_pct",
+    *_BACKTEST_LEDGER_COLUMNS,
 )
-_RESULTS_INT_COLS: frozenset[str] = frozenset({"id", "backtest_trades_count"})
+_RESULTS_INT_COLS: frozenset[str] = frozenset({"id"})
 
 
 def _display_label(col: str) -> str:
@@ -1233,16 +1257,17 @@ def _compute_round_stats(round_dir: Path) -> dict:
 
     df = pl.read_csv(csv_path, infer_schema_length=200)
 
+    # Same metric set as the results table (minus `id`). The round-status
+    # panel is the live counterpart of the results table: each metric's
+    # cross-permutation p5/p25/p50/p75/p95 are computed on whatever rows
+    # the CSV has at poll time, so the operator watches the distribution
+    # firm up as permutations complete.
     desired = (
-        "backtest_trades_count",
         "precision",
         "recall",
         "confusion_tp_mean_return_pct",
         "confusion_fp_mean_return_pct",
-        "backtest_total_return_net_pct",
-        "backtest_sharpe_per_bar",
-        "backtest_max_drawdown_pct",
-        "backtest_mean_kelly_pct",
+        *_BACKTEST_LEDGER_COLUMNS,
     )
     for col in desired:
         if col not in df.columns:
@@ -1265,22 +1290,23 @@ def _compute_round_stats(round_dir: Path) -> dict:
 
 # ---- Cross-round search ---------------------------------------------------
 
+# Search-filter metrics mirror the results table / round-status set so all
+# three surfaces stay in sync. The four confusion / precision columns plus
+# the 22 backtest ledger columns are all individually filterable via range
+# sliders on search.html.
 _SEARCH_METRICS: tuple[str, ...] = (
-    "trade_per_bar",
-    "return_per_bar",
-    "kelly_per_bar",
-    "sharpe_per_bar",
+    "precision",
+    "recall",
+    "confusion_tp_mean_return_pct",
+    "confusion_fp_mean_return_pct",
+    *_BACKTEST_LEDGER_COLUMNS,
 )
 
-_SEARCH_REQUIRED_COLS: frozenset[str] = frozenset({
-    "id",
-    "backtest_bars_total",
-    "backtest_bars_in_market_pct",
-    "backtest_trades_count",
-    "backtest_total_return_net_pct",
-    "backtest_mean_kelly_pct",
-    "backtest_sharpe_per_bar",
-})
+# A round is indexable only when its CSV carries every search metric — any
+# missing column means a pre-Limen-3.2.1 round (old backtest scalar surface
+# that PR #520 retired) or a partial run. Those rounds are skipped from the
+# index until they are re-run on a Limen that emits the new ledger.
+_SEARCH_REQUIRED_COLS: frozenset[str] = frozenset({"id", *_SEARCH_METRICS})
 
 
 def _ensure_round_index(round_dir: Path) -> Path | None:
@@ -1306,21 +1332,18 @@ def _ensure_round_index(round_dir: Path) -> Path | None:
         return None
 
     sha = hashlib.sha256(code_path.read_bytes()).hexdigest()
-    bt = pl.col("backtest_bars_total").cast(pl.Float64)
 
+    # No more per-bar normalization — the new backtest ledger emits metrics
+    # already scaled to per-signal / per-trade / per-day / fraction units,
+    # so the indexer just reads each metric column straight from the CSV.
     out = (
         df.lazy()
-        .with_columns(bt.alias("_bt"))
-        .filter(pl.col("_bt") > 0)
         .select([
             pl.col("id").cast(pl.Int64).alias("permutation_id"),
             pl.lit(round_dir.parent.parent.name).alias("experiment_id"),
             pl.lit(round_dir.name).alias("round_id"),
             pl.lit(sha).alias("code_sha256"),
-            (pl.col("backtest_trades_count").cast(pl.Float64) / pl.col("_bt")).alias("trade_per_bar"),
-            (pl.col("backtest_total_return_net_pct").cast(pl.Float64) / pl.col("_bt")).alias("return_per_bar"),
-            (pl.col("backtest_mean_kelly_pct").cast(pl.Float64, strict=False) / pl.col("_bt")).alias("kelly_per_bar"),
-            pl.col("backtest_sharpe_per_bar").cast(pl.Float64, strict=False).alias("sharpe_per_bar"),
+            *[pl.col(m).cast(pl.Float64, strict=False).alias(m) for m in _SEARCH_METRICS],
         ])
         .collect()
     )
