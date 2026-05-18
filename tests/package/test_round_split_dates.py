@@ -195,25 +195,28 @@ def test_round_page_does_not_reload_loop_on_terminal_no_period() -> None:
     assert "{{ (period is none) | tojson }}" not in text
 
 
-def test_pyproject_version_is_0_12_0() -> None:
-    """Conventional Commits feat = minor bump. Version moves 0.11.0 → 0.12.0."""
+def test_pyproject_version_is_0_13_0() -> None:
+    """Conventional Commits feat = minor bump. Version moves 0.12.0 → 0.13.0
+    for the post-S12 reshape (date-only inputs, end-of-day semantics,
+    advanced toggle, auto-fill val, derived fetch range, visual polish,
+    reload-loop fix)."""
     data = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    assert data["project"]["version"] == "0.12.0"
+    assert data["project"]["version"] == "0.13.0"
 
 
-def test_changelog_has_v0_12_0_entry() -> None:
+def test_changelog_has_v0_13_0_entry() -> None:
     """A CHANGELOG header for the new version must exist with at least
     one content line so the version-gate is satisfied."""
     text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     lines = text.splitlines()
-    header_idx = next((i for i, ln in enumerate(lines) if ln.strip() == "# v0.12.0"), -1)
-    assert header_idx != -1, "missing '# v0.12.0' header in CHANGELOG.md"
+    header_idx = next((i for i, ln in enumerate(lines) if ln.strip() == "# v0.13.0"), -1)
+    assert header_idx != -1, "missing '# v0.13.0' header in CHANGELOG.md"
     next_header_idx = next(
         (i for i in range(header_idx + 1, len(lines)) if lines[i].startswith("# v")),
         len(lines),
     )
     content = [ln for ln in lines[header_idx + 1 : next_header_idx] if ln.strip()]
-    assert content, "v0.12.0 CHANGELOG entry is empty"
+    assert content, "v0.13.0 CHANGELOG entry is empty"
 
 
 def test_args_json_split_dates_roundtrip_shape() -> None:
