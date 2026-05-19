@@ -180,6 +180,36 @@ def test_search_required_cols_demand_every_metric_plus_id() -> None:
            "frozenset({'id', *_SEARCH_METRICS})" in text
 
 
+def test_ensure_round_index_invalidates_stale_schema_parquets() -> None:
+    """The metric set changed in S14 (the `*_per_bar` derived columns from
+    the prior search index are gone). Any `.index.parquet` written by the
+    old code carries that old schema; the new `_compute_search_bounds`
+    selecting `pl.col("precision")` would crash with `ColumnNotFoundError`
+    on a stale cache hit. Validate the cached parquet's schema against
+    the current `_SEARCH_REQUIRED_COLS` before trusting the mtime — if
+    the schema doesn't carry every required metric, fall through and
+    rebuild from the CSV."""
+    text = (PKG_DIR / "app.py").read_text(encoding="utf-8")
+    # The schema check must guard the cache-hit return so an mtime-fresh
+    # but stale-schema parquet is rejected.
+    assert "pl.read_parquet_schema(idx_path)" in text
+    assert "_SEARCH_REQUIRED_COLS.issubset(pl.read_parquet_schema" in text
+
+
+def test_ensure_round_index_excludes_no_signal_permutations() -> None:
+    """The prior code's `.filter(pl.col("_bt") > 0)` did double duty:
+    (a) guard per-bar divisions from div-by-zero; (b) exclude permutations
+    whose backtest never ran (zero-signal / errored). The ledger refactor
+    obsoletes (a) but (b) still applies — Limen >= 3.2.1 writes NaN ledger
+    columns for permutations the backtest skipped, and NaN rows in
+    `.index.parquet` would have to be coped with by the search UI's range
+    sliders. Use `edge_per_signal_bps_p50` as the canary: a permutation
+    with no tradable signals leaves every ledger percentile NaN."""
+    text = (PKG_DIR / "app.py").read_text(encoding="utf-8")
+    # The explicit non-null guard replaces the dropped `_bt > 0` filter.
+    assert "filter(pl.col(\"backtest_edge_per_signal_bps_p50\").is_not_null())" in text
+
+
 def test_ensure_round_index_no_longer_normalizes_by_bars_total() -> None:
     """The old indexer divided several metrics by `backtest_bars_total`
     to derive `*_per_bar` proxies for cross-round comparison. The new

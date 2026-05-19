@@ -1324,7 +1324,22 @@ def _ensure_round_index(round_dir: Path) -> Path | None:
         return None
 
     idx_path = round_dir / ".index.parquet"
-    if idx_path.exists() and idx_path.stat().st_mtime >= csv_path.stat().st_mtime:
+    # Cache validity = mtime fresh AND schema matches the current
+    # _SEARCH_METRICS contract. The schema check is essential because
+    # the metric set itself changed (PR #520 ledger retired the
+    # `*_per_bar` derived metrics in favour of pre-scaled ledger
+    # columns); any `.index.parquet` written by the prior code carries
+    # the old schema and would crash `_compute_search_bounds` with
+    # `ColumnNotFoundError` on `pl.col("precision")`. Falling through
+    # rebuilds the parquet from the CSV — if the CSV still has only
+    # old columns the `_SEARCH_REQUIRED_COLS.issubset(df.columns)`
+    # check below skips the round; if it has the new ledger we get a
+    # fresh parquet on the new schema.
+    if (
+        idx_path.exists()
+        and idx_path.stat().st_mtime >= csv_path.stat().st_mtime
+        and _SEARCH_REQUIRED_COLS.issubset(pl.read_parquet_schema(idx_path))
+    ):
         return idx_path
 
     df = pl.read_csv(csv_path, infer_schema_length=200)
@@ -1336,8 +1351,21 @@ def _ensure_round_index(round_dir: Path) -> Path | None:
     # No more per-bar normalization — the new backtest ledger emits metrics
     # already scaled to per-signal / per-trade / per-day / fraction units,
     # so the indexer just reads each metric column straight from the CSV.
+    #
+    # The prior code's `.filter(pl.col("_bt") > 0)` was doing two jobs:
+    # (a) guard the per-bar divisions from div-by-zero — gone with the
+    # ledger refactor; (b) exclude permutations whose backtest never ran
+    # (zero-signal / errored runs). Job (b) still applies — Limen ≥3.2.1
+    # writes NaN ledger columns for permutations the backtest skipped, and
+    # we don't want NaN rows polluting `.index.parquet` (search range
+    # sliders would have to cope with nulls, and the round-status panel
+    # just above already drops NaN via `drop_nulls().drop_nans()` — staying
+    # symmetric with it). Use `edge_per_signal_bps_p50` as the canary: if
+    # a permutation produced no tradable signals, every ledger percentile
+    # is NaN; if it produced even one, p50 is finite.
     out = (
         df.lazy()
+        .filter(pl.col("backtest_edge_per_signal_bps_p50").is_not_null())
         .select([
             pl.col("id").cast(pl.Int64).alias("permutation_id"),
             pl.lit(round_dir.parent.parent.name).alias("experiment_id"),
