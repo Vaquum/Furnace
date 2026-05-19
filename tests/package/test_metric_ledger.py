@@ -48,6 +48,32 @@ _LEDGER_BARE: tuple[str, ...] = (
 )
 
 
+def _assignment_value(node: ast.AST, name: str) -> ast.AST | None:
+    """If `node` assigns the module-scope constant `name`, return its value
+    expression. Handles both plain (`x = ...`) and annotated (`x: T = ...`)
+    forms. Returns None for any other node."""
+    if isinstance(node, ast.Assign):
+        for t in node.targets:
+            if isinstance(t, ast.Name) and t.id == name:
+                return node.value
+        return None
+    if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+        if node.target.id == name and node.value is not None:
+            return node.value
+    return None
+
+
+def _tuple_element_label(elt: ast.AST, name: str) -> str:
+    """Convert a tuple-literal element to its asserting form: a string
+    literal returns itself; a `*NAME` starred-name returns `*NAME`.
+    Anything else raises so a test failure points at the bad element."""
+    if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+        return elt.value
+    if isinstance(elt, ast.Starred) and isinstance(elt.value, ast.Name):
+        return f"*{elt.value.id}"
+    raise AssertionError(f"{name} has non-string element: {ast.dump(elt)}")
+
+
 def _module_const(text: str, name: str) -> tuple:
     """Parse app.py and return the tuple literal assigned to `name`.
     Handles both plain assignments (`x = (...)`) and annotated ones
@@ -57,27 +83,12 @@ def _module_const(text: str, name: str) -> tuple:
     Raises AssertionError if missing or not a tuple literal."""
     tree = ast.parse(text)
     for node in ast.walk(tree):
-        value = None
-        if isinstance(node, ast.Assign):
-            targets = [t for t in node.targets if isinstance(t, ast.Name)]
-            if any(t.id == name for t in targets):
-                value = node.value
-        elif isinstance(node, ast.AnnAssign):
-            if isinstance(node.target, ast.Name) and node.target.id == name and node.value is not None:
-                value = node.value
+        value = _assignment_value(node, name)
         if value is None:
             continue
         if not isinstance(value, ast.Tuple):
             raise AssertionError(f"{name} is not a tuple literal")
-        out: list[str] = []
-        for elt in value.elts:
-            if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
-                out.append(elt.value)
-            elif isinstance(elt, ast.Starred) and isinstance(elt.value, ast.Name):
-                out.append(f"*{elt.value.id}")
-            else:
-                raise AssertionError(f"{name} has non-string element: {ast.dump(elt)}")
-        return tuple(out)
+        return tuple(_tuple_element_label(elt, name) for elt in value.elts)
     raise AssertionError(f"{name} not defined at module scope in app.py")
 
 
