@@ -1,34 +1,11 @@
 {% extends "base.html" %}
 {% block title %}{{ experiment_id }} · experiment_runner{% endblock %}
+{% block controls %}
+  <a class="topbar-link" href="/">← jobs</a>
+  <span class="topbar-id">{{ experiment_id }}</span>
+{% endblock %}
+{% block meta %}{{ rounds | length }} round{{ '' if rounds | length == 1 else 's' }}{% endblock %}
 {% block content %}
-
-<style>
-/* style.css:417 styles text / number / untyped inputs but not `date`, so
-   browser-native date controls would render visibly smaller and chrome'd
-   different from the rest of the form. Match the existing input style
-   here, scoped to the split_dates section so we don't touch static/**. */
-.split-dates-field input[type="date"] {
-  font-family: var(--font-mono);
-  font-size: var(--t-body);
-  font-weight: 400;
-  color: var(--ink);
-  background: var(--paper);
-  border: 1px solid var(--rule);
-  border-radius: 0;
-  padding: 8px 10px;
-  width: 100%;
-  outline: none;
-  font-variant-numeric: tabular-nums;
-  transition: border-color var(--motion);
-}
-.split-dates-field input[type="date"]:focus { border-color: var(--accent); }
-</style>
-
-
-<div class="bar">
-  <h1 class="atom-title">{{ experiment_id }}</h1>
-  <a class="atom-micro" href="/">← all jobs</a>
-</div>
 
 <div id="conflict-banner" class="banner"></div>
 

@@ -1,15 +1,11 @@
 {% extends "base.html" %}
 {% block title %}{{ experiment_id }} · code · experiment_runner{% endblock %}
-{% block meta %}code editor{% endblock %}
+{% block controls %}<span class="topbar-id">{{ experiment_id }} <span class="sub">/ code</span></span>{% endblock %}
+{% block meta %}
+  <button type="button" class="bar-icon" aria-label="Close editor"
+          onclick="if (history.length > 1) { history.back(); } else { location.assign('/experiments/{{ experiment_id }}'); }">✕</button>
+{% endblock %}
 {% block content %}
-
-<div class="bar">
-  <div>
-    <p class="atom-micro" style="margin: 0 0 var(--gap-s) 0;">{{ experiment_id }} / CODE</p>
-    <h1 class="atom-title">Code</h1>
-  </div>
-  <a class="atom-micro" href="/experiments/{{ experiment_id }}">← experiment</a>
-</div>
 
 <div class="atom-code-editor"
      data-experiment-id="{{ experiment_id }}"

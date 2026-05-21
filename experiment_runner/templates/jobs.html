@@ -1,58 +1,151 @@
 {% extends "base.html" %}
-{% block title %}Jobs · experiment_runner{% endblock %}
+{% block title %}experiment_runner{% endblock %}
 {% set total_rounds = experiments | sum(attribute='round_count') %}
 {% block meta %}{{ experiments | length }} experiments · {{ total_rounds }} rounds{% endblock %}
+{% block controls %}
+  <button type="button" id="open-search" class="bar-icon" title="Search permutations" aria-label="Search permutations">
+    <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+      <circle cx="7" cy="7" r="4.25"></circle>
+      <line x1="10.2" y1="10.2" x2="13.75" y2="13.75"></line>
+    </svg>
+  </button>
+  <button type="button" id="open-create" class="bar-icon" title="New experiment or round" aria-label="New experiment or round">+</button>
+{% endblock %}
 {% block content %}
 
-<div class="bar">
-  <h1 class="atom-title">Experiments</h1>
-  <a class="atom-micro" href="/search">search →</a>
-</div>
+<table class="experiments-table">
+  <thead>
+    <tr>
+      <th class="col-chevron"></th>
+      <th class="col-id">Experiment</th>
+      <th class="num col-metric">Trade PnL p5</th>
+      <th class="num col-metric">Trade PnL p50</th>
+      <th class="num col-metric">Trade PnL p95</th>
+      <th class="num col-metric">Drawdown p5</th>
+      <th class="num col-metric">Drawdown p50</th>
+      <th class="num col-metric">Drawdown p95</th>
+      <th class="col-time">Latest activity</th>
+      <th class="col-status">Last status</th>
+      <th class="col-actions"></th>
+    </tr>
+  </thead>
+  <tbody id="experiments-rows"
+         data-poll-url="/_partials/jobs"
+         data-poll-target="#experiments-rows">
+    {% include "_jobs_rows.html" %}
+  </tbody>
+</table>
 
-<div class="section section-narrow">
-  <h2 class="atom-heading"><span class="numeral">01</span><span>New experiment</span></h2>
-  <form method="post" action="/experiments" class="row">
-    <div class="col">
-      <input id="new-name" name="name" type="text" required placeholder="Experiment name…" autocomplete="off">
+<div class="modal" id="create-modal" aria-hidden="true">
+  <div class="modal-panel" role="dialog" aria-label="Create experiment or round">
+    <div class="modal-head">
+      <span id="create-title">New</span>
+      <button type="button" class="icon-close" id="create-close" aria-label="Close">✕</button>
     </div>
-    <div>
-      <button type="submit" class="primary">Create</button>
+    <div class="modal-body">
+      <div class="create-grid">
+        <div class="create-target" id="create-target">
+          <p class="create-group-label">New experiment</p>
+          <label class="target-option">
+            <input type="radio" name="create-target" value="__new__" checked>
+            <span>Create a new experiment</span>
+          </label>
+          <input type="text" id="m-new-name" class="target-new-name" placeholder="Experiment name…" autocomplete="off">
+
+          <p class="create-group-label spaced">Continue an experiment</p>
+          {% for exp in experiments %}
+          <label class="target-option">
+            <input type="radio" name="create-target" value="{{ exp.id }}">
+            <span>{{ exp.id }}</span>
+          </label>
+          {% endfor %}
+          {% if not experiments %}
+          <p class="atom-small" style="color: var(--ink-mute);">No experiments yet.</p>
+          {% endif %}
+        </div>
+
+        <div class="create-args">
+          <form id="m-args-form" autocomplete="off">
+            <div class="m-field">
+              <label for="m-sfd">sfd_identifier</label>
+              <input id="m-sfd" type="text" placeholder="MySFDClass">
+            </div>
+
+            {# Data-source fieldset stays hidden until an existing experiment's
+               code is inspected and found to declare overridable params. #}
+            <fieldset class="args-group" id="m-ds-group" hidden>
+              <legend>data source</legend>
+              <div id="m-ds-controls" class="m-ds-grid"></div>
+            </fieldset>
+
+            <fieldset class="args-group">
+              <legend>uel_run</legend>
+              <div class="m-field">
+                <label for="m-perm">n_permutations</label>
+                <input id="m-perm" type="number" min="1" step="1" value="1">
+              </div>
+              <label class="checkbox-row"><input type="checkbox" id="m-prep">prep_each_round</label>
+              <label class="checkbox-row"><input type="checkbox" id="m-random">random_search</label>
+              <label class="checkbox-row"><input type="checkbox" id="m-maintain">maintain_details_in_params</label>
+            </fieldset>
+
+            {# split_dates: six date inputs (UTC), label-on-row in a 3×2 grid.
+               Fill all six for an absolute train/val/test split; fill only
+               train_start + test_end to bound the fetch and leave the SFD's
+               ratio split alone. min/max keep the year at four digits. #}
+            <fieldset class="args-group">
+              <legend>split_dates (UTC, optional)</legend>
+              <div class="m-date-grid">
+                <label for="m-train-start">train_start</label>
+                <input id="m-train-start" type="date" min="2000-01-01" max="2099-12-31">
+                <label for="m-train-end">train_end</label>
+                <input id="m-train-end" type="date" min="2000-01-01" max="2099-12-31">
+                <label for="m-val-start">val_start</label>
+                <input id="m-val-start" type="date" min="2000-01-01" max="2099-12-31">
+                <label for="m-val-end">val_end</label>
+                <input id="m-val-end" type="date" min="2000-01-01" max="2099-12-31">
+                <label for="m-test-start">test_start</label>
+                <input id="m-test-start" type="date" min="2000-01-01" max="2099-12-31">
+                <label for="m-test-end">test_end</label>
+                <input id="m-test-end" type="date" min="2000-01-01" max="2099-12-31">
+              </div>
+            </fieldset>
+          </form>
+
+          <div class="create-footer">
+            <button type="button" id="m-edit-manifest" class="primary">Add manifest</button>
+            <button type="button" id="m-submit" class="primary">Create experiment</button>
+            <span id="m-status" class="create-status"></span>
+          </div>
+        </div>
+      </div>
     </div>
-  </form>
+  </div>
 </div>
 
-<div class="section"
-     data-poll-url="/_partials/jobs"
-     data-poll-target="#experiments-rows">
-  <h2 class="atom-heading"><span class="numeral">02</span><span>All experiments</span></h2>
-  <table class="experiments-table">
-    <thead>
-      <tr>
-        <th class="col-chevron"></th>
-        <th>Experiment</th>
-        <th class="num">Rounds</th>
-        <th>Latest activity</th>
-        <th class="col-actions"></th>
-      </tr>
-    </thead>
-    <tbody id="experiments-rows">
-      {% include "_jobs_rows.html" %}
-    </tbody>
-  </table>
+<div class="modal" id="search-modal" aria-hidden="true">
+  <div class="modal-panel" role="dialog" aria-label="Search permutations">
+    <div class="modal-head">
+      <span>Search</span>
+      <button type="button" class="icon-close" id="search-close" aria-label="Close">✕</button>
+    </div>
+    <div class="modal-body">
+      {# /search rendered nav-less inside the modal; loaded lazily on first open. #}
+      <iframe class="search-frame" id="search-frame" title="Search permutations" data-src="/search?embed=1"></iframe>
+    </div>
+  </div>
 </div>
 
+<script src="/static/create_modal.js?v={{ asset_version }}"></script>
 <script>
 const expanded = new Set();
 
 function applyExpanded() {
-  document.querySelectorAll('tr.rounds-row').forEach(row => {
-    const parent = row.dataset.parent;
-    const isExp = expanded.has(parent);
-    row.hidden = !isExp;
+  document.querySelectorAll('tr.round-row').forEach(row => {
+    row.hidden = !expanded.has(row.dataset.parent);
   });
   document.querySelectorAll('.chevron[data-toggle]').forEach(btn => {
-    const id = btn.dataset.toggle;
-    const isExp = expanded.has(id);
+    const isExp = expanded.has(btn.dataset.toggle);
     btn.classList.toggle('open', isExp);
     btn.setAttribute('aria-expanded', isExp ? 'true' : 'false');
   });
@@ -84,12 +177,31 @@ document.body.addEventListener('click', async (e) => {
   }
 });
 
-// Re-apply expanded state after polling re-renders the tbody
+// Re-apply expanded state after polling re-renders the tbody.
 new MutationObserver(applyExpanded).observe(
   document.getElementById('experiments-rows'),
   { childList: true }
 );
 applyExpanded();
+
+// Search modal — /search in an iframe, loaded lazily on first open.
+const searchModal = document.getElementById('search-modal');
+const searchFrame = document.getElementById('search-frame');
+function openSearch() {
+  if (!searchFrame.src) searchFrame.src = searchFrame.dataset.src;
+  searchModal.classList.add('open');
+  searchModal.setAttribute('aria-hidden', 'false');
+}
+function closeSearch() {
+  searchModal.classList.remove('open');
+  searchModal.setAttribute('aria-hidden', 'true');
+}
+document.getElementById('open-search').addEventListener('click', openSearch);
+document.getElementById('search-close').addEventListener('click', closeSearch);
+searchModal.addEventListener('click', (e) => { if (e.target === searchModal) closeSearch(); });
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && searchModal.classList.contains('open')) closeSearch();
+});
 </script>
 
 {% endblock %}

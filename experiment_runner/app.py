@@ -307,6 +307,21 @@ def _format_kline_size(seconds: int | None) -> str:
     return f'{seconds}s'
 
 
+def _format_metric(value: float | None) -> str:
+    """Render a ledger metric (bps) with magnitude-adaptive precision —
+    fewer decimals as the number grows. '—' for None (pre-ledger rounds)."""
+    if value is None:
+        return '—'
+    magnitude = abs(value)
+    if magnitude >= 1000:
+        return f'{value:.0f}'
+    if magnitude >= 100:
+        return f'{value:.1f}'
+    if magnitude >= 10:
+        return f'{value:.2f}'
+    return f'{value:.3f}'
+
+
 def _slugify(name: str) -> str:
     s = SLUG_RE.sub("-", name.strip()).strip("-")
     return s or "experiment"
@@ -393,24 +408,30 @@ def _validate_args(args: dict) -> None:
                 )
 
 
-def _all_experiments(root: Path) -> list[dict]:
+def _all_experiments(root: Path, with_analytics: bool = False) -> list[dict]:
     experiments = root / "experiments"
     if not experiments.exists():
         return []
     out = []
     for exp_dir in sorted(experiments.iterdir()):
         rounds = _experiment_rounds(exp_dir)
+        if with_analytics:
+            for r in rounds:
+                r.update(_round_analytics(exp_dir / "rounds" / r["round_id"]))
         latest = rounds[0] if rounds else None
         latest_at = ""
         if latest:
             latest_at = latest.get("ended_at") or latest.get("started_at") or ""
-        out.append({
+        entry = {
             "id": exp_dir.name,
             "rounds": rounds,
             "round_count": len(rounds),
             "latest_state": latest.get("state") if latest else "",
             "latest_at": latest_at,
-        })
+        }
+        if with_analytics:
+            entry.update(_experiment_analytics(rounds))
+        out.append(entry)
     out.sort(key=lambda e: e["latest_at"] or "", reverse=True)
     return out
 
@@ -439,6 +460,59 @@ def _experiment_rounds(experiment_dir: Path) -> list[dict]:
     return out
 
 
+# Jobs-table analytics: trade-pnl and drawdown-depth, each at p5/p50/p95.
+# Source columns are the per-permutation ledger percentiles; a round's value
+# is their cross-permutation median (the p50 the round viewer reports) and an
+# experiment's value is the mean of that across its rounds.
+_ANALYTIC_COLUMNS = {
+    "tp_p5": "backtest_trade_pnl_net_bps_p5",
+    "tp_p50": "backtest_trade_pnl_net_bps_p50",
+    "tp_p95": "backtest_trade_pnl_net_bps_p95",
+    "dd_p5": "backtest_drawdown_depth_bps_p5",
+    "dd_p50": "backtest_drawdown_depth_bps_p50",
+    "dd_p95": "backtest_drawdown_depth_bps_p95",
+}
+_ANALYTIC_KEYS = tuple(_ANALYTIC_COLUMNS)
+
+
+def _round_analytics(round_dir: Path) -> dict[str, float | None]:
+    """Per-round trade-pnl / drawdown-depth at p5/p50/p95 — each the
+    cross-permutation median of that ledger column, mirroring the round
+    viewer's p50. None when the column is absent (pre-ledger rounds) or the
+    round has no results CSV yet."""
+    out: dict[str, float | None] = {key: None for key in _ANALYTIC_KEYS}
+    # Resolve the canonical results CSV the same way every other CSV call
+    # site does — round_dir is experiments/<eid>/rounds/<rid>, so the file
+    # is <eid>__r<rid>.csv. A glob would be filesystem-order dependent and
+    # could silently read a stray CSV (export, partial write).
+    ename = round_dir.parent.parent.name
+    csv_path = round_dir / f"{ename}__r{round_dir.name}.csv"
+    if not csv_path.exists():
+        return out
+    df = pl.read_csv(csv_path, infer_schema_length=200)
+    for key, col in _ANALYTIC_COLUMNS.items():
+        if col not in df.columns:
+            continue
+        s = df[col].cast(pl.Float64, strict=False).drop_nulls().drop_nans()
+        if not s.is_empty():
+            out[key] = s.quantile(0.50)
+    return out
+
+
+def _experiment_analytics(rounds: list[dict]) -> dict[str, float | None]:
+    """Experiment-level analytics — the mean of each round's value across the
+    rounds that have one. None when no round carries the metric."""
+    out: dict[str, float | None] = {}
+    for key in _ANALYTIC_KEYS:
+        vals: list[float] = []
+        for r in rounds:
+            v = r.get(key)
+            if isinstance(v, (int, float)):
+                vals.append(float(v))
+        out[key] = sum(vals) / len(vals) if vals else None
+    return out
+
+
 def create_app(root: Path) -> FastAPI:
     # Auth credentials must be in the environment before the app builds.
     # Refuse to start if any are missing — there is no "no auth" mode.
@@ -454,6 +528,7 @@ def create_app(root: Path) -> FastAPI:
     templates = Jinja2Templates(directory=str(PKG_DIR / "templates"))
     templates.env.globals["asset_version"] = ASSET_VERSION
     templates.env.filters["kline_size_display"] = _format_kline_size
+    templates.env.filters["metric_fmt"] = _format_metric
     for k, v in _BUILD_META.items():
         templates.env.globals[k] = v
     sm = StateMachine(root)
@@ -524,14 +599,14 @@ def create_app(root: Path) -> FastAPI:
 
     @app.get("/", response_class=HTMLResponse)
     def jobs(request: Request):
-        experiments = _all_experiments(root)
+        experiments = _all_experiments(root, with_analytics=True)
         return templates.TemplateResponse(
             request, "jobs.html", {"experiments": experiments},
         )
 
     @app.get("/_partials/jobs", response_class=HTMLResponse)
     def jobs_partial(request: Request):
-        experiments = _all_experiments(root)
+        experiments = _all_experiments(root, with_analytics=True)
         return templates.TemplateResponse(
             request, "_jobs_rows.html", {"experiments": experiments},
         )
@@ -547,8 +622,18 @@ def create_app(root: Path) -> FastAPI:
 
     @app.post("/experiments")
     async def create_experiment(request: Request):
-        form = await request.form()
-        name = form.get("name", "").strip()
+        is_json = request.headers.get("content-type", "").startswith("application/json")
+        if is_json:
+            body = await request.json()
+            if not isinstance(body, dict):
+                raise HTTPException(400, "request body must be a JSON object")
+            raw_name = body.get("name", "")
+            if not isinstance(raw_name, str):
+                raise HTTPException(400, "name must be a string")
+            name = raw_name.strip()
+        else:
+            form = await request.form()
+            name = form.get("name", "").strip()
         if not name:
             raise HTTPException(400, "name is required")
         experiments_dir = root / "experiments"
@@ -561,6 +646,8 @@ def create_app(root: Path) -> FastAPI:
         seeded_args["uel_run"]["experiment_name"] = eid
         (exp_dir / "args.json").write_text(json.dumps(seeded_args, indent=2))
         write_version_atomic(exp_dir, 0)
+        if is_json:
+            return JSONResponse({"id": eid})
         return RedirectResponse(f"/experiments/{eid}", status_code=303)
 
     @app.post("/experiments/{experiment_id}/inspect")
@@ -576,6 +663,12 @@ def create_app(root: Path) -> FastAPI:
         if not isinstance(sfd_id, str):
             raise HTTPException(400, "sfd_identifier must be a string")
         return JSONResponse(_inspect_round_args(code, sfd_id))
+
+    @app.get("/experiments/{experiment_id}/working.json")
+    def working_json(experiment_id: str):
+        exp_dir = _exp_dir(experiment_id)
+        code, args, version = _read_working(exp_dir)
+        return {"code": code, "args": args, "version": version}
 
     @app.get("/experiments/{experiment_id}", response_class=HTMLResponse)
     def experiment_page(request: Request, experiment_id: str):
@@ -866,6 +959,8 @@ def create_app(root: Path) -> FastAPI:
             {
                 "experiment_id": experiment_id,
                 "round_id": round_id,
+                "rounds": _experiment_rounds(_exp_dir(experiment_id)),
+                "experiments": _all_experiments(root),
                 "status": st,
                 "frozen_code": frozen_code,
                 "frozen_args_json": json.dumps(frozen_args, indent=2),

@@ -1,12 +1,11 @@
 {% extends "base.html" %}
 {% block title %}Search · experiment_runner{% endblock %}
 {% block meta %}cross-round filter{% endblock %}
+{% block controls %}
+  <a class="topbar-link" href="/">← jobs</a>
+  <span class="topbar-id">search permutations</span>
+{% endblock %}
 {% block content %}
-
-<div class="bar">
-  <h1 class="atom-title">Search permutations</h1>
-  <a class="atom-micro" href="/">← experiments</a>
-</div>
 
 <div class="section">
   <h2 class="atom-heading"><span class="numeral">01</span><span>Filters</span></h2>
@@ -271,7 +270,7 @@ function renderRounds(data) {
       `<td>${escapeHTML(row.experiment_id)}</td>` +
       `<td>${escapeHTML(row.round_id)}</td>` +
       `<td class="num">${row.match_count}</td>` +
-      `<td><a class="atom-micro" href="/experiments/${encodeURIComponent(row.experiment_id)}/rounds/${encodeURIComponent(row.round_id)}/results">→</a></td>`;
+      `<td><a class="atom-micro" target="_top" href="/experiments/${encodeURIComponent(row.experiment_id)}/rounds/${encodeURIComponent(row.round_id)}/results">→</a></td>`;
     tbody.appendChild(tr);
   });
   meta.textContent = `${data.rounds.length} rounds · ${total} permutations`;
