@@ -90,14 +90,14 @@ def test_round_analytic_is_cross_permutation_median_then_round_mean() -> None:
 
 
 def test_round_analytics_resolves_canonical_results_csv() -> None:
-    """_round_analytics resolves the round's results CSV by its canonical
-    <eid>__r<rid>.csv name — the derivation every other CSV call site in
-    app.py uses — not a glob, whose filesystem-order dependence could
-    read a stray CSV (an export, a partial write)."""
+    """_round_analytics resolves the round's results CSV through the shared
+    _round_csv_path helper — the fixed limen_output/results.csv path that
+    every CSV call site in app.py uses, limen's own authoritative file —
+    not a glob, whose filesystem-order dependence could read a stray CSV."""
     app = (PKG_DIR / "app.py").read_text(encoding="utf-8")
     body = app[app.index("def _round_analytics(") :][:900]
     assert 'glob("*.csv")' not in body
-    assert 'f"{ename}__r{round_dir.name}.csv"' in body
+    assert "_round_csv_path(round_dir)" in body
 
 
 def test_metric_fmt_jinja_filter_registered() -> None:

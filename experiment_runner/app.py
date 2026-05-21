@@ -12,6 +12,7 @@ import secrets
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 import zipfile
 from datetime import datetime
@@ -143,32 +144,68 @@ uel:
 """
 
 
-def _manifest_errors(manifest_text: str) -> list[dict]:
-    """Parse + validate a manifest YAML string through Limen's own pipeline
-    (the same parse → validate run_round.py uses) and return a flat list of
-    `{"line", "path", "message"}` dicts — empty when the manifest is valid.
-    Both the parser errors and the validator errors are folded into one
-    list. Imports are lazy so app.py imports without Limen present."""
-    from limen.yaml.parser import parse
-    from limen.yaml.validator import validate
+def _limen_cli() -> Path:
+    """The `limen` console script, installed next to the running
+    interpreter. experiment_runner reaches Limen only through this CLI —
+    never in-process — so a manifest the editor accepts is exactly one
+    `limen run` would accept at round-start."""
+    cli = Path(sys.executable).parent / "limen"
+    if not cli.exists():
+        raise HTTPException(500, f"`limen` CLI not found at {cli}")
+    return cli
 
-    yaml_dict, parse_errors = parse(manifest_text)
+
+# `limen validate` prints one error per line, indented two spaces:
+#   PARSE ERROR (line N): message
+#   ERROR  [config.path] (line N): message
+# Both the `  [path]` and ` (line N)` segments are optional. The path may
+# itself contain `[N]` index notation, so the path capture is non-greedy
+# and anchored on the ` (line ` / `: ` that always follows the closing `]`.
+_CLI_ERROR_RE = re.compile(
+    r"^ {2}(?:PARSE ERROR|ERROR)"
+    r"(?:  \[(?P<path>.+?)\](?= \(line |: ))?"
+    r"(?: \(line (?P<line>\d+)\))?"
+    r": (?P<message>.*)$"
+)
+
+
+def _manifest_errors(manifest_text: str) -> list[dict]:
+    """Validate a manifest YAML string by running the `limen validate`
+    CLI — the same binary, the same parse → validate path that `limen run`
+    enforces at round-start — and return a flat list of
+    `{"line", "path", "message"}` dicts, empty when the CLI exits 0.
+    experiment_runner never validates in-process, so the editor's
+    pre-flight check cannot drift from what a real round does."""
+    limen = _limen_cli()
+    with tempfile.NamedTemporaryFile(
+        "w", suffix=".yml", delete=False, encoding="utf-8",
+    ) as tmp:
+        tmp.write(manifest_text)
+        tmp_path = Path(tmp.name)
+    try:
+        result = subprocess.run(
+            [str(limen), "validate", str(tmp_path)],
+            capture_output=True, text=True,
+        )
+    finally:
+        tmp_path.unlink(missing_ok=True)
+    if result.returncode == 0:
+        return []
     out: list[dict] = []
-    for e in parse_errors:
-        out.append({
-            "line": getattr(e, "line", None),
-            "path": "",
-            "message": e.message,
-        })
-    if out:
-        return out
-    result = validate(yaml_dict)
-    for e in result.errors:
-        out.append({
-            "line": getattr(e, "line", None),
-            "path": getattr(e, "path", "") or "",
-            "message": e.message,
-        })
+    for line in result.stdout.splitlines():
+        m = _CLI_ERROR_RE.match(line)
+        if m:
+            out.append({
+                "line": int(m["line"]) if m["line"] else None,
+                "path": m["path"] or "",
+                "message": m["message"],
+            })
+    if not out:
+        raise HTTPException(
+            500,
+            "`limen validate` reported the manifest invalid but produced "
+            f"no parseable error lines:\n{result.stdout}",
+        )
     return out
 
 
@@ -341,18 +378,22 @@ _ANALYTIC_COLUMNS = {
 _ANALYTIC_KEYS = tuple(_ANALYTIC_COLUMNS)
 
 
+def _round_csv_path(round_dir: Path) -> Path:
+    """The round's results CSV. `limen run` writes `results.csv` into its
+    own output directory, which run_round.py relocates whole to
+    <round_dir>/limen_output. Every reader resolves the path through here,
+    so there is one source of truth — limen's authoritative file, never a
+    renamed copy."""
+    return round_dir / "limen_output" / "results.csv"
+
+
 def _round_analytics(round_dir: Path) -> dict[str, float | None]:
     """Per-round trade-pnl / drawdown-depth at p5/p50/p95 — each the
     cross-permutation median of that ledger column, mirroring the round
     viewer's p50. None when the column is absent (pre-ledger rounds) or the
     round has no results CSV yet."""
     out: dict[str, float | None] = {key: None for key in _ANALYTIC_KEYS}
-    # Resolve the canonical results CSV the same way every other CSV call
-    # site does — round_dir is experiments/<eid>/rounds/<rid>, so the file
-    # is <eid>__r<rid>.csv. A glob would be filesystem-order dependent and
-    # could silently read a stray CSV (export, partial write).
-    ename = round_dir.parent.parent.name
-    csv_path = round_dir / f"{ename}__r{round_dir.name}.csv"
+    csv_path = _round_csv_path(round_dir)
     if not csv_path.exists():
         return out
     df = pl.read_csv(csv_path, infer_schema_length=200)
@@ -709,10 +750,10 @@ def create_app(root: Path) -> FastAPI:
         round_dir = _round_dir(experiment_id, round_id)
         st = read_status(round_dir)
         frozen_manifest = (round_dir / "manifest.yml").read_text()
-        # period.json is written by run_round.py after uel.run completes:
-        # test-period bounds (from uel._alignment) + authoritative kline_size
-        # (from data row spacing). May be absent on pre-S11 rounds or on
-        # crashed runs that never reached the persist step.
+        # period.json is written by run_round.py after `limen run`
+        # completes — test-period bounds and kline_size, read straight from
+        # limen's own artefacts (round_data.jsonl, metadata.json). May be
+        # absent on a crashed run that never reached the persist step.
         period_path = round_dir / "period.json"
         period = json.loads(period_path.read_text()) if period_path.exists() else None
         diff_text = ""
@@ -870,7 +911,7 @@ def create_app(root: Path) -> FastAPI:
     @app.get("/experiments/{experiment_id}/rounds/{round_id}/csv")
     def round_csv(experiment_id: str, round_id: str):
         round_dir = _round_dir(experiment_id, round_id)
-        csv_path = round_dir / f"{experiment_id}__r{round_id}.csv"
+        csv_path = _round_csv_path(round_dir)
         headers = {"Content-Disposition": f'attachment; filename="{experiment_id}__r{round_id}.csv"'}
         if not csv_path.exists():
             return PlainTextResponse("", media_type="text/csv", headers=headers)
@@ -880,14 +921,18 @@ def create_app(root: Path) -> FastAPI:
     def round_bundle(experiment_id: str, round_id: str):
         round_dir = _round_dir(experiment_id, round_id)
         base = f"{experiment_id}__r{round_id}"
-        manifest_path = round_dir / "manifest.yml"
-        csv_path = round_dir / f"{base}.csv"
+        # The bundle is `limen run`'s output directory verbatim — results.csv,
+        # metadata.json, round_data.jsonl, and the manifest copy — so what the
+        # REST API hands out is exactly the artefacts the CLI produced, with
+        # nothing reconstructed by experiment_runner.
+        limen_output = round_dir / "limen_output"
 
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-            z.writestr(f"{base}.yml", manifest_path.read_text())
-            if csv_path.exists():
-                z.writestr(f"{base}.csv", csv_path.read_text())
+            if limen_output.is_dir():
+                for artefact in sorted(limen_output.iterdir()):
+                    if artefact.is_file():
+                        z.writestr(f"{base}/{artefact.name}", artefact.read_bytes())
 
         headers = {"Content-Disposition": f'attachment; filename="{base}.zip"'}
         return Response(buf.getvalue(), media_type="application/zip", headers=headers)
@@ -1022,8 +1067,7 @@ def _display_label(col: str) -> str:
 def _compute_results_page(
     round_dir: Path, offset: int, limit: int, sort: str | None, direction: str,
 ) -> dict:
-    ename = round_dir.parent.parent.name
-    csv_path = round_dir / f"{ename}__r{round_dir.name}.csv"
+    csv_path = _round_csv_path(round_dir)
     if not csv_path.exists():
         return {"rows": [], "total": 0}
 
@@ -1079,8 +1123,7 @@ def _compute_round_stats(round_dir: Path) -> dict:
     status = read_status(round_dir)
     yaml_dict, _parse_errors = parse(round_dir / "manifest.yml")
     target = int((yaml_dict.get("uel") or {}).get("n_permutations", 50))
-    ename = round_dir.parent.parent.name
-    csv_path = round_dir / f"{ename}__r{round_dir.name}.csv"
+    csv_path = _round_csv_path(round_dir)
 
     state = status.get("state")
     started = _parse_iso(status.get("started_at"))
@@ -1179,8 +1222,7 @@ def _ensure_round_index(round_dir: Path) -> Path | None:
     manifest_path = round_dir / "manifest.yml"
     if not manifest_path.exists():
         return None
-    ename = round_dir.parent.parent.name
-    csv_path = round_dir / f"{ename}__r{round_dir.name}.csv"
+    csv_path = _round_csv_path(round_dir)
     if not csv_path.exists():
         return None
 
@@ -1380,7 +1422,7 @@ def _build_search_bundle(root: Path, filters: _FilterMap, experiment_names: list
                 csv_parts: list[pl.DataFrame] = []
                 for rid in sorted_round_ids:
                     rdir = root / "experiments" / exp_id / "rounds" / rid
-                    csv_path = rdir / f"{exp_id}__r{rid}.csv"
+                    csv_path = _round_csv_path(rdir)
                     if not csv_path.exists():
                         continue
                     df = pl.read_csv(csv_path, infer_schema_length=200)

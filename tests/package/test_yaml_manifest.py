@@ -20,16 +20,19 @@ STATIC = PKG_DIR / "static"
 # ---- run_round.py ---------------------------------------------------------
 
 
-def test_run_round_uses_limen_yaml_pipeline() -> None:
-    """run_round.py drives Limen's own YAML pipeline — parse, validate,
-    compile — instead of exec-ing a user Python file. The whole experiment
-    definition is the manifest; there is no user code to run."""
+def test_run_round_invokes_limen_cli() -> None:
+    """run_round.py executes the round through the `limen` CLI — a real
+    `limen run` subprocess on the round's manifest.yml — so the round's
+    artefacts are exactly what the authoritative tool produced.
+    experiment_runner never runs Limen in-process: there is no second
+    pipeline that could drift from what the CLI does."""
     text = (PKG_DIR / "run_round.py").read_text(encoding="utf-8")
-    assert "from limen.yaml.parser import parse" in text
-    assert "from limen.yaml.validator import validate" in text
-    assert "from limen.yaml.compiler import CompiledSFD" in text
-    # The manifest is parsed straight from the round's snapshot file.
-    assert "manifest.yml" in text
+    # The `limen` console script is located and invoked as a subprocess.
+    assert "def _limen_cli(" in text
+    assert "subprocess.run(" in text
+    assert '"run", str(round_dir / "manifest.yml")' in text
+    # No in-process Limen pipeline — the CLI is the only path in.
+    assert re.search(r"(?m)^\s*(?:from|import)\s+limen\b", text) is None
 
 
 def test_run_round_no_longer_execs_user_code() -> None:
@@ -60,14 +63,17 @@ def test_app_defines_starter_manifest() -> None:
 
 
 def test_app_defines_manifest_errors_helper() -> None:
-    """_manifest_errors parses + validates a manifest string through
-    Limen's parser and validator and returns a flat error list."""
+    """_manifest_errors validates a manifest string by running the
+    `limen validate` CLI — the same binary `limen run` enforces at
+    round-start — and returns a flat error list parsed from its stdout.
+    experiment_runner never validates a manifest in-process."""
     text = (PKG_DIR / "app.py").read_text(encoding="utf-8")
     assert "def _manifest_errors(" in text
     idx = text.index("def _manifest_errors(")
-    body = text[idx:idx + 1200]
-    assert "from limen.yaml.parser import parse" in body
-    assert "from limen.yaml.validator import validate" in body
+    body = text[idx:idx + 1600]
+    assert '"validate"' in body
+    assert "subprocess.run(" in body
+    assert re.search(r"(?m)^\s*(?:from|import)\s+limen\b", body) is None
 
 
 def test_create_experiment_seeds_manifest_yml() -> None:

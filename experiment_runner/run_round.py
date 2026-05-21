@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -20,57 +21,61 @@ def _self_promote_to_running(round_dir: Path) -> None:
         write_status_atomic(round_dir, st)
 
 
-def _route_warnings_and_silence_tqdm(round_dir: Path) -> None:
-    import warnings as _w
-    f = open(round_dir / "warnings.log", "a", buffering=1)
-
-    def _show(message, category, filename, lineno, file=None, line=None):
-        try:
-            f.write(_w.formatwarning(message, category, filename, lineno, line))
-        except Exception:
-            pass
-
-    _w.showwarning = _show
-
-    try:
-        import tqdm.std as _tstd
-        _orig_init = _tstd.tqdm.__init__
-
-        def _patched_init(self, *a, **kw):
-            kw["disable"] = True
-            _orig_init(self, *a, **kw)
-
-        _tstd.tqdm.__init__ = _patched_init
-    except ImportError:
-        pass
+def _limen_cli() -> Path:
+    """The `limen` console script, installed next to the running
+    interpreter (the venv / image bin directory). Every round is executed
+    by this CLI — experiment_runner never orchestrates Limen in-process,
+    so a round's artefacts are exactly what `limen run` produced, with no
+    reimplementation that could drift from the authoritative tool."""
+    cli = Path(sys.executable).parent / "limen"
+    if not cli.exists():
+        print(f"run_round: `limen` CLI not found at {cli}", file=sys.stderr)
+        sys.exit(1)
+    return cli
 
 
-def _collect_period_info(yaml_dict: dict, uel) -> dict:
-    """Round-level metadata for the round-status section. kline_size comes
-    straight from the manifest's declarative `data_source` params; the
-    test-period bounds come from `uel._alignment` (populated per
-    permutation, so min(first) / max(last) is the widest window the
-    round's results cover)."""
+def _collect_period_info(limen_output: Path) -> dict:
+    """Round metadata for the round-status section, read straight from
+    `limen run`'s own artefacts — kline_size from the manifest echoed into
+    metadata.json; the permutation count and the test-period bounds from
+    round_data.jsonl, where each line's `alignment` states the first/last
+    test datetime Limen aligned that permutation to. Nothing is
+    reconstructed or inferred; a field Limen does not state plainly stays
+    absent. The bounds span every permutation (min first / max last), the
+    widest window the round's results cover — indicator warm-up shifts the
+    first usable datetime per permutation."""
     out: dict = {}
-
-    manifest = (yaml_dict.get("sfd") or {}).get("manifest") or {}
-    ds_params = (manifest.get("data_source") or {}).get("params") or {}
-    kline_size = ds_params.get("kline_size")
-    if isinstance(kline_size, int):
-        out["kline_size_seconds"] = kline_size
-
-    alignment = getattr(uel, "_alignment", None) or []
-    if alignment:
-        firsts = [a["first_test_datetime"] for a in alignment if "first_test_datetime" in a]
-        lasts = [a["last_test_datetime"] for a in alignment if "last_test_datetime" in a]
+    meta_path = limen_output / "metadata.json"
+    if meta_path.exists():
+        meta = json.loads(meta_path.read_text())
+        params = (
+            meta.get("yaml_reference", {})
+            .get("sfd", {}).get("manifest", {})
+            .get("data_source", {}).get("params", {})
+        )
+        kline_size = params.get("kline_size")
+        if isinstance(kline_size, int):
+            out["kline_size_seconds"] = kline_size
+    rd_path = limen_output / "round_data.jsonl"
+    if rd_path.exists():
+        firsts: list[str] = []
+        lasts: list[str] = []
+        count = 0
+        for line in rd_path.read_text().splitlines():
+            if not line.strip():
+                continue
+            count += 1
+            alignment = json.loads(line).get("alignment") or {}
+            first = alignment.get("first_test_datetime")
+            last = alignment.get("last_test_datetime")
+            if first is not None:
+                firsts.append(first)
+            if last is not None:
+                lasts.append(last)
+        out["permutation_count"] = count
         if firsts and lasts:
-            out["test_period_start"] = str(min(firsts))
-            out["test_period_end"] = str(max(lasts))
-            out["all_permutations_same_period"] = (
-                len(set(firsts)) == 1 and len(set(lasts)) == 1
-            )
-            out["permutation_count"] = len(alignment)
-
+            out["test_period_start"] = min(firsts)
+            out["test_period_end"] = max(lasts)
     return out
 
 
@@ -81,78 +86,49 @@ def main() -> None:
     round_dir: Path = args.round_dir
 
     _self_promote_to_running(round_dir)
-    _route_warnings_and_silence_tqdm(round_dir)
 
-    # The whole experiment definition is the YAML manifest — there is no
-    # user Python to exec. Limen's own pipeline parses, validates, compiles,
-    # and runs it (this mirrors `limen run`). Imports land after the tqdm
-    # patch so Limen's progress bars stay silenced.
-    from limen.experiment import GridStrategy, RandomStrategy
-    from limen.experiment.experiment_core import UniversalExperimentLoop
-    from limen.experiment.param_domain import ParamDomain
-    from limen.yaml.compiler import CompiledSFD
-    from limen.yaml.parser import parse
-    from limen.yaml.validator import validate
-
-    yaml_dict, parse_errors = parse(round_dir / "manifest.yml")
-    if parse_errors:
-        for e in parse_errors:
-            loc = f" (line {e.line})" if getattr(e, "line", None) else ""
-            print(f"manifest parse error{loc}: {e.message}", file=sys.stderr)
-        sys.exit(1)
-
-    result = validate(yaml_dict)
-    for w in result.warnings:
-        print(f"manifest warning: {w.message}", file=sys.stderr)
-    if not result.valid:
-        for e in result.errors:
-            loc = f" (line {e.line})" if getattr(e, "line", None) else ""
-            path = f" [{e.path}]" if getattr(e, "path", None) else ""
-            print(f"manifest error{path}{loc}: {e.message}", file=sys.stderr)
-        sys.exit(1)
-
-    uel_cfg = yaml_dict.get("uel") or {}
-    sfd_cfg = yaml_dict.get("sfd") or {}
-    params = {k: list(v) for k, v in (sfd_cfg.get("params") or {}).items()}
-    domain = ParamDomain(params)
-    strategy_type = (uel_cfg.get("search_strategy") or {}).get("type", "random")
-    search_strategy = GridStrategy(domain) if strategy_type == "grid" else RandomStrategy(domain)
-
-    test_mode = (yaml_dict.get("metadata") or {}).get("mode", "development") == "development"
-    compiled = CompiledSFD(yaml_dict)
-
-    # round_dir is experiments/<eid>/rounds/<rid>. UEL names the results CSV
-    # by the experiment_name passed to run() and writes it to the cwd (the
-    # subprocess runs with cwd=round_dir), so the file lands at
-    # round_dir/<eid>__r<rid>.csv — exactly where the results / search /
-    # bundle layer expects it.
-    eid = round_dir.parent.parent.name
-    round_id = round_dir.name
-
-    uel = UniversalExperimentLoop(
-        sfd=compiled,
-        search_strategy=search_strategy,
-        test_mode=test_mode,
-        feedback_interval=int(uel_cfg.get("feedback_interval", 100)),
-        checkpoint_interval=int(uel_cfg.get("checkpoint_interval", 1000)),
-        yaml_reference=dict(yaml_dict),
+    # The whole experiment is run by the `limen` CLI. `limen run` parses,
+    # validates, compiles, and executes the round's manifest.yml — the same
+    # binary, the same path, every round. experiment_runner adds no
+    # orchestration of its own. limen's stdout/stderr inherit this
+    # process's, so they land in the round's stdout.log / stderr.log;
+    # TQDM_DISABLE keeps limen's progress bars out of the logs.
+    limen = _limen_cli()
+    result = subprocess.run(
+        [str(limen), "run", str(round_dir / "manifest.yml")],
+        cwd=str(round_dir),
+        env={**os.environ, "TQDM_DISABLE": "1"},
     )
-    uel.run(
-        experiment_name=f"{eid}__r{round_id}",
-        n_permutations=int(uel_cfg.get("n_permutations", 50)),
-        prep_each_round=bool(uel_cfg.get("prep_each_round", True)),
-    )
+    if result.returncode != 0:
+        print(f"run_round: `limen run` exited {result.returncode}", file=sys.stderr)
+        sys.exit(result.returncode)
 
-    # period.json — contained in try/except so a metadata-extraction failure
-    # does not flip a finished round to "failed"; traceback.print_exc lands
-    # it in stderr.log (fail-loud, not swallowed). Atomic write (temp +
-    # os.replace) since round_page does exists() then json.loads() and a
-    # partial-write window would raise JSONDecodeError.
+    # `limen run` writes its artefacts to ./results/<name>_<timestamp>/ —
+    # results.csv, metadata.json, round_data.jsonl, and a copy of the
+    # manifest. Relocate that one directory to the fixed name `limen_output`
+    # so the results / search / bundle layer has a predictable path. Only
+    # the directory is renamed; its contents are limen's, untouched.
+    results_parent = round_dir / "results"
+    subdirs = (
+        [d for d in sorted(results_parent.iterdir()) if d.is_dir()]
+        if results_parent.is_dir() else []
+    )
+    if not subdirs:
+        print("run_round: `limen run` produced no output directory", file=sys.stderr)
+        sys.exit(1)
+    os.replace(subdirs[-1], round_dir / "limen_output")
+    if not list(results_parent.iterdir()):
+        results_parent.rmdir()
+
+    # period.json — kline_size + permutation count, taken from limen's
+    # artefacts (see _collect_period_info). Contained so a metadata read
+    # failure cannot flip a finished round to "failed"; the write is
+    # atomic since round_page does exists() then json.loads().
     try:
-        period = _collect_period_info(yaml_dict, uel)
+        period = _collect_period_info(round_dir / "limen_output")
         if period:
             tmp = round_dir / "period.json.tmp"
-            tmp.write_text(json.dumps(period, indent=2, default=str))
+            tmp.write_text(json.dumps(period, indent=2))
             os.replace(tmp, round_dir / "period.json")
     except Exception:
         import traceback

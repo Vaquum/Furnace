@@ -13,23 +13,28 @@ PKG_DIR = REPO_ROOT / 'experiment_runner'
 
 
 def test_run_round_writes_period_json() -> None:
-    """After uel.run() returns, run_round.py persists per-round metadata to
-    <round_dir>/period.json — test-period bounds from uel._alignment plus
-    the kline_size read from the manifest's declarative data_source params.
+    """After `limen run` completes, run_round.py persists per-round
+    metadata to <round_dir>/period.json — test-period bounds and
+    kline_size, read straight from limen's own artefacts. round_data.jsonl
+    carries each permutation's alignment (first_test_datetime /
+    last_test_datetime); metadata.json echoes the manifest's kline_size.
 
     The persist is wrapped in a try/except so a metadata-extraction
-    failure (private uel._alignment shape change, unusual data) does
-    NOT bubble out and let the watcher mark a successful round as
-    failed. The exception lands in stderr.log via traceback.print_exc
-    so it's visible, not swallowed. The write is atomic (temp +
-    os.replace) since round_page does exists() + json.loads() and a
-    partial-write window would raise JSONDecodeError."""
+    failure (an artefact shape change, unusual data) does NOT bubble out
+    and let the watcher mark a successful round as failed. The exception
+    lands in stderr.log via traceback.print_exc so it's visible, not
+    swallowed. The write is atomic (temp + os.replace) since round_page
+    does exists() + json.loads() and a partial-write window would raise
+    JSONDecodeError."""
     text = (PKG_DIR / 'run_round.py').read_text(encoding='utf-8')
     assert 'period.json' in text
-    # The alignment list is Limen's per-permutation source of truth for
-    # test-period dates. The runner reads from it, not from its own slice.
-    assert '_alignment' in text
-    # kline_size is read from the manifest's declarative data_source params.
+    # round_data.jsonl is limen's per-permutation source of truth for
+    # test-period dates. The runner reads alignment from it, not from
+    # any reconstruction of its own.
+    assert 'round_data.jsonl' in text
+    assert 'first_test_datetime' in text
+    assert 'last_test_datetime' in text
+    # kline_size is read from limen's metadata.json (the manifest echo).
     assert 'kline_size' in text
     # _collect_period_info is the helper; it returns the dict we persist.
     assert '_collect_period_info' in text
