@@ -15,7 +15,7 @@ PKG_DIR = REPO_ROOT / 'experiment_runner'
 def test_run_round_writes_period_json() -> None:
     """After uel.run() returns, run_round.py persists per-round metadata to
     <round_dir>/period.json — test-period bounds from uel._alignment plus
-    the authoritative kline_size derived from data row spacing.
+    the kline_size read from the manifest's declarative data_source params.
 
     The persist is wrapped in a try/except so a metadata-extraction
     failure (private uel._alignment shape change, unusual data) does
@@ -29,9 +29,8 @@ def test_run_round_writes_period_json() -> None:
     # The alignment list is Limen's per-permutation source of truth for
     # test-period dates. The runner reads from it, not from its own slice.
     assert '_alignment' in text
-    # Authoritative kline_size: derived from the actual datetime diffs of
-    # the fetched data, not echoed from args.json.
-    assert 'total_seconds()' in text
+    # kline_size is read from the manifest's declarative data_source params.
+    assert 'kline_size' in text
     # _collect_period_info is the helper; it returns the dict we persist.
     assert '_collect_period_info' in text
     # Atomic write: temp + os.replace, mirroring state.py / /working.

@@ -1,9 +1,12 @@
-"""Tests for slice S09: code-editor-styled diff view on the round page.
+"""Tests for slice S09: collapsible diff view on the round page.
 
-Source-level checks against the round template, the diff renderer, and the
-shared Python highlighter — runs without importing the runner since the
-runner's runtime deps (fastapi, polars, etc.) are not in the package's
-dev-extras."""
+Source-level checks against the round template and the diff renderer —
+runs without importing the runner since the runner's runtime deps
+(fastapi, polars, etc.) are not in the package's dev-extras.
+
+The round diff is a YAML-manifest diff: there is no syntax highlighting,
+so diff_view.js paints only the per-line +/- prefix classes and wires the
+copy buttons."""
 
 from __future__ import annotations
 
@@ -13,34 +16,23 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PKG_DIR = REPO_ROOT / 'experiment_runner'
 
 
-def test_python_highlight_module_exists() -> None:
-    """The shared Python highlighter is its own file (loaded from base.html)
-    so the code editor and the diff view paint tokens identically."""
-    js = PKG_DIR / 'static' / 'python_highlight.js'
-    assert js.is_file()
-    text = js.read_text(encoding='utf-8')
-    assert 'window.PythonHighlight' in text
-    assert 'highlightPython' in text
-
-
 def test_diff_view_module_exists() -> None:
-    """The round-page hydration script paints the diff (#diff-source) and
-    the frozen-code snapshot (#frozen-code), both using the shared
-    PythonHighlight tokenizer."""
+    """The round-page hydration script paints the diff (#diff-source) with
+    per-line classes and renders content as plain (escaped) text — the
+    manifest is YAML, so no syntax highlighting."""
     js = PKG_DIR / 'static' / 'diff_view.js'
     assert js.is_file()
     text = js.read_text(encoding='utf-8')
     assert "getElementById('diff-source')" in text
-    assert "getElementById('frozen-code')" in text
-    # Uses the shared highlighter, not its own copy.
-    assert 'window.PythonHighlight' in text
+    # No Python highlighter dependency — that module was retired with the
+    # YAML-manifest migration.
+    assert 'PythonHighlight' not in text
 
 
-def test_round_page_frozen_code_has_highlight_target() -> None:
-    """The frozen-code <pre> carries the id the round-page script looks for,
-    so the snapshot reads the same as the editor's live buffer."""
+def test_round_page_frozen_manifest_pre_exists() -> None:
+    """The frozen-manifest <pre> carries the id the copy button targets."""
     html = (PKG_DIR / 'templates' / 'round.html').read_text(encoding='utf-8')
-    assert 'id="frozen-code"' in html
+    assert 'id="frozen-manifest"' in html
 
 
 def test_round_page_uses_collapsible_diff_view() -> None:
@@ -71,20 +63,3 @@ def test_diff_view_css_defined() -> None:
     assert '.atom-diff-view' in css
     for cls in ('.diff-add', '.diff-del', '.diff-hunk', '.diff-meta', '.diff-prefix'):
         assert cls in css, f'missing diff class: {cls}'
-
-
-def test_base_html_loads_python_highlighter() -> None:
-    """python_highlight.js must be loaded from the base template so every
-    page (code editor and round/diff view alike) has it in scope."""
-    html = (PKG_DIR / 'templates' / 'base.html').read_text(encoding='utf-8')
-    assert '/static/python_highlight.js' in html
-
-
-def test_code_editor_uses_shared_highlighter() -> None:
-    """The editor delegates tokenization to window.PythonHighlight rather
-    than carrying its own copy."""
-    js = (PKG_DIR / 'static' / 'code_editor.js').read_text(encoding='utf-8')
-    assert 'window.PythonHighlight.highlightPython' in js
-    # The duplicated tokenizer is gone.
-    assert 'PY_TOKENIZER = new RegExp' not in js
-    assert 'PY_KEYWORDS = new Set' not in js

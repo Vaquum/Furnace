@@ -1,0 +1,157 @@
+"""Tests for the YAML-manifest migration: the experiment definition is no
+longer a Python "SFD" code file (code.py + args.json) but a single Limen
+native YAML manifest (manifest.yml).
+
+Source-level checks — the codebase idiom: app.py / run_round.py cannot be
+imported in the package's dev-extras (no fastapi / limen runtime deps), so
+the tests read the source text and assert on it."""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+PKG_DIR = REPO_ROOT / "experiment_runner"
+TEMPLATES = PKG_DIR / "templates"
+STATIC = PKG_DIR / "static"
+
+
+# ---- run_round.py ---------------------------------------------------------
+
+
+def test_run_round_uses_limen_yaml_pipeline() -> None:
+    """run_round.py drives Limen's own YAML pipeline — parse, validate,
+    compile — instead of exec-ing a user Python file. The whole experiment
+    definition is the manifest; there is no user code to run."""
+    text = (PKG_DIR / "run_round.py").read_text(encoding="utf-8")
+    assert "from limen.yaml.parser import parse" in text
+    assert "from limen.yaml.validator import validate" in text
+    assert "from limen.yaml.compiler import CompiledSFD" in text
+    # The manifest is parsed straight from the round's snapshot file.
+    assert "manifest.yml" in text
+
+
+def test_run_round_no_longer_execs_user_code() -> None:
+    """The Python-SFD era exec-ed a user code file to obtain the SFD class.
+    The manifest era has no user Python — assert the exec and the old
+    code.py / args.json file names are gone from run_round.py."""
+    text = (PKG_DIR / "run_round.py").read_text(encoding="utf-8")
+    assert "exec(" not in text
+    assert "code.py" not in text
+    assert "args.json" not in text
+    assert "sfd_identifier" not in text
+
+
+# ---- app.py ---------------------------------------------------------------
+
+
+def test_app_defines_starter_manifest() -> None:
+    """A new experiment is seeded with STARTER_MANIFEST — a module-level
+    YAML string carrying the __EXPERIMENT_NAME__ sentinel that
+    create_experiment substitutes with the experiment id."""
+    text = (PKG_DIR / "app.py").read_text(encoding="utf-8")
+    assert "STARTER_MANIFEST" in text
+    assert "__EXPERIMENT_NAME__" in text
+    # It is a valid-shaped Limen manifest: the top-level blocks are present.
+    assert "schema_version:" in text
+    assert "sfd:" in text
+    assert "uel:" in text
+
+
+def test_app_defines_manifest_errors_helper() -> None:
+    """_manifest_errors parses + validates a manifest string through
+    Limen's parser and validator and returns a flat error list."""
+    text = (PKG_DIR / "app.py").read_text(encoding="utf-8")
+    assert "def _manifest_errors(" in text
+    idx = text.index("def _manifest_errors(")
+    body = text[idx:idx + 1200]
+    assert "from limen.yaml.parser import parse" in body
+    assert "from limen.yaml.validator import validate" in body
+
+
+def test_create_experiment_seeds_manifest_yml() -> None:
+    """create_experiment writes exp_dir/manifest.yml seeded from
+    STARTER_MANIFEST — no more code.py + args.json seeding."""
+    text = (PKG_DIR / "app.py").read_text(encoding="utf-8")
+    idx = text.index("async def create_experiment(")
+    body = text[idx:idx + 1500]
+    assert '"manifest.yml"' in body
+    assert 'STARTER_MANIFEST.replace("__EXPERIMENT_NAME__"' in body
+
+
+def test_manifest_get_and_put_routes_exist() -> None:
+    """The manifest editor is reached at GET /experiments/{id}/manifest and
+    saved via PUT /experiments/{id}/manifest. The PUT validates the body is
+    a JSON object, runs _manifest_errors, and version-bumps atomically."""
+    text = (PKG_DIR / "app.py").read_text(encoding="utf-8")
+    assert re.search(r'@app\.get\("/experiments/\{experiment_id\}/manifest"', text)
+    assert re.search(r'@app\.put\("/experiments/\{experiment_id\}/manifest"', text)
+    put_idx = text.index('@app.put("/experiments/{experiment_id}/manifest"')
+    body = text[put_idx:put_idx + 2000]
+    assert "isinstance(body, dict)" in body
+    assert "_manifest_errors(manifest)" in body
+    assert '"kind": "manifest_invalid"' in body
+    assert "manifest.yml.tmp" in body
+    assert "os.replace" in body
+    assert "write_version_atomic" in body
+    assert "status_code=409" in body
+
+
+def test_start_round_snapshots_manifest_from_disk() -> None:
+    """start_round reads the manifest from disk under the if_match flock,
+    rejects an empty manifest, validates it via _manifest_errors, and
+    snapshots it into the round dir as manifest.yml."""
+    text = (PKG_DIR / "app.py").read_text(encoding="utf-8")
+    idx = text.index('@app.post("/experiments/{experiment_id}/rounds"')
+    body = text[idx:idx + 4000]
+    assert 'manifest_path = exp_dir / "manifest.yml"' in body
+    assert "manifest is empty" in body
+    assert "_manifest_errors(manifest)" in body
+    assert '(round_dir / "manifest.yml").write_text(manifest)' in body
+
+
+def test_app_no_longer_references_python_sfd_storage() -> None:
+    """The Python-SFD storage model is fully retired: no code.py, args.json,
+    sfd_identifier, or DEFAULT_ARGS anywhere in app.py."""
+    text = (PKG_DIR / "app.py").read_text(encoding="utf-8")
+    for stale in ("code.py", "args.json", "sfd_identifier", "DEFAULT_ARGS"):
+        assert stale not in text, f"stale Python-SFD reference {stale!r} in app.py"
+
+
+def test_working_json_returns_manifest() -> None:
+    """working.json returns the manifest text + version (no code / args)."""
+    text = (PKG_DIR / "app.py").read_text(encoding="utf-8")
+    idx = text.index("def working_json(")
+    body = text[idx:idx + 400]
+    assert '"manifest"' in body
+    assert '"version"' in body
+
+
+# ---- templates ------------------------------------------------------------
+
+
+def test_manifest_template_exists() -> None:
+    """The manifest editor template is its own page."""
+    assert (TEMPLATES / "manifest.html").is_file()
+    # The old Python code-editor template is gone.
+    assert not (TEMPLATES / "code.html").exists()
+
+
+def test_experiment_page_links_to_manifest_editor() -> None:
+    """The experiment page links to the manifest editor and no longer
+    embeds a Python code editor or an args form."""
+    html = (TEMPLATES / "experiment.html").read_text(encoding="utf-8")
+    assert "/experiments/{{ experiment_id }}/manifest" in html
+    assert "args-form" not in html
+    assert "sfd_identifier" not in html
+
+
+def test_manifest_editor_saves_via_put() -> None:
+    """The manifest editor PUTs {manifest, if_match} to the manifest route
+    and renders manifest_invalid errors returned in the 400 detail."""
+    html = (TEMPLATES / "manifest.html").read_text(encoding="utf-8")
+    assert "manifest-buffer" in html
+    assert "manifest-errors" in html
+    assert "/manifest" in html
+    assert "manifest_invalid" in html

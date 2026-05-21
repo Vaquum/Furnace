@@ -201,6 +201,22 @@ textarea.atom-code-block:focus {
   border-left-color: var(--accent);
 }
 
+/* Manifest-editor validation panel — one row per parse / validation error
+   from Limen, coral text on the raised panel surface. */
+.manifest-errors {
+  background: var(--paper-2);
+  border: 1px solid var(--negative);
+  border-radius: 2px;
+  padding: var(--gap-s) var(--gap-m);
+  margin: 0 0 var(--gap-m) 0;
+}
+.manifest-error-row {
+  font-family: var(--font-mono);
+  font-size: var(--t-code);
+  color: var(--negative);
+  line-height: 1.65;
+}
+
 /* ---- Code editor (Atom 09 dense-app form: gutter + buffer in one panel).
    Used by /experiments/{id}/code. Hairline-only structural language: gutter
    is separated from the buffer by a single rule, the active-line marker is

@@ -11,10 +11,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PKG_DIR = REPO_ROOT / 'experiment_runner'
 
 
-def test_round_page_has_three_copy_buttons() -> None:
-    """One copy button per code block: diff, frozen args, frozen code."""
+def test_round_page_has_copy_buttons() -> None:
+    """One copy button per code block: the manifest diff and the frozen
+    manifest."""
     html = (PKG_DIR / 'templates' / 'round.html').read_text(encoding='utf-8')
-    assert html.count('class="code-block-copy"') >= 3
+    assert html.count('class="code-block-copy"') >= 2
 
 
 def test_each_copy_button_declares_target() -> None:
@@ -22,9 +23,9 @@ def test_each_copy_button_declares_target() -> None:
     handler can resolve it with a single getElementById call."""
     html = (PKG_DIR / 'templates' / 'round.html').read_text(encoding='utf-8')
     targets = set(re.findall(r'data-copy-target="([^"]+)"', html))
-    assert {'diff-source', 'frozen-args', 'frozen-code'}.issubset(targets)
+    assert {'diff-source', 'frozen-manifest'}.issubset(targets)
     # And the matching <pre id="..."> elements exist alongside.
-    for target in ('diff-source', 'frozen-args', 'frozen-code'):
+    for target in ('diff-source', 'frozen-manifest'):
         assert f'id="{target}"' in html, f'missing <pre id="{target}">'
 
 

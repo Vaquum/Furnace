@@ -176,12 +176,11 @@ def test_embed_query_param_drops_nav_chrome() -> None:
     assert base.index("request.query_params.get('embed')") < base.index("<header")
 
 
-def test_code_editor_close_button_replaces_back_link() -> None:
-    """The code editor's '← experiment' back-link is replaced by an ✕
-    close control — a top-bar icon button (history.back, falling back to
-    the experiment page) that returns to wherever the editor was opened
-    from."""
-    html = (TEMPLATES / "code.html").read_text(encoding="utf-8")
+def test_manifest_editor_close_button_replaces_back_link() -> None:
+    """The manifest editor's back-link is an ✕ close control — a top-bar
+    icon button (history.back, falling back to the experiment page) that
+    returns to wherever the editor was opened from."""
+    html = (TEMPLATES / "manifest.html").read_text(encoding="utf-8")
     assert 'aria-label="Close editor"' in html
     assert 'class="bar-icon"' in html
     assert "history.back()" in html
@@ -199,6 +198,6 @@ def test_views_share_one_top_control_bar() -> None:
     assert '<header class="topbar">' in base
     assert "{% block controls %}" in base
     assert '<main class="content">' in base
-    for view in ("jobs", "experiment", "round", "code", "search", "results"):
+    for view in ("jobs", "experiment", "round", "manifest", "search", "results"):
         html = (TEMPLATES / f"{view}.html").read_text(encoding="utf-8")
         assert "{% block controls %}" in html, f"{view}.html has no controls block"

@@ -14,8 +14,7 @@ import subprocess
 import sys
 import time
 import zipfile
-from datetime import date, datetime
-from itertools import pairwise
+from datetime import datetime
 from pathlib import Path
 
 import polars as pl
@@ -42,8 +41,6 @@ from .state import (
     write_version_atomic,
 )
 
-
-import ast as _ast
 
 PKG_DIR = Path(__file__).resolve().parent
 LAUNCHER_PATH = PKG_DIR / "run_round.py"
@@ -77,140 +74,100 @@ def _load_build_meta() -> dict[str, str]:
 _BUILD_META = _load_build_meta()
 
 
-def _ast_dict_to_python(d: _ast.Dict) -> dict | None:
-    out: dict = {}
-    for k, v in zip(d.keys, d.values):
-        try:
-            key = _ast.literal_eval(k) if k is not None else None
-            val = _ast.literal_eval(v)
-        except (ValueError, SyntaxError):
-            return None
-        out[key] = val
-    return out
+# A new experiment is seeded with this manifest. It is a valid Limen YAML
+# manifest (the same shape run_round.py parses → validates → compiles); the
+# `__EXPERIMENT_NAME__` sentinel is substituted with the experiment id at
+# creation time so the metadata name matches the experiment directory.
+STARTER_MANIFEST = """schema_version: "1.0"
+
+metadata:
+  name: __EXPERIMENT_NAME__
+  limen_version: "3.8.0"
+  mode: production
+  description: experiment_runner experiment
+
+sfd:
+  manifest:
+    type: ml
+    data_source:
+      method: limen.data.HistoricalData.get_spot_klines
+      params:
+        kline_size: 900
+        start_date_limit: "2026-02-01"
+    split_config:
+      train: 8
+      val: 1
+      test: 2
+    indicators:
+      - func: limen.indicators.roc
+        params: {period: "{roc_period}"}
+      - func: limen.indicators.ppo
+      - func: limen.indicators.wilder_rsi
+        params: {period: "{rsi_period}"}
+      - func: limen.indicators.atr
+        params: {period: "{atr_period}"}
+      - func: limen.indicators.ema
+        params: {period: "{ema_period}"}
+      - func: limen.indicators.sma
+    features:
+      - func: limen.features.log_returns.log_returns
+      - func: limen.features.vwap
+      - func: limen.features.range_pct
+      - func: limen.features.body_to_range
+      - func: limen.features.close_position
+    target:
+      name: next_bar_up
+      class: limen.targets.NextBarUpTarget
+    scaler:
+      from_params: scaler_type
+    reference_architecture: limen.sfd.reference_architecture.logreg_binary
+
+  params:
+    roc_period: [96, 144]
+    atr_period: [5, 7, 14]
+    rsi_period: [14, 18, 21]
+    ema_period: [12, 26, 96]
+    scaler_type: [robust]
+    solver: [lbfgs]
+    penalty: [l2]
+    C: [0.05, 0.07, 0.1]
+    class_weight: [0.40, 0.50, 0.60, 0.75, 0.90]
+    max_iter: [60, 90, 120]
+
+uel:
+  n_permutations: 50
+  search_strategy:
+    type: random
+  prep_each_round: true
+  output_format: csv
+"""
 
 
-def _extract_manifest_data_source(code: str, sfd_identifier: str) -> dict | None:
-    """AST-walk: find `class <sfd_identifier>:`, find its `manifest` method,
-    locate any `set_data_source(...)` call anywhere in its body, return
-    {"method": <str|None>, "params": <dict|None>}. Handles both
-    `return Manifest().set_data_source(...)` and the assignment form
-    `manifest = Manifest().set_data_source(...)`. Returns None when no
-    set_data_source(...) call is found.
+def _manifest_errors(manifest_text: str) -> list[dict]:
+    """Parse + validate a manifest YAML string through Limen's own pipeline
+    (the same parse → validate run_round.py uses) and return a flat list of
+    `{"line", "path", "message"}` dicts — empty when the manifest is valid.
+    Both the parser errors and the validator errors are folded into one
+    list. Imports are lazy so app.py imports without Limen present."""
+    from limen.yaml.parser import parse
+    from limen.yaml.validator import validate
 
-    SyntaxError propagates to the caller — the inspect endpoint translates
-    it into a 400 with line/col info so a broken paste in the code editor
-    surfaces as a real error instead of an empty data-source schema."""
-    if not code or not sfd_identifier:
-        return None
-    tree = _ast.parse(code)
-    for node in tree.body:
-        if not (isinstance(node, _ast.ClassDef) and node.name == sfd_identifier):
-            continue
-        for item in node.body:
-            if not (isinstance(item, _ast.FunctionDef) and item.name == "manifest"):
-                continue
-            for sub in _ast.walk(item):
-                if not (isinstance(sub, _ast.Call) and isinstance(sub.func, _ast.Attribute)):
-                    continue
-                if sub.func.attr != "set_data_source":
-                    continue
-                method: str | None = None
-                params: dict | None = {}
-                for kw in sub.keywords:
-                    if kw.arg == "method":
-                        try:
-                            v = _ast.literal_eval(kw.value)
-                        except (ValueError, SyntaxError):
-                            v = None
-                        if isinstance(v, str):
-                            method = v
-                    elif kw.arg == "params" and isinstance(kw.value, _ast.Dict):
-                        params = _ast_dict_to_python(kw.value)
-                return {"method": method, "params": params}
-    return None
-
-
-def _inspect_round_args(code: str, sfd_identifier: str) -> dict:
-    """Return the schema for the experiment-edit controls. The SFD's
-    `manifest()` is the source of truth: we AST-walk for the chained
-    `set_data_source(method=..., params={...})` and introspect that
-    method's signature for the per-parameter library defaults that drive
-    the placeholder text in the UI.
-
-    Fail-loud: a missing limen import or an un-introspectable method
-    propagates so the inspect endpoint returns 500. The previous silent
-    except masked real failures behind an empty-schema 200, which made
-    the client save `{}` against a working SFD without any signal.
-
-    No-manifest-no-schema: if the SFD class isn't in the code, doesn't
-    define `manifest`, or doesn't call `set_data_source`, the response
-    carries an empty signature. The client shows the empty-state
-    message instead of synthesising controls for a default method
-    unrelated to the current code (which would otherwise become real
-    `args.json` overrides on the next save and mask the real manifest
-    after the code is fixed)."""
-    import inspect as _inspect_mod
-    empty: dict = {
-        "data_source": {
-            "manifest_method": None,
-            "manifest_params": {},
-            "library_signature": [],
-        },
-    }
-    try:
-        extracted = _extract_manifest_data_source(code, sfd_identifier)
-    except SyntaxError as exc:
-        line = exc.lineno if exc.lineno is not None else 0
-        col = exc.offset if exc.offset is not None else 0
-        raise HTTPException(
-            400,
-            f"SyntaxError in code at line {line}, col {col}: {exc.msg}",
-        ) from exc
-    if extracted is None:
-        return empty
-    manifest_method = extracted.get("method")
-    manifest_params = extracted.get("params") or {}
-    out: dict = {
-        "data_source": {
-            "manifest_method": manifest_method,
-            "manifest_params": manifest_params,
-            "library_signature": [],
-        },
-    }
-    # Manifest matched but didn't name a method. Default to the legacy
-    # `get_spot_klines` for introspection — UEL would do the same at run
-    # time when method is unspecified.
-    method_name = manifest_method or "get_spot_klines"
-    import limen
-    method = getattr(limen.HistoricalData, method_name, None)
-    if method is None:
-        # Manifest declared a method that doesn't exist on HistoricalData.
-        # Fail loud at inspect time so the user can fix the manifest before
-        # starting a round — otherwise run_round would crash on the same
-        # getattr() with a less actionable traceback.
-        raise HTTPException(
-            400,
-            f"manifest declares data_source.method={method_name!r} which is "
-            f"not available on limen.HistoricalData",
-        )
-    sig = _inspect_mod.signature(method)
-    sentinel = _inspect_mod.Parameter.empty
-    for name, param in sig.parameters.items():
-        if name == "self" or param.kind in (
-            _inspect_mod.Parameter.VAR_POSITIONAL,
-            _inspect_mod.Parameter.VAR_KEYWORD,
-        ):
-            continue
-        has_default = param.default is not sentinel
-        default = param.default if has_default else None
-        if callable(default):
-            default = None
-        annotation = str(param.annotation) if param.annotation is not sentinel else "Any"
-        out["data_source"]["library_signature"].append({
-            "name": name,
-            "default": default,
-            "has_default": has_default,
-            "annotation": annotation,
+    yaml_dict, parse_errors = parse(manifest_text)
+    out: list[dict] = []
+    for e in parse_errors:
+        out.append({
+            "line": getattr(e, "line", None),
+            "path": "",
+            "message": e.message,
+        })
+    if out:
+        return out
+    result = validate(yaml_dict)
+    for e in result.errors:
+        out.append({
+            "line": getattr(e, "line", None),
+            "path": getattr(e, "path", "") or "",
+            "message": e.message,
         })
     return out
 
@@ -255,42 +212,7 @@ def _split_stderr_content(text: str) -> tuple[str, str]:
     return "".join(errors), "".join(warning_blocks)
 
 
-def _strip_for_diff(source: str) -> str:
-    """Drop top-level imports and `_*` helper functions from source — convention
-    that those don't participate in the round-to-round diff. Everything else
-    (constants, classes, named functions, the SFD itself) is preserved verbatim."""
-    if not source.strip():
-        return ""
-    try:
-        tree = _ast.parse(source)
-    except SyntaxError:
-        return source
-    excluded: set[int] = set()
-    for node in tree.body:
-        if isinstance(node, (_ast.Import, _ast.ImportFrom)):
-            start = node.lineno
-            end = node.end_lineno or start
-            excluded.update(range(start, end + 1))
-        elif isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)) and node.name.startswith("_"):
-            start = node.lineno
-            end = node.end_lineno or start
-            excluded.update(range(start, end + 1))
-    lines = source.splitlines(keepends=True)
-    return "".join(line for i, line in enumerate(lines, start=1) if i not in excluded)
-
-NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 SLUG_RE = re.compile(r"[^A-Za-z0-9_-]+")
-DEFAULT_ARGS: dict = {
-    "sfd_identifier": "",
-    "data_source": {"method": "get_spot_klines", "params": {}},
-    "uel_run": {
-        "experiment_name": "",
-        "n_permutations": 100,
-        "prep_each_round": True,
-        "random_search": True,
-        "maintain_details_in_params": False,
-    },
-}
 
 
 def _format_kline_size(seconds: int | None) -> str:
@@ -344,68 +266,12 @@ def _allocate_round_id(rounds_dir: Path) -> str:
     return f"{nxt:04d}"
 
 
-def _read_working(experiment_dir: Path) -> tuple[str, dict, int]:
+def _read_manifest(experiment_dir: Path) -> tuple[str, int]:
     with version_flock(experiment_dir):
-        code_path = experiment_dir / "code.py"
-        args_path = experiment_dir / "args.json"
-        code = code_path.read_text() if code_path.exists() else ""
-        args = json.loads(args_path.read_text()) if args_path.exists() else DEFAULT_ARGS
+        manifest_path = experiment_dir / "manifest.yml"
+        manifest_text = manifest_path.read_text() if manifest_path.exists() else ""
         version = read_version(experiment_dir)
-    return code, args, version
-
-
-def _validate_args(args: dict) -> None:
-    sid = args.get("sfd_identifier", "")
-    if not isinstance(sid, str) or not NAME_RE.match(sid):
-        raise HTTPException(400, "sfd_identifier must match ^[A-Za-z0-9_-]+$")
-    method = args.get("data_source", {}).get("method", "")
-    if not isinstance(method, str) or not method:
-        raise HTTPException(400, "data_source.method is required")
-    params = args.get("data_source", {}).get("params", {})
-    if not isinstance(params, dict):
-        raise HTTPException(400, "data_source.params must be an object")
-    # Optional absolute-date split. When present, it must be a complete
-    # object — six YYYY-MM-DD date strings (NOT datetimes). The form
-    # collects type="date" inputs; run_round.py expands each to a UTC
-    # datetime with end-of-day-inclusive semantics (start fields ->
-    # 00:00:00 UTC, end fields -> next-day 00:00:00 UTC) when calling
-    # Manifest.set_split_dates. Absent (or empty-dict) -> the SFD's
-    # existing split_config runs unchanged.
-    #
-    # Ordering rule (inclusive end-of-day):
-    #   within a split:  start_date <= end_date    (1-day window OK)
-    #   between splits:  prev_end_date < next_start_date  (no overlap)
-    # i.e. train_start <= train_end < val_start <= val_end < test_start <= test_end.
-    # That maps cleanly to Limen's half-open [start, next-day-start) windows
-    # after the run_round expansion: train ends at val's midnight, val ends
-    # at test's midnight, never overlapping.
-    sd = args.get("split_dates")
-    if sd is not None and sd != {}:
-        if not isinstance(sd, dict):
-            raise HTTPException(400, "split_dates must be an object")
-        required = ("train_start", "train_end", "val_start", "val_end", "test_start", "test_end")
-        missing = [k for k in required if not sd.get(k)]
-        if missing:
-            raise HTTPException(400, f"split_dates is missing or empty: {missing}")
-        parsed: list[tuple[str, date]] = []
-        for k in required:
-            raw = sd[k]
-            if not isinstance(raw, str):
-                raise HTTPException(400, f"split_dates.{k}={raw!r} is not a string")
-            try:
-                parsed.append((k, date.fromisoformat(raw)))
-            except ValueError as exc:
-                raise HTTPException(400, f"split_dates.{k}={raw!r} is not a YYYY-MM-DD date") from exc
-        # Operator: True = strict less-than (between splits, no overlap),
-        # False = <= (within a split, 1-day window OK). Five adjacent pairs.
-        strict = [False, True, False, True, False]
-        for ((a_name, a), (b_name, b)), is_strict in zip(pairwise(parsed), strict, strict=True):
-            if (a >= b) if is_strict else (a > b):
-                op = "<" if is_strict else "<="
-                raise HTTPException(
-                    400,
-                    f"split_dates ordering: {a_name}={sd[a_name]} must be {op} {b_name}={sd[b_name]}",
-                )
+    return manifest_text, version
 
 
 def _all_experiments(root: Path, with_analytics: bool = False) -> list[dict]:
@@ -641,39 +507,24 @@ def create_app(root: Path) -> FastAPI:
         eid = _allocate_experiment_id(experiments_dir, name)
         exp_dir = experiments_dir / eid
         (exp_dir / "rounds").mkdir(parents=True, exist_ok=True)
-        (exp_dir / "code.py").write_text("")
-        seeded_args = json.loads(json.dumps(DEFAULT_ARGS))
-        seeded_args["uel_run"]["experiment_name"] = eid
-        (exp_dir / "args.json").write_text(json.dumps(seeded_args, indent=2))
+        (exp_dir / "manifest.yml").write_text(
+            STARTER_MANIFEST.replace("__EXPERIMENT_NAME__", eid)
+        )
         write_version_atomic(exp_dir, 0)
         if is_json:
             return JSONResponse({"id": eid})
         return RedirectResponse(f"/experiments/{eid}", status_code=303)
 
-    @app.post("/experiments/{experiment_id}/inspect")
-    async def inspect_args(experiment_id: str, request: Request):
-        _exp_dir(experiment_id)
-        body = await request.json()
-        if not isinstance(body, dict):
-            raise HTTPException(400, "request body must be a JSON object")
-        code = body.get("code", "")
-        sfd_id = body.get("sfd_identifier", "")
-        if not isinstance(code, str):
-            raise HTTPException(400, "code must be a string")
-        if not isinstance(sfd_id, str):
-            raise HTTPException(400, "sfd_identifier must be a string")
-        return JSONResponse(_inspect_round_args(code, sfd_id))
-
     @app.get("/experiments/{experiment_id}/working.json")
     def working_json(experiment_id: str):
         exp_dir = _exp_dir(experiment_id)
-        code, args, version = _read_working(exp_dir)
-        return {"code": code, "args": args, "version": version}
+        manifest_text, version = _read_manifest(exp_dir)
+        return {"manifest": manifest_text, "version": version}
 
     @app.get("/experiments/{experiment_id}", response_class=HTMLResponse)
     def experiment_page(request: Request, experiment_id: str):
         exp_dir = _exp_dir(experiment_id)
-        code, args, version = _read_working(exp_dir)
+        _manifest_text, version = _read_manifest(exp_dir)
         rounds = _experiment_rounds(exp_dir)
         active = is_experiment_active(exp_dir)
         return templates.TemplateResponse(
@@ -681,9 +532,6 @@ def create_app(root: Path) -> FastAPI:
             "experiment.html",
             {
                 "experiment_id": experiment_id,
-                "code": code,
-                "args": args,
-                "args_json": json.dumps(args, indent=2),
                 "version": version,
                 "rounds": rounds,
                 "active": active,
@@ -700,101 +548,50 @@ def create_app(root: Path) -> FastAPI:
             {"experiment_id": experiment_id, "rounds": rounds},
         )
 
-    @app.get("/experiments/{experiment_id}/code", response_class=HTMLResponse)
-    def code_page(request: Request, experiment_id: str):
+    @app.get("/experiments/{experiment_id}/manifest", response_class=HTMLResponse)
+    def manifest_page(request: Request, experiment_id: str):
         exp_dir = _exp_dir(experiment_id)
-        code, _args, version = _read_working(exp_dir)
+        manifest_text, version = _read_manifest(exp_dir)
         return templates.TemplateResponse(
             request,
-            "code.html",
+            "manifest.html",
             {
                 "experiment_id": experiment_id,
-                "code": code,
+                "manifest": manifest_text,
                 "version": version,
             },
         )
 
-    @app.put("/experiments/{experiment_id}/code")
-    async def save_code(experiment_id: str, request: Request):
+    @app.put("/experiments/{experiment_id}/manifest")
+    async def save_manifest(experiment_id: str, request: Request):
         exp_dir = _exp_dir(experiment_id)
         body = await request.json()
         if not isinstance(body, dict):
             raise HTTPException(400, "request body must be a JSON object")
-        if "code" not in body:
-            raise HTTPException(400, "request must include 'code'")
+        if "manifest" not in body:
+            raise HTTPException(400, "request must include 'manifest'")
         if_match = body.get("if_match")
-        code = body["code"]
-        if not isinstance(code, str):
-            raise HTTPException(400, "code must be a string")
-        # Save refuses broken Python so the user catches syntax errors at the
-        # moment they hit Save, not at /inspect (controls quietly empty) or
-        # at /rounds (round-start fails after the user already moved on).
-        # The 400 detail is structured so the editor can paint the offending
-        # line in the gutter and scroll to it.
-        try:
-            _ast.parse(code)
-        except SyntaxError as exc:
+        manifest = body["manifest"]
+        if not isinstance(manifest, str):
+            raise HTTPException(400, "manifest must be a string")
+        # Save refuses an invalid manifest so the user catches parse /
+        # validation errors at the moment they hit Save, not at round-start
+        # (which fails after they already moved on). The 400 detail is
+        # structured so the editor can list each error with its line / path.
+        errors = _manifest_errors(manifest)
+        if errors:
             raise HTTPException(
                 status_code=400,
-                detail={
-                    "kind": "syntax_error",
-                    "line": exc.lineno if exc.lineno is not None else 0,
-                    "col": exc.offset if exc.offset is not None else 0,
-                    "msg": exc.msg,
-                },
-            ) from exc
+                detail={"kind": "manifest_invalid", "errors": errors},
+            )
         with sm.exp_lock(experiment_id):
             with version_flock(exp_dir):
                 current = read_version(exp_dir)
                 if if_match != current:
                     return JSONResponse({"current_version": current}, status_code=409)
-                tmp_code = exp_dir / "code.py.tmp"
-                tmp_code.write_text(code)
-                os.replace(tmp_code, exp_dir / "code.py")
-                new_version = current + 1
-                write_version_atomic(exp_dir, new_version)
-        return {"version": new_version}
-
-    @app.post("/experiments/{experiment_id}/working")
-    async def save_working(experiment_id: str, request: Request):
-        exp_dir = _exp_dir(experiment_id)
-        body = await request.json()
-        if not isinstance(body, dict):
-            raise HTTPException(400, "request body must be a JSON object")
-        if_match = body.get("if_match")
-        # Both `code` and `args` are independently optional. Code editing now
-        # has its own page (PUT /experiments/{id}/code); the experiment page
-        # only saves args. Older callers that send both still work. The
-        # request must carry at least one of them — otherwise the version
-        # would bump with no actual write, creating spurious 409s elsewhere.
-        has_code = "code" in body
-        has_args = "args" in body
-        if not (has_code or has_args):
-            raise HTTPException(400, "request must include 'code', 'args', or both")
-        code = body.get("code", "")
-        args = body.get("args", {})
-        if has_code and not isinstance(code, str):
-            raise HTTPException(400, "code must be a string")
-        if has_args and not isinstance(args, dict):
-            raise HTTPException(400, "args must be an object")
-        if has_args:
-            # experiment_name is always derived from the experiment id; ignore client value
-            args.setdefault("uel_run", {})
-            if isinstance(args["uel_run"], dict):
-                args["uel_run"]["experiment_name"] = experiment_id
-        with sm.exp_lock(experiment_id):
-            with version_flock(exp_dir):
-                current = read_version(exp_dir)
-                if if_match != current:
-                    return JSONResponse({"current_version": current}, status_code=409)
-                if has_code:
-                    tmp_code = exp_dir / "code.py.tmp"
-                    tmp_code.write_text(code)
-                    os.replace(tmp_code, exp_dir / "code.py")
-                if has_args:
-                    tmp_args = exp_dir / "args.json.tmp"
-                    tmp_args.write_text(json.dumps(args, indent=2))
-                    os.replace(tmp_args, exp_dir / "args.json")
+                tmp = exp_dir / "manifest.yml.tmp"
+                tmp.write_text(manifest)
+                os.replace(tmp, exp_dir / "manifest.yml")
                 new_version = current + 1
                 write_version_atomic(exp_dir, new_version)
         return {"version": new_version}
@@ -816,50 +613,29 @@ def create_app(root: Path) -> FastAPI:
                     return JSONResponse(
                         {"error": "another round is active"}, status_code=409,
                     )
-                # Source of truth: code is saved via PUT /code, args via
-                # /working. We snapshot both under the same flock that gates
-                # the if_match check so the round is consistent with what
-                # the user saw when they clicked Start.
-                code_path = exp_dir / "code.py"
-                args_path = exp_dir / "args.json"
-                code = code_path.read_text() if code_path.exists() else ""
-                args = json.loads(args_path.read_text()) if args_path.exists() else {}
-                if not code.strip():
+                # Source of truth: the manifest is saved via PUT /manifest.
+                # We snapshot it under the same flock that gates the if_match
+                # check so the round is consistent with what the user saw
+                # when they clicked Start.
+                manifest_path = exp_dir / "manifest.yml"
+                manifest = manifest_path.read_text() if manifest_path.exists() else ""
+                if not manifest.strip():
                     raise HTTPException(
                         400,
-                        "code is empty — open the code editor and paste your SFD before starting a round",
+                        "manifest is empty — open the manifest editor and fill it in before starting a round",
                     )
-                try:
-                    _ast.parse(code)
-                except SyntaxError as exc:
+                errors = _manifest_errors(manifest)
+                if errors:
                     raise HTTPException(
                         status_code=400,
-                        detail={
-                            "kind": "syntax_error",
-                            "line": exc.lineno if exc.lineno is not None else 0,
-                            "col": exc.offset if exc.offset is not None else 0,
-                            "msg": exc.msg,
-                        },
-                    ) from exc
-                if not isinstance(args, dict):
-                    raise HTTPException(400, "args must be an object")
-                args.setdefault("uel_run", {})
-                if isinstance(args["uel_run"], dict):
-                    args["uel_run"]["experiment_name"] = experiment_id
-                _validate_args(args)
-                sfd_id = args["sfd_identifier"]
-                if sfd_id not in code:
-                    raise HTTPException(
-                        400,
-                        f"sfd_identifier '{sfd_id}' does not appear in the saved code",
+                        detail={"kind": "manifest_invalid", "errors": errors},
                     )
 
             rounds_dir = exp_dir / "rounds"
             round_id = _allocate_round_id(rounds_dir)
             round_dir = rounds_dir / round_id
             round_dir.mkdir(parents=True, exist_ok=False)
-            (round_dir / "code.py").write_text(code)
-            (round_dir / "args.json").write_text(json.dumps(args, indent=2))
+            (round_dir / "manifest.yml").write_text(manifest)
             stdout_path = round_dir / "stdout.log"
             stderr_path = round_dir / "stderr.log"
             stdout_path.touch()
@@ -931,8 +707,7 @@ def create_app(root: Path) -> FastAPI:
     def round_page(request: Request, experiment_id: str, round_id: str):
         round_dir = _round_dir(experiment_id, round_id)
         st = read_status(round_dir)
-        frozen_code = (round_dir / "code.py").read_text()
-        frozen_args = json.loads((round_dir / "args.json").read_text())
+        frozen_manifest = (round_dir / "manifest.yml").read_text()
         # period.json is written by run_round.py after uel.run completes:
         # test-period bounds (from uel._alignment) + authoritative kline_size
         # (from data row spacing). May be absent on pre-S11 rounds or on
@@ -942,15 +717,13 @@ def create_app(root: Path) -> FastAPI:
         diff_text = ""
         prev_id = f"{int(round_id) - 1:04d}"
         prev_dir = round_dir.parent / prev_id
-        if (prev_dir / "code.py").exists():
-            prev_code = (prev_dir / "code.py").read_text()
-            stripped_prev = _strip_for_diff(prev_code)
-            stripped_this = _strip_for_diff(frozen_code)
+        if (prev_dir / "manifest.yml").exists():
+            prev_manifest = (prev_dir / "manifest.yml").read_text()
             diff_text = "".join(difflib.unified_diff(
-                stripped_prev.splitlines(keepends=True),
-                stripped_this.splitlines(keepends=True),
-                fromfile=f"r{prev_id}/code.py",
-                tofile=f"r{round_id}/code.py",
+                prev_manifest.splitlines(keepends=True),
+                frozen_manifest.splitlines(keepends=True),
+                fromfile=f"r{prev_id}/manifest.yml",
+                tofile=f"r{round_id}/manifest.yml",
                 n=3,
             ))
         response = templates.TemplateResponse(
@@ -962,8 +735,7 @@ def create_app(root: Path) -> FastAPI:
                 "rounds": _experiment_rounds(_exp_dir(experiment_id)),
                 "experiments": _all_experiments(root),
                 "status": st,
-                "frozen_code": frozen_code,
-                "frozen_args_json": json.dumps(frozen_args, indent=2),
+                "frozen_manifest": frozen_manifest,
                 "diff_text": diff_text,
                 "period": period,
                 "active": st.get("state") in ACTIVE_STATES,
@@ -1097,10 +869,8 @@ def create_app(root: Path) -> FastAPI:
     @app.get("/experiments/{experiment_id}/rounds/{round_id}/csv")
     def round_csv(experiment_id: str, round_id: str):
         round_dir = _round_dir(experiment_id, round_id)
-        frozen_args = json.loads((round_dir / "args.json").read_text())
-        ename = frozen_args["uel_run"]["experiment_name"]
-        csv_path = round_dir / f"{ename}__r{round_id}.csv"
-        headers = {"Content-Disposition": f'attachment; filename="{ename}__r{round_id}.csv"'}
+        csv_path = round_dir / f"{experiment_id}__r{round_id}.csv"
+        headers = {"Content-Disposition": f'attachment; filename="{experiment_id}__r{round_id}.csv"'}
         if not csv_path.exists():
             return PlainTextResponse("", media_type="text/csv", headers=headers)
         return PlainTextResponse(csv_path.read_text(), media_type="text/csv", headers=headers)
@@ -1108,17 +878,13 @@ def create_app(root: Path) -> FastAPI:
     @app.get("/experiments/{experiment_id}/rounds/{round_id}/bundle")
     def round_bundle(experiment_id: str, round_id: str):
         round_dir = _round_dir(experiment_id, round_id)
-        frozen_args = json.loads((round_dir / "args.json").read_text())
-        ename = frozen_args["uel_run"]["experiment_name"]
-        base = f"{ename}__r{round_id}"
-        code_path = round_dir / "code.py"
-        args_path = round_dir / "args.json"
+        base = f"{experiment_id}__r{round_id}"
+        manifest_path = round_dir / "manifest.yml"
         csv_path = round_dir / f"{base}.csv"
 
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-            z.writestr(f"{base}.py", code_path.read_text())
-            z.writestr(f"{base}.json", args_path.read_text())
+            z.writestr(f"{base}.yml", manifest_path.read_text())
             if csv_path.exists():
                 z.writestr(f"{base}.csv", csv_path.read_text())
 
@@ -1255,8 +1021,7 @@ def _display_label(col: str) -> str:
 def _compute_results_page(
     round_dir: Path, offset: int, limit: int, sort: str | None, direction: str,
 ) -> dict:
-    frozen_args = json.loads((round_dir / "args.json").read_text())
-    ename = frozen_args["uel_run"]["experiment_name"]
+    ename = round_dir.parent.parent.name
     csv_path = round_dir / f"{ename}__r{round_dir.name}.csv"
     if not csv_path.exists():
         return {"rows": [], "total": 0}
@@ -1308,10 +1073,12 @@ def _parse_iso(s: str | None):
 
 
 def _compute_round_stats(round_dir: Path) -> dict:
+    from limen.yaml.parser import parse
+
     status = read_status(round_dir)
-    frozen_args = json.loads((round_dir / "args.json").read_text())
-    target = int(frozen_args["uel_run"]["n_permutations"])
-    ename = frozen_args["uel_run"]["experiment_name"]
+    yaml_dict, _parse_errors = parse(round_dir / "manifest.yml")
+    target = int((yaml_dict.get("uel") or {}).get("n_permutations", 50))
+    ename = round_dir.parent.parent.name
     csv_path = round_dir / f"{ename}__r{round_dir.name}.csv"
 
     state = status.get("state")
@@ -1408,12 +1175,10 @@ def _ensure_round_index(round_dir: Path) -> Path | None:
     state = read_status(round_dir).get("state")
     if state in ACTIVE_STATES:
         return None
-    args_path = round_dir / "args.json"
-    code_path = round_dir / "code.py"
-    if not args_path.exists() or not code_path.exists():
+    manifest_path = round_dir / "manifest.yml"
+    if not manifest_path.exists():
         return None
-    args = json.loads(args_path.read_text())
-    ename = args["uel_run"]["experiment_name"]
+    ename = round_dir.parent.parent.name
     csv_path = round_dir / f"{ename}__r{round_dir.name}.csv"
     if not csv_path.exists():
         return None
@@ -1441,7 +1206,7 @@ def _ensure_round_index(round_dir: Path) -> Path | None:
     if not _SEARCH_REQUIRED_COLS.issubset(df.columns):
         return None
 
-    sha = hashlib.sha256(code_path.read_bytes()).hexdigest()
+    sha = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
 
     # No more per-bar normalization — the new backtest ledger emits metrics
     # already scaled to per-signal / per-trade / per-day / fraction units,
@@ -1598,25 +1363,23 @@ def _build_search_bundle(root: Path, filters: _FilterMap, experiment_names: list
                 sorted_round_ids = sorted(by_round.keys())
                 base = f"{exp_id}__r" + "-".join(sorted_round_ids)
 
+                # Every round under one (exp_id, sha) key shares an identical
+                # manifest (sha is the manifest hash) — the first round's copy
+                # is the definition for the whole group.
                 first_dir = root / "experiments" / exp_id / "rounds" / sorted_round_ids[0]
-                z.writestr(f"{base}.py", (first_dir / "code.py").read_text())
+                z.writestr(f"{base}.yml", (first_dir / "manifest.yml").read_text())
 
-                rounds_meta = []
-                for rid in sorted_round_ids:
-                    rdir = root / "experiments" / exp_id / "rounds" / rid
-                    rounds_meta.append({
-                        "round_id": rid,
-                        "args": json.loads((rdir / "args.json").read_text()),
-                    })
-                meta = {"experiment_id": exp_id, "code_sha256": sha, "rounds": rounds_meta}
+                meta = {
+                    "experiment_id": exp_id,
+                    "manifest_sha256": sha,
+                    "round_ids": sorted_round_ids,
+                }
                 z.writestr(f"{base}.json", json.dumps(meta, indent=2))
 
                 csv_parts: list[pl.DataFrame] = []
                 for rid in sorted_round_ids:
                     rdir = root / "experiments" / exp_id / "rounds" / rid
-                    args = json.loads((rdir / "args.json").read_text())
-                    ename = args["uel_run"]["experiment_name"]
-                    csv_path = rdir / f"{ename}__r{rid}.csv"
+                    csv_path = rdir / f"{exp_id}__r{rid}.csv"
                     if not csv_path.exists():
                         continue
                     df = pl.read_csv(csv_path, infer_schema_length=200)
