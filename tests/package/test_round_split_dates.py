@@ -146,12 +146,12 @@ def test_experiment_html_has_six_date_inputs_with_advanced_toggle() -> None:
     assert "data-sync=\"train_start\"" in text
     assert "data-sync=\"test_end\"" in text
     assert "function wireSplitDateSync" in text
-    # Scoped style block re-applies the existing input chrome to date
-    # inputs (style.css:417 doesn't include type="date" in its selector,
-    # so without this they'd render with browser-native controls and look
-    # visually disconnected from the rest of the form). The selector is
-    # scoped to .split-dates-field so it doesn't leak.
-    assert ".split-dates-field input[type=\"date\"]" in text
+    # Date inputs share the form's control chrome: the shared input rule in
+    # style.css includes type="date" in its selector, so the six date inputs
+    # render with the app's own styling (no browser-native chrome) — no
+    # per-page scoped style block is needed.
+    css = (PKG_DIR / "static" / "style.css").read_text(encoding="utf-8")
+    assert 'input[type="date"]' in css
     # Auto-fill helper and listeners exist.
     assert "function addDays(" in text
     assert "f-train-end" in text and "f-val-start" in text

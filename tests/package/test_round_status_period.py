@@ -107,16 +107,18 @@ def test_round_page_sets_no_store_cache_control() -> None:
     assert 'response.headers["Cache-Control"] = "no-store"' in text
 
 
-def test_round_html_shows_test_period_and_kline_size() -> None:
-    """round.html surfaces the new fields in the status grid and drops
-    the old wall-clock Started/Ended labels (they were misleading — the
-    process run time has nothing to do with the data window the results
-    represent)."""
+def test_round_html_surfaces_test_period() -> None:
+    """The round viewer's status bar surfaces the test-period window
+    (start / end dates from period.json) with no field labels — slice
+    S11's labelled status grid was collapsed into a single bar, and
+    PID / exit code / kline size are no longer shown."""
     html = (PKG_DIR / 'templates' / 'round.html').read_text(encoding='utf-8')
-    assert 'Test period start' in html
-    assert 'Test period end' in html
-    assert 'Kline size' in html
-    assert 'kline_size_display' in html
-    # The old wall-clock dt labels are gone from the visible status grid.
+    # The test-period bounds still render — now label-free, in the bar.
+    assert 'period.test_period_start' in html
+    assert 'period.test_period_end' in html
+    # The labelled status grid is gone, along with kline size.
+    assert 'status-grid' not in html
+    assert 'Kline size' not in html
+    # Old wall-clock labels stay gone.
     assert '<dt>Started</dt>' not in html
     assert '<dt>Ended</dt>' not in html
