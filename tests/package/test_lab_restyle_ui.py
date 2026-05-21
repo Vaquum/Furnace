@@ -89,6 +89,17 @@ def test_round_analytic_is_cross_permutation_median_then_round_mean() -> None:
     assert "sum(vals) / len(vals)" in app       # experiment = mean across rounds
 
 
+def test_round_analytics_resolves_canonical_results_csv() -> None:
+    """_round_analytics resolves the round's results CSV by its canonical
+    <eid>__r<rid>.csv name — the derivation every other CSV call site in
+    app.py uses — not a glob, whose filesystem-order dependence could
+    read a stray CSV (an export, a partial write)."""
+    app = (PKG_DIR / "app.py").read_text(encoding="utf-8")
+    body = app[app.index("def _round_analytics(") :][:900]
+    assert 'glob("*.csv")' not in body
+    assert 'f"{ename}__r{round_dir.name}.csv"' in body
+
+
 def test_metric_fmt_jinja_filter_registered() -> None:
     """The analytic cells render through a metric_fmt Jinja filter backed
     by _format_metric — magnitude-adaptive precision, em dash for a
@@ -116,6 +127,9 @@ def test_create_experiment_endpoint_accepts_json() -> None:
     app = (PKG_DIR / "app.py").read_text(encoding="utf-8")
     assert 'startswith("application/json")' in app
     assert 'JSONResponse({"id": eid})' in app
+    # A JSON name must be a real string — null / numbers are a 400, not
+    # coerced into a surprising experiment id.
+    assert '"name must be a string"' in app
 
 
 def test_working_json_endpoint_exists() -> None:

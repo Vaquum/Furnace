@@ -481,8 +481,13 @@ def _round_analytics(round_dir: Path) -> dict[str, float | None]:
     viewer's p50. None when the column is absent (pre-ledger rounds) or the
     round has no results CSV yet."""
     out: dict[str, float | None] = {key: None for key in _ANALYTIC_KEYS}
-    csv_path = next(round_dir.glob("*.csv"), None)
-    if csv_path is None:
+    # Resolve the canonical results CSV the same way every other CSV call
+    # site does — round_dir is experiments/<eid>/rounds/<rid>, so the file
+    # is <eid>__r<rid>.csv. A glob would be filesystem-order dependent and
+    # could silently read a stray CSV (export, partial write).
+    ename = round_dir.parent.parent.name
+    csv_path = round_dir / f"{ename}__r{round_dir.name}.csv"
+    if not csv_path.exists():
         return out
     df = pl.read_csv(csv_path, infer_schema_length=200)
     for key, col in _ANALYTIC_COLUMNS.items():
@@ -622,7 +627,10 @@ def create_app(root: Path) -> FastAPI:
             body = await request.json()
             if not isinstance(body, dict):
                 raise HTTPException(400, "request body must be a JSON object")
-            name = str(body.get("name", "")).strip()
+            raw_name = body.get("name", "")
+            if not isinstance(raw_name, str):
+                raise HTTPException(400, "name must be a string")
+            name = raw_name.strip()
         else:
             form = await request.form()
             name = form.get("name", "").strip()
