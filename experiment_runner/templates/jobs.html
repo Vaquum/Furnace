@@ -37,19 +37,46 @@
 </table>
 
 <div class="modal" id="create-modal" aria-hidden="true">
-  <div class="modal-panel" role="dialog" aria-label="Create experiment">
+  <div class="modal-panel" role="dialog" aria-label="Create a round">
     <div class="modal-head">
-      <span>New experiment</span>
+      <span id="create-title">New experiment</span>
       <button type="button" class="icon-close" id="create-close" aria-label="Close">✕</button>
     </div>
-    <div class="modal-body">
-      <div class="m-field">
-        <label for="m-new-name">Experiment name</label>
-        <input type="text" id="m-new-name" placeholder="Experiment name…" autocomplete="off">
+    <div class="modal-body create-grid">
+      <div class="create-target" id="create-target">
+        <p class="create-group-label">New experiment</p>
+        <label class="target-option">
+          <input type="radio" name="create-target" value="__new__" checked>
+          <span>Create a new experiment</span>
+        </label>
+        <input type="text" id="m-new-name" class="target-new-name" placeholder="Experiment name…" autocomplete="off">
+
+        <p class="create-group-label spaced">Continue an experiment</p>
+        {% for exp in experiments %}
+        <label class="target-option">
+          <input type="radio" name="create-target" value="{{ exp.id }}">
+          <span>{{ exp.id }}</span>
+        </label>
+        {% endfor %}
+        {% if not experiments %}
+        <p class="atom-small" style="color: var(--ink-mute);">No experiments yet.</p>
+        {% endif %}
       </div>
-      <div class="create-footer">
-        <button type="button" id="m-submit" class="primary">Create experiment</button>
-        <span id="m-status" class="create-status"></span>
+
+      <div class="create-manifest">
+        <div class="manifest-editor">
+          <div class="manifest-gutter" aria-hidden="true"></div>
+          <div class="manifest-buffer-wrap">
+            <pre class="manifest-highlight" aria-hidden="true"></pre>
+            <textarea class="manifest-buffer" id="m-manifest" spellcheck="false"
+                      autocapitalize="off" autocomplete="off" autocorrect="off" wrap="off"></textarea>
+          </div>
+        </div>
+        <div id="m-errors" class="manifest-errors" hidden></div>
+        <div class="create-footer">
+          <button type="button" id="m-submit" class="primary">Create &amp; start round</button>
+          <span id="m-status" class="create-status"></span>
+        </div>
       </div>
     </div>
   </div>
@@ -68,6 +95,8 @@
   </div>
 </div>
 
+<script>window.STARTER_MANIFEST = {{ starter_manifest | tojson }};</script>
+<script src="/static/manifest_editor.js?v={{ asset_version }}"></script>
 <script src="/static/create_modal.js?v={{ asset_version }}"></script>
 <script>
 const expanded = new Set();

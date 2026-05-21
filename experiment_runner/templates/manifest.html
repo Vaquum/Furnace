@@ -7,34 +7,31 @@
 {% endblock %}
 {% block content %}
 
-<div class="section">
-  <h2 class="atom-heading"><span class="numeral">01</span><span>Manifest</span></h2>
-  <textarea class="atom-code-block"
-            id="manifest-buffer"
-            spellcheck="false"
-            autocapitalize="off"
-            autocomplete="off"
-            autocorrect="off"
-            wrap="off">{{ manifest }}</textarea>
+<div class="manifest-page">
+  <div class="manifest-editor">
+    <div class="manifest-gutter" aria-hidden="true"></div>
+    <div class="manifest-buffer-wrap">
+      <pre class="manifest-highlight" aria-hidden="true"></pre>
+      <textarea class="manifest-buffer" id="manifest-buffer" spellcheck="false"
+                autocapitalize="off" autocomplete="off" autocorrect="off" wrap="off">{{ manifest }}</textarea>
+    </div>
+  </div>
   <div id="manifest-errors" class="manifest-errors" hidden></div>
+  <div class="button-row">
+    <button id="manifest-save-btn" type="button" class="primary">Save</button>
+    <span id="manifest-status" class="atom-small" style="margin-left: var(--gap-m); align-self: center;"></span>
+  </div>
 </div>
 
-<div class="button-row">
-  <button id="manifest-save-btn" type="button" class="primary">Save</button>
-  <span id="manifest-status" class="atom-small" style="margin-left: var(--gap-m); align-self: center;"></span>
-</div>
-
+<script src="/static/manifest_editor.js?v={{ asset_version }}"></script>
 <script>
 const EXP_ID = {{ experiment_id | tojson }};
 let VERSION = {{ version }};
 const buffer = document.getElementById('manifest-buffer');
-const status = document.getElementById('manifest-status');
+const statusEl = document.getElementById('manifest-status');
 const errorsBox = document.getElementById('manifest-errors');
 
-function clearErrors() {
-  errorsBox.hidden = true;
-  errorsBox.textContent = '';
-}
+function clearErrors() { errorsBox.hidden = true; errorsBox.textContent = ''; }
 
 function renderErrors(errors) {
   errorsBox.textContent = '';
@@ -44,8 +41,7 @@ function renderErrors(errors) {
     const loc = [];
     if (e.line !== null && e.line !== undefined) loc.push('line ' + e.line);
     if (e.path) loc.push(e.path);
-    const prefix = loc.length ? '[' + loc.join(' · ') + '] ' : '';
-    row.textContent = prefix + e.message;
+    row.textContent = (loc.length ? '[' + loc.join(' · ') + '] ' : '') + e.message;
     errorsBox.appendChild(row);
   }
   errorsBox.hidden = false;
@@ -54,7 +50,7 @@ function renderErrors(errors) {
 async function saveManifest() {
   const btn = document.getElementById('manifest-save-btn');
   btn.disabled = true;
-  status.textContent = 'Saving…'; status.style.color = 'var(--ink-mute)';
+  statusEl.textContent = 'Saving…'; statusEl.style.color = 'var(--ink-mute)';
   clearErrors();
   let r;
   try {
@@ -63,26 +59,24 @@ async function saveManifest() {
       body: JSON.stringify({ manifest: buffer.value, if_match: VERSION }),
     });
   } catch (e) {
-    status.textContent = 'Save failed'; status.style.color = 'var(--negative)';
+    statusEl.textContent = 'Save failed'; statusEl.style.color = 'var(--negative)';
     btn.disabled = false;
     return;
   }
   if (r.status === 200) {
-    const d = await r.json();
-    VERSION = d.version;
-    status.textContent = `Saved at version ${VERSION}`; status.style.color = 'var(--ink-mute)';
+    VERSION = (await r.json()).version;
+    statusEl.textContent = `Saved at version ${VERSION}`;
+    statusEl.style.color = 'var(--ink-mute)';
     btn.disabled = false;
     return;
   }
   if (r.status === 409) {
     let d = {};
     try { d = await r.json(); } catch (_) {}
-    if (d.current_version !== undefined) {
-      status.textContent = `Conflict — server is at version ${d.current_version}; reload to discard local edits.`;
-      status.style.color = 'var(--negative)';
-    } else {
-      status.textContent = 'Conflict'; status.style.color = 'var(--negative)';
-    }
+    statusEl.textContent = d.current_version !== undefined
+      ? `Conflict — server is at version ${d.current_version}; reload to discard local edits.`
+      : 'Conflict';
+    statusEl.style.color = 'var(--negative)';
     btn.disabled = false;
     return;
   }
@@ -92,13 +86,14 @@ async function saveManifest() {
     const detail = d.detail;
     if (detail && detail.kind === 'manifest_invalid' && Array.isArray(detail.errors)) {
       renderErrors(detail.errors);
-      status.textContent = `Manifest invalid — ${detail.errors.length} error${detail.errors.length === 1 ? '' : 's'}`;
-      status.style.color = 'var(--negative)';
+      statusEl.textContent = `Manifest invalid — ${detail.errors.length} error${detail.errors.length === 1 ? '' : 's'}`;
+      statusEl.style.color = 'var(--negative)';
       btn.disabled = false;
       return;
     }
   }
-  status.textContent = `Save failed (${r.status})`; status.style.color = 'var(--negative)';
+  statusEl.textContent = `Save failed (${r.status})`;
+  statusEl.style.color = 'var(--negative)';
   btn.disabled = false;
 }
 

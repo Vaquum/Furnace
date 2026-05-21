@@ -467,7 +467,8 @@ def create_app(root: Path) -> FastAPI:
     def jobs(request: Request):
         experiments = _all_experiments(root, with_analytics=True)
         return templates.TemplateResponse(
-            request, "jobs.html", {"experiments": experiments},
+            request, "jobs.html",
+            {"experiments": experiments, "starter_manifest": STARTER_MANIFEST},
         )
 
     @app.get("/_partials/jobs", response_class=HTMLResponse)
