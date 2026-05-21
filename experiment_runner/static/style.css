@@ -201,6 +201,104 @@ textarea.atom-code-block:focus {
   border-left-color: var(--accent);
 }
 
+/* Manifest-editor validation panel — one row per parse / validation error
+   from Limen, coral text on the raised panel surface. */
+.manifest-errors {
+  background: var(--paper-2);
+  border: 1px solid var(--negative);
+  border-radius: 2px;
+  padding: var(--gap-s) var(--gap-m);
+  margin: 0 0 var(--gap-m) 0;
+}
+.manifest-error-row {
+  font-family: var(--font-mono);
+  font-size: var(--t-code);
+  color: var(--negative);
+  line-height: 1.65;
+}
+
+/* ---- Manifest editor — a YAML buffer with a highlight overlay + a
+   line-number gutter. A transparent <textarea> owns the caret over a
+   coloured <pre>; both share one type grid so columns register. Used by
+   the manifest page and the creation modal's right pane. ---- */
+.manifest-editor {
+  display: flex;
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  overflow: hidden;
+  position: relative;
+}
+.manifest-gutter {
+  flex: 0 0 auto;
+  padding: var(--gap-s) var(--gap-s);
+  text-align: right;
+  color: var(--ink-mute);
+  font-family: var(--font-mono);
+  font-size: var(--t-code);
+  line-height: 1.65;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+  border-right: 1px solid var(--rule);
+  white-space: pre;
+  overflow: hidden;
+  min-width: 3.5ch;
+}
+.manifest-buffer-wrap {
+  flex: 1 1 auto;
+  position: relative;
+  overflow: hidden;
+}
+.manifest-buffer,
+.manifest-highlight {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: var(--gap-s) var(--gap-m);
+  font-family: var(--font-mono);
+  font-size: var(--t-code);
+  font-weight: 400;
+  line-height: 1.65;
+  font-variant-numeric: tabular-nums slashed-zero;
+  letter-spacing: 0;
+  white-space: pre;
+  tab-size: 2;
+  -moz-tab-size: 2;
+  border: 0;
+  background: transparent;
+  overflow: auto;
+}
+.manifest-buffer {
+  outline: none;
+  resize: none;
+  color: transparent;
+  caret-color: var(--accent);
+}
+.manifest-buffer:focus { outline: none; }
+.manifest-buffer::selection { background: rgba(221, 217, 65, 0.22); }
+.manifest-buffer::-moz-selection { background: rgba(221, 217, 65, 0.22); }
+.manifest-highlight {
+  pointer-events: none;
+  color: var(--ink-soft);
+}
+/* YAML token colours — the closed accent palette. Keys read bright, the
+   structural punctuation recedes, literals carry the accent / coral. */
+.tok-key   { color: var(--ink); }
+.tok-punc  { color: var(--ink-mute); }
+.tok-plain { color: var(--ink-soft); }
+
+/* Manifest page — the editor fills the screen below the top control bar,
+   the save row sits under it. */
+.manifest-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-m);
+  height: calc(100vh - 61px - 2 * var(--gap-l));
+}
+.manifest-page .manifest-editor { flex: 1 1 auto; min-height: 0; }
+
 /* ---- Code editor (Atom 09 dense-app form: gutter + buffer in one panel).
    Used by /experiments/{id}/code. Hairline-only structural language: gutter
    is separated from the buffer by a single rule, the active-line marker is
@@ -807,6 +905,21 @@ a.topbar-link {
   white-space: nowrap;
 }
 a.topbar-link:hover { color: var(--ink); }
+/* Persistent local nav — the "JOBS" home link that opens .topbar-left on
+   every view. Brighter than .topbar-link's back affordance: it is the
+   navigation root, not a per-view detail. */
+a.topbar-nav {
+  border-bottom: 0;
+  padding-bottom: 0;
+  font-family: var(--font-sans);
+  font-size: var(--t-micro);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink);
+  white-space: nowrap;
+}
+a.topbar-nav:hover { color: var(--accent); }
 
 /* ---- Round viewer — status / progress bar + the star stats table ---- */
 
@@ -1460,9 +1573,15 @@ p.empty {
 
 /* ---- Modal — the-lab QC-modal idiom: opaque takeover + raised panel ---- */
 
+/* The modal opens over the main content area only — it starts below the
+   61 px top control bar so the bar stays visible, honouring the rule that
+   icons open things on top of the content, never over the chrome. */
 .modal {
   position: fixed;
-  inset: 0;
+  top: 61px;
+  left: 0;
+  right: 0;
+  bottom: 0;
   background: var(--paper);
   display: none;
   z-index: 100;
@@ -1536,10 +1655,16 @@ p.empty {
   padding: var(--gap-l);
   overflow-y: auto;
 }
-.create-args {
+/* Right pane — the manifest editor fills it; the action row sits under. */
+.create-manifest {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-s);
   padding: var(--gap-l);
-  overflow-y: auto;
+  min-width: 0;
+  overflow: hidden;
 }
+.create-manifest .manifest-editor { flex: 1 1 auto; min-height: 0; }
 .create-group-label {
   font-family: var(--font-mono);
   font-size: var(--t-micro);

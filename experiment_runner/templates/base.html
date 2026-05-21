@@ -9,18 +9,21 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
   <link rel="stylesheet" href="/static/style.css?v={{ asset_version }}">
-  <script defer src="/static/python_highlight.js?v={{ asset_version }}"></script>
   <script defer src="/static/poll.js?v={{ asset_version }}"></script>
 </head>
 <body>
   {# the-lab's structural pattern: a persistent top control bar over the
-     main content. .topbar-left carries the view's controls / identity,
-     .topbar-right a meta readout — both change per view, the shape does
-     not. ?embed=1 drops the bar entirely so a page can be shown inside
-     an in-app modal iframe (the jobs-page search modal) without it. #}
+     main content. .topbar-left opens with the persistent JOBS home link,
+     then the view's own controls; .topbar-right is a meta readout. Both
+     change per view, the shape does not. ?embed=1 drops the bar entirely
+     so a page can be shown inside an in-app modal iframe (the jobs-page
+     search modal) without it. #}
   {% if not request.query_params.get('embed') %}
   <header class="topbar">
-    <div class="topbar-left">{% block controls %}{% endblock %}</div>
+    <div class="topbar-left">
+      <a class="topbar-nav" href="/">JOBS</a>
+      {% block controls %}{% endblock %}
+    </div>
     <div class="topbar-right">{% block meta %}{% endblock %}</div>
   </header>
   {% endif %}

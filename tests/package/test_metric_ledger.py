@@ -127,28 +127,20 @@ def test_results_table_includes_full_ledger_and_confusion_metrics() -> None:
 
 
 def test_round_status_stats_panel_uses_ledger() -> None:
-    """`_compute_round_stats` computes per-permutation distribution
-    metrics (p5 / p25 / p50 / p75 / p95) for the same metric set the
-    results table renders. The `desired` tuple inside the function
-    splats `_BACKTEST_LEDGER_COLUMNS` so the stats panel mirrors the
-    results table without a parallel edit. Operator's mental model:
-    the stats panel is the live counterpart of the results table."""
+    """The stats panel — `_compute_round_stats` and the experiment page,
+    both via `_metric_percentiles` — computes p5 / p25 / p50 / p75 / p95 for
+    the same metric set the results table renders. `_STATS_METRICS` splats
+    `_BACKTEST_LEDGER_COLUMNS` so the panel mirrors the results table
+    without a parallel edit."""
     text = (PKG_DIR / "app.py").read_text(encoding="utf-8")
-    # _compute_round_stats lives at module scope; pull the function body
-    # and assert the splat + the confusion / precision metric names.
-    tree = ast.parse(text)
-    fn = next(
-        (n for n in ast.walk(tree)
-         if isinstance(n, ast.FunctionDef) and n.name == "_compute_round_stats"),
-        None,
+    cols = _module_const(text, "_STATS_METRICS")
+    assert cols == (
+        "precision",
+        "recall",
+        "confusion_tp_mean_return_pct",
+        "confusion_fp_mean_return_pct",
+        "*_BACKTEST_LEDGER_COLUMNS",
     )
-    assert fn is not None, "_compute_round_stats not defined"
-    body = ast.unparse(fn)
-    # Splat the ledger constant into the desired tuple.
-    assert "*_BACKTEST_LEDGER_COLUMNS" in body
-    # Plus the four confusion / precision metrics, in order.
-    for m in ("precision", "recall", "confusion_tp_mean_return_pct", "confusion_fp_mean_return_pct"):
-        assert f"'{m}'" in body, f"stats panel missing {m!r}"
 
 
 def test_search_metrics_mirror_results_table() -> None:
@@ -237,25 +229,25 @@ def test_ensure_round_index_no_longer_normalizes_by_bars_total() -> None:
     assert "for m in _SEARCH_METRICS" in text
 
 
-def test_pyproject_version_is_0_15_0() -> None:
-    """Conventional Commits feat = minor bump. Version moves 0.14.0 → 0.15.0
-    for the the-lab restyle + jobs/round redesign slice. This assertion is
-    the repo's single pin on the current version — whichever slice bumps
-    the version updates it here (and the CHANGELOG check below)."""
+def test_pyproject_version_is_0_16_0() -> None:
+    """Conventional Commits feat = minor bump. Version moves 0.15.0 → 0.16.0
+    for the Limen YAML-manifest migration. This assertion is the repo's
+    single pin on the current version — whichever slice bumps the version
+    updates it here (and the CHANGELOG check below)."""
     data = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    assert data["project"]["version"] == "0.15.0"
+    assert data["project"]["version"] == "0.16.0"
 
 
-def test_changelog_has_v0_15_0_entry() -> None:
+def test_changelog_has_v0_16_0_entry() -> None:
     """A CHANGELOG header for the new version must exist with at least
     one content line so the version-gate is satisfied."""
     text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     lines = text.splitlines()
-    header_idx = next((i for i, ln in enumerate(lines) if ln.strip() == "# v0.15.0"), -1)
-    assert header_idx != -1, "missing '# v0.15.0' header in CHANGELOG.md"
+    header_idx = next((i for i, ln in enumerate(lines) if ln.strip() == "# v0.16.0"), -1)
+    assert header_idx != -1, "missing '# v0.16.0' header in CHANGELOG.md"
     next_header_idx = next(
         (i for i in range(header_idx + 1, len(lines)) if lines[i].startswith("# v")),
         len(lines),
     )
     content = [ln for ln in lines[header_idx + 1 : next_header_idx] if ln.strip()]
-    assert content, "v0.15.0 CHANGELOG entry is empty"
+    assert content, "v0.16.0 CHANGELOG entry is empty"

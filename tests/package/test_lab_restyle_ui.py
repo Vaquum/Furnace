@@ -90,14 +90,14 @@ def test_round_analytic_is_cross_permutation_median_then_round_mean() -> None:
 
 
 def test_round_analytics_resolves_canonical_results_csv() -> None:
-    """_round_analytics resolves the round's results CSV by its canonical
-    <eid>__r<rid>.csv name — the derivation every other CSV call site in
-    app.py uses — not a glob, whose filesystem-order dependence could
-    read a stray CSV (an export, a partial write)."""
+    """_round_analytics resolves the round's results CSV through the shared
+    _round_csv_path helper — the fixed limen_output/results.csv path that
+    every CSV call site in app.py uses, limen's own authoritative file —
+    not a glob, whose filesystem-order dependence could read a stray CSV."""
     app = (PKG_DIR / "app.py").read_text(encoding="utf-8")
     body = app[app.index("def _round_analytics(") :][:900]
     assert 'glob("*.csv")' not in body
-    assert 'f"{ename}__r{round_dir.name}.csv"' in body
+    assert "_round_csv_path(round_dir)" in body
 
 
 def test_metric_fmt_jinja_filter_registered() -> None:
@@ -176,29 +176,19 @@ def test_embed_query_param_drops_nav_chrome() -> None:
     assert base.index("request.query_params.get('embed')") < base.index("<header")
 
 
-def test_code_editor_close_button_replaces_back_link() -> None:
-    """The code editor's '← experiment' back-link is replaced by an ✕
-    close control — a top-bar icon button (history.back, falling back to
-    the experiment page) that returns to wherever the editor was opened
-    from."""
-    html = (TEMPLATES / "code.html").read_text(encoding="utf-8")
-    assert 'aria-label="Close editor"' in html
-    assert 'class="bar-icon"' in html
-    assert "history.back()" in html
-    assert "← experiment" not in html
-
-
 def test_views_share_one_top_control_bar() -> None:
     """the-lab's structural pattern — the main area splits into a top
     control bar and the content below it. base.html provides one shared
-    <header class="topbar"> carrying {% block controls %} on the left and
-    the {% block meta %} readout on the right; every page-level view
-    fills the controls block, so the bar is present and consistently
-    placed across the app while its contents change per view."""
+    <header class="topbar"> that opens with the persistent JOBS nav, then
+    each view's {% block controls %} and the {% block meta %} readout;
+    every page-level view extends base.html, so the bar is present and
+    consistently placed across the app while its contents change per view."""
     base = (TEMPLATES / "base.html").read_text(encoding="utf-8")
     assert '<header class="topbar">' in base
     assert "{% block controls %}" in base
     assert '<main class="content">' in base
-    for view in ("jobs", "experiment", "round", "code", "search", "results"):
+    # The persistent local-nav home link, present on every view.
+    assert 'class="topbar-nav" href="/"' in base
+    for view in ("jobs", "experiment", "round", "search", "results"):
         html = (TEMPLATES / f"{view}.html").read_text(encoding="utf-8")
-        assert "{% block controls %}" in html, f"{view}.html has no controls block"
+        assert '{% extends "base.html" %}' in html, f"{view}.html does not extend base"

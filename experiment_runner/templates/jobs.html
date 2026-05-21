@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 {% block title %}experiment_runner{% endblock %}
 {% set total_rounds = experiments | sum(attribute='round_count') %}
-{% block meta %}{{ experiments | length }} experiments · {{ total_rounds }} rounds{% endblock %}
-{% block controls %}
+{% block meta %}
+  <span>{{ experiments | length }} experiments · {{ total_rounds }} rounds</span>
   <button type="button" id="open-search" class="bar-icon" title="Search permutations" aria-label="Search permutations">
     <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
       <circle cx="7" cy="7" r="4.25"></circle>
@@ -37,86 +37,45 @@
 </table>
 
 <div class="modal" id="create-modal" aria-hidden="true">
-  <div class="modal-panel" role="dialog" aria-label="Create experiment or round">
+  <div class="modal-panel" role="dialog" aria-label="Create a round">
     <div class="modal-head">
-      <span id="create-title">New</span>
+      <span id="create-title">New experiment</span>
       <button type="button" class="icon-close" id="create-close" aria-label="Close">✕</button>
     </div>
-    <div class="modal-body">
-      <div class="create-grid">
-        <div class="create-target" id="create-target">
-          <p class="create-group-label">New experiment</p>
-          <label class="target-option">
-            <input type="radio" name="create-target" value="__new__" checked>
-            <span>Create a new experiment</span>
-          </label>
-          <input type="text" id="m-new-name" class="target-new-name" placeholder="Experiment name…" autocomplete="off">
+    <div class="modal-body create-grid">
+      <div class="create-target" id="create-target">
+        <p class="create-group-label">New experiment</p>
+        <label class="target-option">
+          <input type="radio" name="create-target" value="__new__" checked>
+          <span>Create a new experiment</span>
+        </label>
+        <input type="text" id="m-new-name" class="target-new-name" placeholder="Experiment name…" autocomplete="off">
 
-          <p class="create-group-label spaced">Continue an experiment</p>
-          {% for exp in experiments %}
-          <label class="target-option">
-            <input type="radio" name="create-target" value="{{ exp.id }}">
-            <span>{{ exp.id }}</span>
-          </label>
-          {% endfor %}
-          {% if not experiments %}
-          <p class="atom-small" style="color: var(--ink-mute);">No experiments yet.</p>
-          {% endif %}
-        </div>
+        <p class="create-group-label spaced">Continue an experiment</p>
+        {% for exp in experiments %}
+        <label class="target-option">
+          <input type="radio" name="create-target" value="{{ exp.id }}">
+          <span>{{ exp.id }}</span>
+        </label>
+        {% endfor %}
+        {% if not experiments %}
+        <p class="atom-small" style="color: var(--ink-mute);">No experiments yet.</p>
+        {% endif %}
+      </div>
 
-        <div class="create-args">
-          <form id="m-args-form" autocomplete="off">
-            <div class="m-field">
-              <label for="m-sfd">sfd_identifier</label>
-              <input id="m-sfd" type="text" placeholder="MySFDClass">
-            </div>
-
-            {# Data-source fieldset stays hidden until an existing experiment's
-               code is inspected and found to declare overridable params. #}
-            <fieldset class="args-group" id="m-ds-group" hidden>
-              <legend>data source</legend>
-              <div id="m-ds-controls" class="m-ds-grid"></div>
-            </fieldset>
-
-            <fieldset class="args-group">
-              <legend>uel_run</legend>
-              <div class="m-field">
-                <label for="m-perm">n_permutations</label>
-                <input id="m-perm" type="number" min="1" step="1" value="1">
-              </div>
-              <label class="checkbox-row"><input type="checkbox" id="m-prep">prep_each_round</label>
-              <label class="checkbox-row"><input type="checkbox" id="m-random">random_search</label>
-              <label class="checkbox-row"><input type="checkbox" id="m-maintain">maintain_details_in_params</label>
-            </fieldset>
-
-            {# split_dates: six date inputs (UTC), label-on-row in a 3×2 grid.
-               Fill all six for an absolute train/val/test split; fill only
-               train_start + test_end to bound the fetch and leave the SFD's
-               ratio split alone. min/max keep the year at four digits. #}
-            <fieldset class="args-group">
-              <legend>split_dates (UTC, optional)</legend>
-              <div class="m-date-grid">
-                <label for="m-train-start">train_start</label>
-                <input id="m-train-start" type="date" min="2000-01-01" max="2099-12-31">
-                <label for="m-train-end">train_end</label>
-                <input id="m-train-end" type="date" min="2000-01-01" max="2099-12-31">
-                <label for="m-val-start">val_start</label>
-                <input id="m-val-start" type="date" min="2000-01-01" max="2099-12-31">
-                <label for="m-val-end">val_end</label>
-                <input id="m-val-end" type="date" min="2000-01-01" max="2099-12-31">
-                <label for="m-test-start">test_start</label>
-                <input id="m-test-start" type="date" min="2000-01-01" max="2099-12-31">
-                <label for="m-test-end">test_end</label>
-                <input id="m-test-end" type="date" min="2000-01-01" max="2099-12-31">
-              </div>
-            </fieldset>
-          </form>
-
-          <div class="create-footer">
-            <button type="button" id="m-edit-manifest" class="primary">Add manifest</button>
-            <button type="button" id="m-submit" class="primary">Create experiment</button>
-            <span id="m-status" class="create-status"></span>
+      <div class="create-manifest">
+        <div class="manifest-editor">
+          <div class="manifest-gutter" aria-hidden="true"></div>
+          <div class="manifest-buffer-wrap">
+            <pre class="manifest-highlight" aria-hidden="true"></pre>
+            <textarea class="manifest-buffer" id="m-manifest" spellcheck="false"
+                      autocapitalize="off" autocomplete="off" autocorrect="off" wrap="off"></textarea>
           </div>
+        </div>
+        <div id="m-errors" class="manifest-errors" hidden></div>
+        <div class="create-footer">
+          <button type="button" id="m-submit" class="primary">Create &amp; start round</button>
+          <span id="m-status" class="create-status"></span>
         </div>
       </div>
     </div>
@@ -136,6 +95,8 @@
   </div>
 </div>
 
+<script>window.STARTER_MANIFEST = {{ starter_manifest | tojson }};</script>
+<script src="/static/manifest_editor.js?v={{ asset_version }}"></script>
 <script src="/static/create_modal.js?v={{ asset_version }}"></script>
 <script>
 const expanded = new Set();

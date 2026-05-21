@@ -1,19 +1,21 @@
-// Round-page hydration — paints two read-only Python views with the same
-// closed-palette syntax highlighting the code editor uses:
+// Round-page hydration — paints the unified manifest diff and wires the
+// copy buttons. The manifest is YAML, so there is no syntax highlighting:
 //
 //   1. The unified diff (#diff-source). Each line is wrapped in
 //      <span class="diff-line diff-{add,del,ctx,hunk,meta}"> so the leading
-//      +/- prefix character is coloured semantically and the rest of the
-//      line gets full Python token colouring.
+//      +/- prefix character is coloured semantically. The line content is
+//      rendered as plain (escaped) text.
 //
-//   2. The frozen-code snapshot (#frozen-code). Plain-Python with the same
-//      tokenizer — no diff prefixes, no per-line wrappers, just the painted
-//      buffer inside the existing .atom-code-block panel chrome.
+//   2. The frozen-manifest snapshot (#frozen-manifest) needs no hydration —
+//      it renders as plain text inside the .atom-code-block panel chrome.
 
 (function () {
-  if (!window.PythonHighlight) return;
-  const escape = window.PythonHighlight.escapeHtml;
-  const highlight = window.PythonHighlight.highlightPython;
+  function escapeHtml(s) {
+    return s
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
 
   function classifyLine(line) {
     if (line.startsWith('@@')) return 'hunk';
@@ -26,18 +28,14 @@
   function renderDiffLine(line) {
     const kind = classifyLine(line);
     if (kind === 'hunk' || kind === 'meta') {
-      // Hunk headers and file-name metadata are rendered as a single
-      // muted line — no Python highlighting, since they're not Python.
-      return '<span class="diff-line diff-' + kind + '">' + escape(line) + '</span>';
+      return '<span class="diff-line diff-' + kind + '">' + escapeHtml(line) + '</span>';
     }
-    // For added / removed / context lines, the first char is the prefix
-    // marker; the rest is Python content.
     const prefix = line.slice(0, 1);
     const content = line.slice(1);
     return (
       '<span class="diff-line diff-' + kind + '">' +
-      '<span class="diff-prefix">' + escape(prefix) + '</span>' +
-      highlight(content) +
+      '<span class="diff-prefix">' + escapeHtml(prefix) + '</span>' +
+      escapeHtml(content) +
       '</span>'
     );
   }
@@ -52,12 +50,6 @@
     // don't render a blank line at the bottom.
     if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
     el.innerHTML = lines.map(renderDiffLine).join('\n');
-  }
-
-  function paintFrozenCode() {
-    const el = document.getElementById('frozen-code');
-    if (!el) return;
-    el.innerHTML = highlight(el.textContent);
   }
 
   // Wire every .code-block-copy button on the round page to the <pre> it
@@ -106,6 +98,5 @@
   }
 
   paintDiff();
-  paintFrozenCode();
   wireCopyButtons();
 })();
