@@ -141,6 +141,8 @@ uel:
     type: random
   prep_each_round: true
   output_format: csv
+  # results land in <round>/limen_output/ — experiment_runner reads them there
+  output_path: limen_output
 """
 
 

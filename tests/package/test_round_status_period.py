@@ -46,6 +46,21 @@ def test_run_round_writes_period_json() -> None:
     assert 'traceback.print_exc' in text
 
 
+def test_round_results_land_in_limen_output_for_live_progress() -> None:
+    """Live progress depends on `limen run` writing results.csv into a
+    fixed, known location while the round runs. STARTER_MANIFEST pins
+    `uel.output_path` to `limen_output`, so limen run writes straight into
+    <round>/limen_output/ — no timestamped subdirectory, no post-run
+    relocation — and run_round.py fails loud if that directory is absent.
+    The round-status poll then reads the CSV growing there row by row."""
+    app = (PKG_DIR / 'app.py').read_text(encoding='utf-8')
+    assert 'output_path: limen_output' in app
+    rr = (PKG_DIR / 'run_round.py').read_text(encoding='utf-8')
+    # No relocation — the manifest fixes the path; limen run writes there.
+    assert 'os.replace(subdirs' not in rr
+    assert 'limen_output' in rr
+
+
 def test_round_page_reloads_once_when_period_appears() -> None:
     """When the page was rendered while the round was ACTIVE and
     period.json hadn't been written yet, the polling loop reloads on
