@@ -146,6 +146,21 @@ def test_round_views_guard_pre_migration_rounds() -> None:
     assert "if manifest_path.exists():" in cs
 
 
+def test_search_index_set_excludes_stale_pre_migration_indices() -> None:
+    """The search index set is built only from rounds `_ensure_round_index`
+    currently vouches for — never a raw glob of `.index.parquet` files. A
+    glob picks up a stale index left by a pre-migration round (no
+    manifest.yml), and `_build_search_bundle` then 500s reading that round's
+    absent manifest. `_ensure_indices` returns the collected
+    `_ensure_round_index` results; the globbing `_index_paths` is gone."""
+    text = (PKG_DIR / "app.py").read_text(encoding="utf-8")
+    assert "def _index_paths(" not in text
+    body = text[text.index("def _ensure_indices(") :][:1200]
+    assert "def _ensure_indices(root: Path, experiment_names: list[str] | None) -> list[Path]:" in body
+    assert "idx = _ensure_round_index(round_dir)" in body
+    assert "if idx is not None:" in body
+
+
 # ---- templates ------------------------------------------------------------
 
 

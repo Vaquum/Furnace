@@ -1302,35 +1302,30 @@ def _list_experiment_names(root: Path) -> list[str]:
     return sorted(d.name for d in base.iterdir() if d.is_dir())
 
 
-def _ensure_indices(root: Path, experiment_names: list[str] | None) -> None:
+def _ensure_indices(root: Path, experiment_names: list[str] | None) -> list[Path]:
+    """Build or refresh every round's search index; return the paths of the
+    indices that are currently valid. `_ensure_round_index` returns None for a
+    round it will not vouch for (a pre-migration round with no manifest.yml, a
+    CSV missing the search columns); those are dropped here, so a stale
+    `.index.parquet` left on disk by an earlier indexing never feeds the search
+    — it cannot pollute a result set or a bundle."""
     base = root / "experiments"
     if not base.exists():
-        return
+        return []
     if experiment_names is None:
         edirs = [d for d in base.iterdir() if d.is_dir()]
     else:
         edirs = [base / n for n in experiment_names if (base / n).is_dir()]
+    paths: list[Path] = []
     for ed in edirs:
         rd = ed / "rounds"
         if not rd.exists():
             continue
         for round_dir in rd.iterdir():
             if round_dir.is_dir():
-                _ensure_round_index(round_dir)
-
-
-def _index_paths(root: Path, experiment_names: list[str] | None) -> list[Path]:
-    base = root / "experiments"
-    if not base.exists():
-        return []
-    pat = "rounds/*/.index.parquet"
-    if experiment_names is None:
-        return sorted(base.glob(f"*/{pat}"))
-    paths: list[Path] = []
-    for name in experiment_names:
-        ed = base / name
-        if ed.is_dir():
-            paths.extend(ed.glob(pat))
+                idx = _ensure_round_index(round_dir)
+                if idx is not None:
+                    paths.append(idx)
     return sorted(paths)
 
 
@@ -1356,8 +1351,7 @@ def _compute_search_bounds(
 ) -> dict[str, dict[str, float | None]]:
     """Per-metric leave-one-out bounds: each slider's range is min/max of its
     column with the other sliders' filters applied (its own filter excluded)."""
-    _ensure_indices(root, experiment_names)
-    paths = _index_paths(root, experiment_names)
+    paths = _ensure_indices(root, experiment_names)
     if not paths:
         return {m: {"min": None, "max": None} for m in _SEARCH_METRICS}
     lf = pl.scan_parquet([str(p) for p in paths])
@@ -1378,8 +1372,7 @@ def _compute_search_bounds(
 
 
 def _matching_rounds(root: Path, filters: _FilterMap, experiment_names: list[str] | None) -> list[dict]:
-    _ensure_indices(root, experiment_names)
-    paths = _index_paths(root, experiment_names)
+    paths = _ensure_indices(root, experiment_names)
     if not paths:
         return []
     lf = pl.scan_parquet([str(p) for p in paths])
@@ -1394,8 +1387,7 @@ def _matching_rounds(root: Path, filters: _FilterMap, experiment_names: list[str
 
 
 def _build_search_bundle(root: Path, filters: _FilterMap, experiment_names: list[str] | None) -> bytes:
-    _ensure_indices(root, experiment_names)
-    paths = _index_paths(root, experiment_names)
+    paths = _ensure_indices(root, experiment_names)
     matches = pl.DataFrame()
     if paths:
         lf = pl.scan_parquet([str(p) for p in paths])
