@@ -27,7 +27,7 @@
     {% set ps = (period.test_period_start if period else None) %}
     {% set pe = (period.test_period_end if period else None) %}
     {% if ps or pe %}
-    <span class="round-period">{{ ps or "—" }} — {{ pe or "—" }}</span>
+    <span class="round-period">{{ ps[:10] if ps else "—" }} — {{ pe[:10] if pe else "—" }}</span>
     {% endif %}
     <a class="bar-icon" href="/experiments/{{ experiment_id }}/rounds/{{ round_id }}/results"
        title="View results" aria-label="View results">
