@@ -127,28 +127,20 @@ def test_results_table_includes_full_ledger_and_confusion_metrics() -> None:
 
 
 def test_round_status_stats_panel_uses_ledger() -> None:
-    """`_compute_round_stats` computes per-permutation distribution
-    metrics (p5 / p25 / p50 / p75 / p95) for the same metric set the
-    results table renders. The `desired` tuple inside the function
-    splats `_BACKTEST_LEDGER_COLUMNS` so the stats panel mirrors the
-    results table without a parallel edit. Operator's mental model:
-    the stats panel is the live counterpart of the results table."""
+    """The stats panel — `_compute_round_stats` and the experiment page,
+    both via `_metric_percentiles` — computes p5 / p25 / p50 / p75 / p95 for
+    the same metric set the results table renders. `_STATS_METRICS` splats
+    `_BACKTEST_LEDGER_COLUMNS` so the panel mirrors the results table
+    without a parallel edit."""
     text = (PKG_DIR / "app.py").read_text(encoding="utf-8")
-    # _compute_round_stats lives at module scope; pull the function body
-    # and assert the splat + the confusion / precision metric names.
-    tree = ast.parse(text)
-    fn = next(
-        (n for n in ast.walk(tree)
-         if isinstance(n, ast.FunctionDef) and n.name == "_compute_round_stats"),
-        None,
+    cols = _module_const(text, "_STATS_METRICS")
+    assert cols == (
+        "precision",
+        "recall",
+        "confusion_tp_mean_return_pct",
+        "confusion_fp_mean_return_pct",
+        "*_BACKTEST_LEDGER_COLUMNS",
     )
-    assert fn is not None, "_compute_round_stats not defined"
-    body = ast.unparse(fn)
-    # Splat the ledger constant into the desired tuple.
-    assert "*_BACKTEST_LEDGER_COLUMNS" in body
-    # Plus the four confusion / precision metrics, in order.
-    for m in ("precision", "recall", "confusion_tp_mean_return_pct", "confusion_fp_mean_return_pct"):
-        assert f"'{m}'" in body, f"stats panel missing {m!r}"
 
 
 def test_search_metrics_mirror_results_table() -> None:

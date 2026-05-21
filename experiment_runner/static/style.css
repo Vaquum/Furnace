@@ -905,6 +905,21 @@ a.topbar-link {
   white-space: nowrap;
 }
 a.topbar-link:hover { color: var(--ink); }
+/* Persistent local nav — the "JOBS" home link that opens .topbar-left on
+   every view. Brighter than .topbar-link's back affordance: it is the
+   navigation root, not a per-view detail. */
+a.topbar-nav {
+  border-bottom: 0;
+  padding-bottom: 0;
+  font-family: var(--font-sans);
+  font-size: var(--t-micro);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink);
+  white-space: nowrap;
+}
+a.topbar-nav:hover { color: var(--accent); }
 
 /* ---- Round viewer — status / progress bar + the star stats table ---- */
 

@@ -566,17 +566,16 @@ def create_app(root: Path) -> FastAPI:
     @app.get("/experiments/{experiment_id}", response_class=HTMLResponse)
     def experiment_page(request: Request, experiment_id: str):
         exp_dir = _exp_dir(experiment_id)
-        _manifest_text, version = _read_manifest(exp_dir)
-        rounds = _experiment_rounds(exp_dir)
-        active = is_experiment_active(exp_dir)
+        manifest_text, _version = _read_manifest(exp_dir)
         return templates.TemplateResponse(
             request,
             "experiment.html",
             {
                 "experiment_id": experiment_id,
-                "version": version,
-                "rounds": rounds,
-                "active": active,
+                "experiments": _all_experiments(root),
+                "rounds": _experiment_rounds(exp_dir),
+                "frozen_manifest": manifest_text,
+                "stats": _experiment_stats(exp_dir),
             },
         )
 
@@ -588,20 +587,6 @@ def create_app(root: Path) -> FastAPI:
             request,
             "_round_rows.html",
             {"experiment_id": experiment_id, "rounds": rounds},
-        )
-
-    @app.get("/experiments/{experiment_id}/manifest", response_class=HTMLResponse)
-    def manifest_page(request: Request, experiment_id: str):
-        exp_dir = _exp_dir(experiment_id)
-        manifest_text, version = _read_manifest(exp_dir)
-        return templates.TemplateResponse(
-            request,
-            "manifest.html",
-            {
-                "experiment_id": experiment_id,
-                "manifest": manifest_text,
-                "version": version,
-            },
         )
 
     @app.put("/experiments/{experiment_id}/manifest")
@@ -1122,6 +1107,40 @@ def _parse_iso(s: str | None):
     return datetime.fromisoformat(s.rstrip("Z"))
 
 
+# The metric set surfaced as statistics — the results-table columns minus
+# `id`. The round page shows each metric's cross-permutation percentiles;
+# the experiment page shows the mean of those across the experiment's rounds.
+_STATS_METRICS: tuple[str, ...] = (
+    "precision",
+    "recall",
+    "confusion_tp_mean_return_pct",
+    "confusion_fp_mean_return_pct",
+    *_BACKTEST_LEDGER_COLUMNS,
+)
+_STATS_PERCENTILES: tuple[tuple[str, float], ...] = (
+    ("p5", 0.05), ("p25", 0.25), ("p50", 0.50), ("p75", 0.75), ("p95", 0.95),
+)
+
+
+def _metric_percentiles(csv_path: Path) -> list[dict]:
+    """Each metric column's cross-permutation p5/p25/p50/p75/p95 from a
+    round's results CSV. Shared by the round page (shown as-is) and the
+    experiment page (averaged across the experiment's rounds)."""
+    df = pl.read_csv(csv_path, infer_schema_length=200)
+    out: list[dict] = []
+    for col in _STATS_METRICS:
+        if col not in df.columns:
+            continue
+        s = df[col].cast(pl.Float64, strict=False).drop_nulls().drop_nans()
+        if s.is_empty():
+            continue
+        row: dict = {"name": col, "label": _display_label(col)}
+        for key, q in _STATS_PERCENTILES:
+            row[key] = s.quantile(q)
+        out.append(row)
+    return out
+
+
 def _compute_round_stats(round_dir: Path) -> dict:
     status = read_status(round_dir)
     # n_permutations is the progress-bar denominator, read from the round's
@@ -1172,37 +1191,41 @@ def _compute_round_stats(round_dir: Path) -> dict:
     if current <= 0:
         return {"progress": progress, "stats": stats}
 
-    df = pl.read_csv(csv_path, infer_schema_length=200)
+    # Each metric's cross-permutation percentiles, computed on whatever rows
+    # the CSV has at poll time — the operator watches the distribution firm
+    # up as permutations complete.
+    return {"progress": progress, "stats": _metric_percentiles(csv_path)}
 
-    # Same metric set as the results table (minus `id`). The round-status
-    # panel is the live counterpart of the results table: each metric's
-    # cross-permutation p5/p25/p50/p75/p95 are computed on whatever rows
-    # the CSV has at poll time, so the operator watches the distribution
-    # firm up as permutations complete.
-    desired = (
-        "precision",
-        "recall",
-        "confusion_tp_mean_return_pct",
-        "confusion_fp_mean_return_pct",
-        *_BACKTEST_LEDGER_COLUMNS,
-    )
-    for col in desired:
-        if col not in df.columns:
-            continue
-        s = df[col].cast(pl.Float64, strict=False).drop_nulls().drop_nans()
-        if s.is_empty():
-            continue
-        stats.append({
-            "name": col,
-            "label": _display_label(col),
-            "p5": s.quantile(0.05),
-            "p25": s.quantile(0.25),
-            "p50": s.quantile(0.50),
-            "p75": s.quantile(0.75),
-            "p95": s.quantile(0.95),
-        })
 
-    return {"progress": progress, "stats": stats}
+def _experiment_stats(experiment_dir: Path) -> list[dict]:
+    """Experiment-level statistics — the same metric / percentile grid as a
+    round's, each cell the mean of that cell across the experiment's rounds.
+    A round with no results CSV yet contributes nothing."""
+    rounds_dir = experiment_dir / "rounds"
+    if not rounds_dir.is_dir():
+        return []
+    accum: dict[str, dict] = {}
+    for round_dir in sorted(rounds_dir.iterdir()):
+        csv_path = _round_csv_path(round_dir)
+        if not csv_path.exists():
+            continue
+        for row in _metric_percentiles(csv_path):
+            cell = accum.setdefault(row["name"], {"label": row["label"]})
+            for key, _q in _STATS_PERCENTILES:
+                value = row[key]
+                if value is not None:
+                    cell.setdefault(key, []).append(value)
+    out: list[dict] = []
+    for name in _STATS_METRICS:
+        if name not in accum:
+            continue
+        cell = accum[name]
+        entry: dict = {"name": name, "label": cell["label"]}
+        for key, _q in _STATS_PERCENTILES:
+            values = cell.get(key, [])
+            entry[key] = (sum(values) / len(values)) if values else None
+        out.append(entry)
+    return out
 
 
 # ---- Cross-round search ---------------------------------------------------

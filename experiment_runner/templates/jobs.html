@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 {% block title %}experiment_runner{% endblock %}
 {% set total_rounds = experiments | sum(attribute='round_count') %}
-{% block meta %}{{ experiments | length }} experiments · {{ total_rounds }} rounds{% endblock %}
-{% block controls %}
+{% block meta %}
+  <span>{{ experiments | length }} experiments · {{ total_rounds }} rounds</span>
   <button type="button" id="open-search" class="bar-icon" title="Search permutations" aria-label="Search permutations">
     <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
       <circle cx="7" cy="7" r="4.25"></circle>

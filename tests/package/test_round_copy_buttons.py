@@ -66,23 +66,15 @@ def test_delete_round_endpoint_exists() -> None:
     assert 'status_code=409' in body
 
 
-def test_round_row_renders_delete_button() -> None:
-    """The rounds-table partial includes a .delete-round button per row,
-    carrying data-round=<round_id>. Header column for the action exists in
-    experiment.html."""
-    rows = (PKG_DIR / 'templates' / '_round_rows.html').read_text(encoding='utf-8')
-    assert 'class="delete-round"' in rows
-    assert 'data-round="{{ r.round_id }}"' in rows
+def test_experiment_page_has_no_rounds_table() -> None:
+    """The experiment view no longer embeds a rounds table — the rounds
+    live in the JOBS landing page's expandable rows. It is a read-only
+    analytical mirror of the round viewer (stats + the frozen manifest),
+    so it carries no per-round listing, no delete control, and no poll."""
     exp = (PKG_DIR / 'templates' / 'experiment.html').read_text(encoding='utf-8')
-    # Two col-actions thead entries are present today (one for the existing
-    # blank action column and the new delete column on the rounds table).
-    # Easier mechanical check: the experiment page has at least one
-    # col-actions header on the rounds table — the only table on that page.
-    assert 'col-actions' in exp
-    # Event-delegated handler is wired to body (so it survives polling
-    # re-renders of #rounds-rows).
-    assert ".delete-round" in exp
-    assert "method: 'DELETE'" in exp
+    assert 'rounds-rows' not in exp
+    assert 'delete-round' not in exp
+    assert "method: 'DELETE'" not in exp
 
 
 def test_delete_round_css_shares_delete_exp_chrome() -> None:

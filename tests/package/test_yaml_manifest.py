@@ -86,13 +86,14 @@ def test_create_experiment_seeds_manifest_yml() -> None:
     assert 'STARTER_MANIFEST.replace("__EXPERIMENT_NAME__"' in body
 
 
-def test_manifest_get_and_put_routes_exist() -> None:
-    """The manifest editor is reached at GET /experiments/{id}/manifest and
-    saved via PUT /experiments/{id}/manifest. The PUT validates the body is
-    a JSON object, runs _manifest_errors, and version-bumps atomically."""
+def test_manifest_saved_via_put_only() -> None:
+    """The manifest is written only by PUT /experiments/{id}/manifest — the
+    creation modal's save path. There is no standalone GET manifest-editor
+    route: editing happens solely in the modal. The PUT validates the body
+    is a JSON object, runs _manifest_errors, and version-bumps atomically."""
     text = (PKG_DIR / "app.py").read_text(encoding="utf-8")
-    assert re.search(r'@app\.get\("/experiments/\{experiment_id\}/manifest"', text)
     assert re.search(r'@app\.put\("/experiments/\{experiment_id\}/manifest"', text)
+    assert not re.search(r'@app\.get\("/experiments/\{experiment_id\}/manifest"', text)
     put_idx = text.index('@app.put("/experiments/{experiment_id}/manifest"')
     body = text[put_idx:put_idx + 2000]
     assert "isinstance(body, dict)" in body
@@ -164,27 +165,30 @@ def test_search_index_set_excludes_stale_pre_migration_indices() -> None:
 # ---- templates ------------------------------------------------------------
 
 
-def test_manifest_template_exists() -> None:
-    """The manifest editor template is its own page."""
-    assert (TEMPLATES / "manifest.html").is_file()
-    # The old Python code-editor template is gone.
+def test_manifest_editor_is_modal_only() -> None:
+    """The manifest editor lives only inside the creation modal — there is
+    no standalone manifest.html editor page (nor the retired code.html).
+    manifest_editor.js, the highlighter the modal embeds, stays."""
+    assert not (TEMPLATES / "manifest.html").exists()
     assert not (TEMPLATES / "code.html").exists()
+    assert (STATIC / "manifest_editor.js").is_file()
 
 
-def test_experiment_page_links_to_manifest_editor() -> None:
-    """The experiment page links to the manifest editor and no longer
-    embeds a Python code editor or an args form."""
+def test_experiment_page_shows_frozen_manifest_not_an_editor() -> None:
+    """The experiment view is a read-only mirror of the round viewer — a
+    frozen-manifest section, no editor and no link to one (editing is
+    modal-only). The retired Python-SFD args form stays gone."""
     html = (TEMPLATES / "experiment.html").read_text(encoding="utf-8")
-    assert "/experiments/{{ experiment_id }}/manifest" in html
+    assert 'id="frozen-manifest"' in html
+    assert "/experiments/{{ experiment_id }}/manifest" not in html
     assert "args-form" not in html
     assert "sfd_identifier" not in html
 
 
-def test_manifest_editor_saves_via_put() -> None:
-    """The manifest editor PUTs {manifest, if_match} to the manifest route
-    and renders manifest_invalid errors returned in the 400 detail."""
-    html = (TEMPLATES / "manifest.html").read_text(encoding="utf-8")
-    assert "manifest-buffer" in html
-    assert "manifest-errors" in html
-    assert "/manifest" in html
-    assert "manifest_invalid" in html
+def test_creation_modal_saves_manifest_via_put() -> None:
+    """The creation modal — the only manifest editor — saves through
+    PUT /experiments/{id}/manifest and surfaces manifest_invalid errors
+    returned in the 400 detail."""
+    js = (STATIC / "create_modal.js").read_text(encoding="utf-8")
+    assert "/manifest" in js
+    assert "manifest_invalid" in js

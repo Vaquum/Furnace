@@ -1,62 +1,64 @@
 {% extends "base.html" %}
 {% block title %}{{ experiment_id }} · experiment_runner{% endblock %}
+{# Experiment view — the experiment-level counterpart of the round viewer:
+   one experiment selector on the left, the same statistics grid (each cell
+   the mean across the experiment's rounds), and the frozen manifest. No
+   logs, no diff, no editing — the manifest is edited only in the + modal. #}
 {% block controls %}
-  <a class="topbar-link" href="/">← jobs</a>
-  <span class="topbar-id">{{ experiment_id }}</span>
+  <div class="round-select-wrap">
+    <select class="round-select" aria-label="Experiment"
+            onchange="if (this.value) location.href = this.value;">
+      {% for e in experiments %}
+      <option value="/experiments/{{ e.id }}"{% if e.id == experiment_id %} selected{% endif %}>{{ e.id }}</option>
+      {% endfor %}
+    </select>
+  </div>
 {% endblock %}
 {% block meta %}{{ rounds | length }} round{{ '' if rounds | length == 1 else 's' }}{% endblock %}
 {% block content %}
 
 <div class="section">
-  <h2 class="atom-heading"><span class="numeral">01</span><span>Manifest</span></h2>
-  <p class="atom-paragraph"><a class="atom-micro" href="/experiments/{{ experiment_id }}/manifest">Edit manifest →</a></p>
-  <div class="button-row">
-    <button id="start-btn" type="button" class="primary"{% if active %} disabled{% endif %}>Start round</button>
-    <span id="start-status" class="atom-small" style="margin-left: var(--gap-m); align-self: center;"></span>
-  </div>
-</div>
-
-<div class="section"
-     data-poll-url="/_partials/experiments/{{ experiment_id }}/rounds"
-     data-poll-target="#rounds-rows">
-  <h2 class="atom-heading"><span class="numeral">02</span><span>Rounds</span></h2>
-  <table>
-    <thead><tr><th>Round</th><th>State</th><th class="num">PID</th><th>Started</th><th>Ended</th><th class="num">Exit</th><th></th><th class="col-actions"></th></tr></thead>
-    <tbody id="rounds-rows">{% include "_round_rows.html" %}</tbody>
+  {% if stats %}
+  <table class="progress-table">
+    <thead>
+      <tr>
+        <th>Column</th>
+        <th class="num">p5</th>
+        <th class="num">p25</th>
+        <th class="num">p50</th>
+        <th class="num">p75</th>
+        <th class="num">p95</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in stats %}
+      <tr>
+        <td class="mono">{{ row.label }}</td>
+        {% for p in ['p5', 'p25', 'p50', 'p75', 'p95'] %}
+          {% set v = row[p] %}
+          {% if v is none %}
+          <td class="num null">—</td>
+          {% else %}
+          <td class="num{{ ' neg' if v < 0 else '' }}">{{ v | metric_fmt }}</td>
+          {% endif %}
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
   </table>
+  {% else %}
+  <p class="atom-paragraph" style="color: var(--ink-mute);">No round results yet.</p>
+  {% endif %}
 </div>
 
-<script>
-const EXP_ID = {{ experiment_id | tojson }};
-const VERSION = {{ version }};
-async function startRound() {
-  const btn = document.getElementById('start-btn');
-  const status = document.getElementById('start-status');
-  btn.disabled = true;
-  status.textContent = 'Starting…'; status.style.color = 'var(--ink-mute)';
-  try {
-    const r = await fetch(`/experiments/${EXP_ID}/rounds`, {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ if_match: VERSION }),
-    });
-    if (r.status === 200) { const d = await r.json(); location.href = `/experiments/${EXP_ID}/rounds/${d.round_id}`; return; }
-    let detail = `Start failed (${r.status})`;
-    try { const b = await r.json(); detail = (typeof b.detail === 'string' ? b.detail : (b.error || (b.current_version !== undefined ? 'The manifest changed elsewhere — reload the page.' : detail))); } catch (_) {}
-    status.textContent = detail; status.style.color = 'var(--negative)'; btn.disabled = false;
-  } catch (e) { status.textContent = 'Start failed'; status.style.color = 'var(--negative)'; btn.disabled = false; }
-}
-document.getElementById('start-btn').addEventListener('click', startRound);
-document.body.addEventListener('click', async (e) => {
-  const b = e.target.closest('.delete-round');
-  if (!b) return;
-  e.preventDefault();
-  const roundId = b.dataset.round;
-  if (!confirm(`Delete round ${roundId}? Logs, frozen manifest, and results will be removed.`)) return;
-  const r = await fetch(`/experiments/${encodeURIComponent(EXP_ID)}/rounds/${encodeURIComponent(roundId)}`, { method: 'DELETE' });
-  if (r.ok) { location.reload(); return; }
-  let detail = `Delete failed (${r.status})`;
-  try { detail = `${r.status}: ${(await r.json()).detail || detail}`; } catch (_) {}
-  alert(detail);
-});
-</script>
+<details class="section collapsible">
+  <summary class="atom-heading"><span class="numeral">01</span><span>Frozen manifest</span></summary>
+  <div class="code-block-wrap">
+    <button class="code-block-copy" type="button" data-copy-target="frozen-manifest" title="Copy manifest" aria-label="Copy frozen manifest">⧉</button>
+    <pre class="atom-code-block" id="frozen-manifest">{{ frozen_manifest }}</pre>
+  </div>
+</details>
+
+<script defer src="/static/diff_view.js?v={{ asset_version }}"></script>
+
 {% endblock %}
