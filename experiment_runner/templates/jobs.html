@@ -2,17 +2,16 @@
 {% block title %}experiment_runner{% endblock %}
 {% set total_rounds = experiments | sum(attribute='round_count') %}
 {% block meta %}{{ experiments | length }} experiments · {{ total_rounds }} rounds{% endblock %}
-{% block content %}
-
-<div class="jobs-toolbar">
-  <button type="button" id="open-search" class="icon-new" title="Search permutations" aria-label="Search permutations">
+{% block controls %}
+  <button type="button" id="open-search" class="bar-icon" title="Search permutations" aria-label="Search permutations">
     <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
       <circle cx="7" cy="7" r="4.25"></circle>
       <line x1="10.2" y1="10.2" x2="13.75" y2="13.75"></line>
     </svg>
   </button>
-  <button type="button" id="open-create" class="icon-new" title="New experiment or round" aria-label="New experiment or round">+</button>
-</div>
+  <button type="button" id="open-create" class="bar-icon" title="New experiment or round" aria-label="New experiment or round">+</button>
+{% endblock %}
+{% block content %}
 
 <table class="experiments-table">
   <thead>

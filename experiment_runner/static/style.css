@@ -78,7 +78,7 @@ html, body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-main.page { padding: var(--gap-l); }
+main.content { padding: var(--gap-l); }
 .section-narrow { max-width: 960px; }
 
 /* ---- Atoms ---- */
@@ -196,13 +196,6 @@ textarea.atom-code-block {
 textarea.atom-code-block.compact {
   min-height: 0;
 }
-.build-stamp {
-  margin-left: var(--gap-s);
-  font-family: var(--font-mono);
-  font-size: var(--t-micro);
-  letter-spacing: 0.08em;
-  color: var(--ink-mute);
-}
 textarea.atom-code-block:focus {
   border-color: var(--ink-soft);
   border-left-color: var(--accent);
@@ -219,9 +212,9 @@ textarea.atom-code-block:focus {
   border: 1px solid var(--rule);
   border-left: 2px solid var(--accent);
   border-radius: 2px;
-  /* Fill below the bar to the bottom of the viewport, leaving room for the
+  /* Fill the content area below the top control bar, leaving room for the
      save row below. Falls back to a generous min-height. */
-  height: calc(100vh - 240px);
+  height: calc(100vh - 180px);
   min-height: 480px;
   overflow: hidden;
   position: relative;
@@ -343,14 +336,6 @@ textarea.atom-code-block:focus {
 .code-editor-copy.copied { color: var(--accent); }
 
 /* ---- Layout primitives ---- */
-
-.bar {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--gap-m);
-  margin: 0 0 var(--gap-l) 0;
-}
 
 .section {
   margin: 0 0 var(--gap-l) 0;
@@ -762,44 +747,69 @@ table.experiments-table tr.round-row td.col-id a:hover { color: var(--accent); }
   max-width: 60ch;
 }
 
-/* ---- Nav ---- */
+/* ---- Top control bar — the-lab's header pattern. A persistent control
+   row above the content: .topbar-left carries the view's controls, its
+   identity, or the back affordance; .topbar-right a meta readout. Same
+   rhythm as the-lab — 16/24 padding, a hairline base rule, a 61 px
+   floor — and sticky so it never scrolls away. Its contents change per
+   view; its shape does not. ---- */
 
-nav.top {
+header.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 50;
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: var(--gap-l);
   min-height: 61px;
   padding: var(--gap-m) var(--gap-l);
   border-bottom: 1px solid var(--rule);
   background: var(--paper);
 }
-nav.top .brand {
-  font-family: var(--font-sans);
-  font-size: var(--t-h);
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-m);
+  min-width: 0;
 }
-nav.top .brand a { border-bottom: 0; padding-bottom: 0; color: var(--ink); }
-nav.top .brand a:hover { color: var(--accent); }
-nav.top .meta {
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-m);
   font-family: var(--font-mono);
   font-size: var(--t-code);
-  font-weight: 400;
   color: var(--ink-soft);
   font-variant-numeric: tabular-nums;
 }
+/* Identity label — the view's "where am I", compact mono at the muted
+   weight so the content below stays the focus. */
+.topbar-id {
+  font-family: var(--font-mono);
+  font-size: var(--t-code);
+  font-weight: 500;
+  color: var(--ink-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.topbar-id .sub { color: var(--ink-mute); }
+/* Back affordance — uppercase micro, the-lab button rhythm. */
+a.topbar-link {
+  border-bottom: 0;
+  padding-bottom: 0;
+  font-family: var(--font-sans);
+  font-size: var(--t-micro);
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+a.topbar-link:hover { color: var(--ink); }
 
 /* ---- Round viewer — status / progress bar + the star stats table ---- */
 
-.round-bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--gap-s) var(--gap-m);
-  margin: 0 0 var(--gap-m) 0;
-}
 /* The bar is subtle meta — the round table below is what earns attention,
    so its content sits at the muted light-grey weight, not bright white. */
 .progress-line {
@@ -845,7 +855,7 @@ nav.top .meta {
   color: var(--ink-soft);
 }
 #terminate-status:empty { display: none; }
-.round-icon {
+.bar-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -856,11 +866,15 @@ nav.top .meta {
   border-radius: 2px;
   background: transparent;
   color: var(--ink-soft);
+  font-family: var(--font-sans);
+  font-size: 17px;
+  line-height: 1;
   cursor: pointer;
   transition: color var(--motion), background var(--motion);
 }
-a.round-icon { border-bottom: 0; padding-bottom: 0; }
-.round-icon:hover { color: var(--ink); background: var(--paper-2); border-color: transparent; }
+a.bar-icon { border-bottom: 0; padding-bottom: 0; }
+.bar-icon:hover { color: var(--ink); background: var(--paper-2); }
+.bar-icon svg { display: block; }
 .round-terminate:hover { color: var(--negative); }
 
 /* The round viewer's table is the star — replicates the-lab's main data
@@ -1442,23 +1456,6 @@ p.empty {
   color: var(--ink-mute);
   font-style: normal;
   margin: var(--gap-m) 0;
-}
-
-/* ---- Jobs toolbar — the + that opens the creation modal ---- */
-
-.jobs-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: var(--gap-s);
-  margin-bottom: var(--gap-m);
-}
-button.icon-new {
-  width: 28px;
-  padding: 0;
-  font-family: var(--font-sans);
-  font-size: 18px;
-  font-weight: 400;
 }
 
 /* ---- Modal — the-lab QC-modal idiom: opaque takeover + raised panel ---- */

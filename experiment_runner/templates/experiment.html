@@ -1,11 +1,11 @@
 {% extends "base.html" %}
 {% block title %}{{ experiment_id }} · experiment_runner{% endblock %}
+{% block controls %}
+  <a class="topbar-link" href="/">← jobs</a>
+  <span class="topbar-id">{{ experiment_id }}</span>
+{% endblock %}
+{% block meta %}{{ rounds | length }} round{{ '' if rounds | length == 1 else 's' }}{% endblock %}
 {% block content %}
-
-<div class="bar">
-  <h1 class="atom-title">{{ experiment_id }}</h1>
-  <a class="atom-micro" href="/">← all jobs</a>
-</div>
 
 <div id="conflict-banner" class="banner"></div>
 

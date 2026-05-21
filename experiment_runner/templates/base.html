@@ -13,18 +13,18 @@
   <script defer src="/static/poll.js?v={{ asset_version }}"></script>
 </head>
 <body>
-  {# ?embed=1 drops the nav so a page can be shown inside an in-app modal
-     iframe (the jobs-page search modal) without a redundant header. #}
+  {# the-lab's structural pattern: a persistent top control bar over the
+     main content. .topbar-left carries the view's controls / identity,
+     .topbar-right a meta readout — both change per view, the shape does
+     not. ?embed=1 drops the bar entirely so a page can be shown inside
+     an in-app modal iframe (the jobs-page search modal) without it. #}
   {% if not request.query_params.get('embed') %}
-  <nav class="top">
-    <div class="brand"><a href="/">experiment_runner</a></div>
-    <div class="meta">
-      {% block meta %}{% endblock %}
-      <span class="build-stamp">v{{ package_version }}{% if git_short_sha %} · <a class="atom-micro" href="{{ repo_url }}/commit/{{ git_full_sha }}" target="_blank" rel="noopener">{{ git_short_sha }}</a>{% endif %}</span>
-    </div>
-  </nav>
+  <header class="topbar">
+    <div class="topbar-left">{% block controls %}{% endblock %}</div>
+    <div class="topbar-right">{% block meta %}{% endblock %}</div>
+  </header>
   {% endif %}
-  <main class="page">
+  <main class="content">
   {% block content %}{% endblock %}
   </main>
 </body>

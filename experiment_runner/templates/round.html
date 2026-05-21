@@ -1,64 +1,63 @@
 {% extends "base.html" %}
 {% block title %}{{ experiment_id }} · r{{ round_id }} · experiment_runner{% endblock %}
-{% block meta %}round {{ round_id }}{% endblock %}
+{# Top control bar — left: experiment + round selectors, dropdowns to move
+   anywhere; right: live progress, state, test period, and the results /
+   bundle / terminate controls. PID, exit code, kline size are not shown. #}
+{% block controls %}
+  <div class="round-select-wrap">
+    <select class="round-select" aria-label="Experiment"
+            onchange="if (this.value) location.href = this.value;">
+      {% for e in experiments %}
+      <option value="{% if e.rounds %}/experiments/{{ e.id }}/rounds/{{ e.rounds[0].round_id }}{% else %}/experiments/{{ e.id }}{% endif %}"{% if e.id == experiment_id %} selected{% endif %}>{{ e.id }}</option>
+      {% endfor %}
+    </select>
+    <span class="round-sep">/</span>
+    <select class="round-select" aria-label="Round"
+            onchange="if (this.value) location.href = this.value;">
+      {% for r in rounds %}
+      <option value="/experiments/{{ experiment_id }}/rounds/{{ r.round_id }}"{% if r.round_id == round_id %} selected{% endif %}>{{ r.round_id }}</option>
+      {% endfor %}
+    </select>
+  </div>
+{% endblock %}
+{% block meta %}
+  <div class="round-meta">
+    <span id="progress-line" class="progress-line">—</span>
+    <span id="status-state" class="state {{ status.state }}">{{ status.state }}</span>
+    {% set ps = (period.test_period_start if period else None) %}
+    {% set pe = (period.test_period_end if period else None) %}
+    {% if ps or pe %}
+    <span class="round-period">{{ ps or "—" }} — {{ pe or "—" }}</span>
+    {% endif %}
+    <a class="bar-icon" href="/experiments/{{ experiment_id }}/rounds/{{ round_id }}/results"
+       title="View results" aria-label="View results">
+      <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4">
+        <rect x="2.25" y="3.25" width="11.5" height="9.5"></rect>
+        <line x1="2.25" y1="6.5" x2="13.75" y2="6.5"></line>
+        <line x1="2.25" y1="9.5" x2="13.75" y2="9.5"></line>
+      </svg>
+    </a>
+    <a class="bar-icon" href="/experiments/{{ experiment_id }}/rounds/{{ round_id }}/bundle"
+       download="{{ experiment_id }}__r{{ round_id }}.zip"
+       title="Download bundle" aria-label="Download bundle">
+      <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M8 2.5 V9.5 M5 7 L8 10 L11 7"></path>
+        <path d="M3.25 12.75 H12.75"></path>
+      </svg>
+    </a>
+    <span id="terminate-status" class="atom-small"></span>
+    <button class="bar-icon round-terminate" id="terminate-btn" type="button"
+            title="Terminate round" aria-label="Terminate round"{% if not active %} hidden{% endif %}>
+      <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
+        <rect x="4" y="4" width="8" height="8" rx="1"></rect>
+      </svg>
+    </button>
+  </div>
+{% endblock %}
 {% block content %}
 
 <div class="section" id="progress-section"
      data-stats-url="/experiments/{{ experiment_id }}/rounds/{{ round_id }}/stats">
-  {# One status bar. Left: experiment + round selectors — subtle meta,
-     dropdowns to move anywhere, not a heading. Right: live progress,
-     state, test period, and the results / bundle / close controls.
-     PID, exit code and kline size are not surfaced here. #}
-  <div class="round-bar">
-    <div class="round-select-wrap">
-      <select class="round-select" aria-label="Experiment"
-              onchange="if (this.value) location.href = this.value;">
-        {% for e in experiments %}
-        <option value="{% if e.rounds %}/experiments/{{ e.id }}/rounds/{{ e.rounds[0].round_id }}{% else %}/experiments/{{ e.id }}{% endif %}"{% if e.id == experiment_id %} selected{% endif %}>{{ e.id }}</option>
-        {% endfor %}
-      </select>
-      <span class="round-sep">/</span>
-      <select class="round-select" aria-label="Round"
-              onchange="if (this.value) location.href = this.value;">
-        {% for r in rounds %}
-        <option value="/experiments/{{ experiment_id }}/rounds/{{ r.round_id }}"{% if r.round_id == round_id %} selected{% endif %}>{{ r.round_id }}</option>
-        {% endfor %}
-      </select>
-    </div>
-    <div class="round-meta">
-      <span id="progress-line" class="progress-line">—</span>
-      <span id="status-state" class="state {{ status.state }}">{{ status.state }}</span>
-      {% set ps = (period.test_period_start if period else None) %}
-      {% set pe = (period.test_period_end if period else None) %}
-      {% if ps or pe %}
-      <span class="round-period">{{ ps or "—" }} — {{ pe or "—" }}</span>
-      {% endif %}
-      <a class="round-icon" href="/experiments/{{ experiment_id }}/rounds/{{ round_id }}/results"
-         title="View results" aria-label="View results">
-        <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4">
-          <rect x="2.25" y="3.25" width="11.5" height="9.5"></rect>
-          <line x1="2.25" y1="6.5" x2="13.75" y2="6.5"></line>
-          <line x1="2.25" y1="9.5" x2="13.75" y2="9.5"></line>
-        </svg>
-      </a>
-      <a class="round-icon" href="/experiments/{{ experiment_id }}/rounds/{{ round_id }}/bundle"
-         download="{{ experiment_id }}__r{{ round_id }}.zip"
-         title="Download bundle" aria-label="Download bundle">
-        <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M8 2.5 V9.5 M5 7 L8 10 L11 7"></path>
-          <path d="M3.25 12.75 H12.75"></path>
-        </svg>
-      </a>
-      <span id="terminate-status" class="atom-small"></span>
-      <button class="round-icon round-terminate" id="terminate-btn" type="button"
-              title="Terminate round" aria-label="Terminate round"{% if not active %} hidden{% endif %}>
-        <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
-          <rect x="4" y="4" width="8" height="8" rx="1"></rect>
-        </svg>
-      </button>
-    </div>
-  </div>
-
   <table id="stats-table" class="progress-table" style="display: none;">
     <thead>
       <tr>

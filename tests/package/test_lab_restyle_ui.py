@@ -128,12 +128,12 @@ def test_working_json_endpoint_exists() -> None:
 
 
 def test_round_viewer_has_experiment_and_round_selectors() -> None:
-    """The round viewer's labelled status grid collapses into one bar.
-    Its left side is two dropdowns — experiment and round — so the
+    """The round viewer's controls are two dropdowns — experiment and
+    round — placed in the top control bar's {% block controls %}, so the
     operator can move anywhere without returning to the jobs page;
     round_page passes the sibling rounds and all experiments for them."""
     html = (TEMPLATES / "round.html").read_text(encoding="utf-8")
-    assert 'class="round-bar"' in html
+    assert "{% block controls %}" in html
     assert 'class="round-select" aria-label="Experiment"' in html
     assert 'class="round-select" aria-label="Round"' in html
     app = (PKG_DIR / "app.py").read_text(encoding="utf-8")
@@ -153,19 +153,38 @@ def test_search_is_reachable_from_jobs_via_embedded_modal() -> None:
 
 def test_embed_query_param_drops_nav_chrome() -> None:
     """A page rendered inside an in-app modal iframe must not show the
-    top nav (base.html) or its own page bar (search.html) — both are
-    gated on the absence of the embed query param."""
+    top control bar — base.html gates the whole <header class="topbar">
+    on the absence of the embed query param. One gate in the shared
+    layout covers every embedded view (the jobs-page search modal)."""
     base = (TEMPLATES / "base.html").read_text(encoding="utf-8")
-    search = (TEMPLATES / "search.html").read_text(encoding="utf-8")
     assert "request.query_params.get('embed')" in base
-    assert "request.query_params.get('embed')" in search
+    assert '<header class="topbar">' in base
+    assert base.index("request.query_params.get('embed')") < base.index("<header")
 
 
 def test_code_editor_close_button_replaces_back_link() -> None:
     """The code editor's '← experiment' back-link is replaced by an ✕
-    close control that returns to wherever the editor was opened from
-    (history.back), falling back to the experiment page."""
+    close control — a top-bar icon button (history.back, falling back to
+    the experiment page) that returns to wherever the editor was opened
+    from."""
     html = (TEMPLATES / "code.html").read_text(encoding="utf-8")
-    assert 'class="icon-close"' in html
+    assert 'aria-label="Close editor"' in html
+    assert 'class="bar-icon"' in html
     assert "history.back()" in html
     assert "← experiment" not in html
+
+
+def test_views_share_one_top_control_bar() -> None:
+    """the-lab's structural pattern — the main area splits into a top
+    control bar and the content below it. base.html provides one shared
+    <header class="topbar"> carrying {% block controls %} on the left and
+    the {% block meta %} readout on the right; every page-level view
+    fills the controls block, so the bar is present and consistently
+    placed across the app while its contents change per view."""
+    base = (TEMPLATES / "base.html").read_text(encoding="utf-8")
+    assert '<header class="topbar">' in base
+    assert "{% block controls %}" in base
+    assert '<main class="content">' in base
+    for view in ("jobs", "experiment", "round", "code", "search", "results"):
+        html = (TEMPLATES / f"{view}.html").read_text(encoding="utf-8")
+        assert "{% block controls %}" in html, f"{view}.html has no controls block"
