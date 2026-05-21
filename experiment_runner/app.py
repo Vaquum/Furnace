@@ -749,7 +749,12 @@ def create_app(root: Path) -> FastAPI:
     def round_page(request: Request, experiment_id: str, round_id: str):
         round_dir = _round_dir(experiment_id, round_id)
         st = read_status(round_dir)
-        frozen_manifest = (round_dir / "manifest.yml").read_text()
+        # A round created before the manifest migration has no manifest.yml
+        # — it predates the YAML format. The round page still renders — logs,
+        # status, and results stay viewable — with an empty manifest panel
+        # rather than a 500.
+        manifest_path = round_dir / "manifest.yml"
+        frozen_manifest = manifest_path.read_text() if manifest_path.exists() else ""
         # period.json is written by run_round.py after `limen run`
         # completes — test-period bounds and kline_size, read straight from
         # limen's own artefacts (round_data.jsonl, metadata.json). May be
@@ -1118,11 +1123,17 @@ def _parse_iso(s: str | None):
 
 
 def _compute_round_stats(round_dir: Path) -> dict:
-    from limen.yaml.parser import parse
-
     status = read_status(round_dir)
-    yaml_dict, _parse_errors = parse(round_dir / "manifest.yml")
-    target = int((yaml_dict.get("uel") or {}).get("n_permutations", 50))
+    # n_permutations is the progress-bar denominator, read from the round's
+    # own manifest. A pre-migration round has no manifest.yml; fall back to
+    # the default rather than crash the /stats poll (which fires every 2s
+    # while the round page is open).
+    target = 50
+    manifest_path = round_dir / "manifest.yml"
+    if manifest_path.exists():
+        from limen.yaml.parser import parse
+        yaml_dict, _parse_errors = parse(manifest_path)
+        target = int((yaml_dict.get("uel") or {}).get("n_permutations", 50))
     csv_path = _round_csv_path(round_dir)
 
     state = status.get("state")

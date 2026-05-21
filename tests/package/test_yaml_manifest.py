@@ -134,6 +134,18 @@ def test_working_json_returns_manifest() -> None:
     assert '"version"' in body
 
 
+def test_round_views_guard_pre_migration_rounds() -> None:
+    """A round created before the manifest migration has no manifest.yml
+    (its definition was a frozen code.py + args.json). round_page and
+    _compute_round_stats guard the read, so viewing or polling such a legacy
+    round degrades gracefully instead of raising FileNotFoundError → 500."""
+    text = (PKG_DIR / "app.py").read_text(encoding="utf-8")
+    rp = text[text.index("def round_page(") :][:600]
+    assert "manifest_path.exists() else" in rp
+    cs = text[text.index("def _compute_round_stats(") :][:700]
+    assert "if manifest_path.exists():" in cs
+
+
 # ---- templates ------------------------------------------------------------
 
 
