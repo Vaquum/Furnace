@@ -109,15 +109,18 @@ def test_metric_fmt_jinja_filter_registered() -> None:
     assert 'templates.env.filters["metric_fmt"] = _format_metric' in app
 
 
-def test_creation_modal_is_served_and_wired_into_jobs_page() -> None:
-    """The inline new-experiment form is replaced by a modal — one
-    cohesive control to create a new experiment or start a round on an
-    existing one — opened from the jobs toolbar's + button."""
+def test_create_modal_is_global_in_base() -> None:
+    """The creation modal is part of the shared layout, not the jobs page.
+    The `+` control-bar button, the `#create-modal` it opens, and the
+    create_modal.js that wires them all live in base.html, so creating an
+    experiment or round works from every view."""
     assert (STATIC / "create_modal.js").is_file()
-    jobs = (TEMPLATES / "jobs.html").read_text(encoding="utf-8")
-    assert 'id="create-modal"' in jobs
-    assert 'id="open-create"' in jobs
-    assert "create_modal.js" in jobs
+    base = (TEMPLATES / "base.html").read_text(encoding="utf-8")
+    assert 'id="create-modal"' in base
+    assert 'id="open-create"' in base
+    assert "create_modal.js" in base
+    # No longer carried by the jobs page itself.
+    assert 'id="create-modal"' not in (TEMPLATES / "jobs.html").read_text(encoding="utf-8")
 
 
 def test_create_experiment_endpoint_accepts_json() -> None:
@@ -155,14 +158,37 @@ def test_round_viewer_has_experiment_and_round_selectors() -> None:
     assert '"experiments": _all_experiments(root)' in app
 
 
-def test_search_is_reachable_from_jobs_via_embedded_modal() -> None:
-    """Search had no entry point in the UI. The jobs toolbar gains a
-    search icon that opens /search inside a modal iframe, loaded with
-    ?embed=1 so the embedded page drops its own nav chrome."""
-    jobs = (TEMPLATES / "jobs.html").read_text(encoding="utf-8")
-    assert 'id="search-modal"' in jobs
-    assert 'id="open-search"' in jobs
-    assert "/search?embed=1" in jobs
+def test_search_modal_is_global_in_base() -> None:
+    """The search icon and the modal it opens — an iframe of /search?embed=1,
+    which drops its own nav chrome — are part of the shared layout, so
+    search is reachable from every view, not just the jobs page."""
+    base = (TEMPLATES / "base.html").read_text(encoding="utf-8")
+    assert 'id="search-modal"' in base
+    assert 'id="open-search"' in base
+    assert "/search?embed=1" in base
+    assert 'id="search-modal"' not in (TEMPLATES / "jobs.html").read_text(encoding="utf-8")
+
+
+def test_search_index_build_uses_unique_temp() -> None:
+    """The search index builder writes each round's .index.parquet through a
+    uniquely-named temp file. /search/bounds.json and /search/rounds.json are
+    fetched concurrently and both rebuild the same round's index — a shared
+    temp filename raced their os.replace calls into a FileNotFoundError 500."""
+    app = (PKG_DIR / "app.py").read_text(encoding="utf-8")
+    body = app[app.index("def _ensure_round_index(") :]
+    body = body[: body.index("\ndef ", 1)]
+    assert "secrets.token_hex" in body
+    assert "os.replace(tmp, idx_path)" in body
+
+
+def test_search_page_drops_stale_jobs_link() -> None:
+    """The search page no longer carries its own `← jobs` back-link — the
+    persistent JOBS nav in the shared control bar already does that. Its
+    filter labels use the short display-label form the rest of the UI uses."""
+    html = (TEMPLATES / "search.html").read_text(encoding="utf-8")
+    assert "topbar-link" not in html
+    assert "← jobs" not in html
+    assert "metric | display_label" in html
 
 
 def test_embed_query_param_drops_nav_chrome() -> None:

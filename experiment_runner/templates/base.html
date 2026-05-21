@@ -14,21 +14,122 @@
 <body>
   {# the-lab's structural pattern: a persistent top control bar over the
      main content. .topbar-left opens with the persistent JOBS home link,
-     then the view's own controls; .topbar-right is a meta readout. Both
-     change per view, the shape does not. ?embed=1 drops the bar entirely
-     so a page can be shown inside an in-app modal iframe (the jobs-page
-     search modal) without it. #}
+     then the view's own controls; .topbar-right carries the view's meta
+     readout, then the persistent search and create (+) icons. JOBS, search,
+     and create are global control — present on every view — so the operator
+     never loses home / search / create by switching view. ?embed=1 drops the
+     bar and the modals so a page can be shown inside an in-app modal iframe
+     (the search modal) without them. #}
   {% if not request.query_params.get('embed') %}
   <header class="topbar">
     <div class="topbar-left">
       <a class="topbar-nav" href="/">JOBS</a>
       {% block controls %}{% endblock %}
     </div>
-    <div class="topbar-right">{% block meta %}{% endblock %}</div>
+    <div class="topbar-right">
+      {% block meta %}{% endblock %}
+      <button type="button" id="open-search" class="bar-icon" title="Search permutations" aria-label="Search permutations">
+        <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+          <circle cx="7" cy="7" r="4.25"></circle>
+          <line x1="10.2" y1="10.2" x2="13.75" y2="13.75"></line>
+        </svg>
+      </button>
+      <button type="button" id="open-create" class="bar-icon" title="New experiment or round" aria-label="New experiment or round">+</button>
+    </div>
   </header>
   {% endif %}
   <main class="content">
   {% block content %}{% endblock %}
   </main>
+
+  {# Global create + search modals — opened by the persistent control-bar
+     icons, so creating an experiment / round or searching works from every
+     view, not just the jobs page. Dropped in ?embed=1 (no control bar). #}
+  {% if not request.query_params.get('embed') %}
+  <div class="modal" id="create-modal" aria-hidden="true">
+    <div class="modal-panel" role="dialog" aria-label="Create a round">
+      <div class="modal-head">
+        <span id="create-title">New experiment</span>
+        <button type="button" class="icon-close" id="create-close" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body create-grid">
+        <div class="create-target" id="create-target">
+          <p class="create-group-label">New experiment</p>
+          <label class="target-option">
+            <input type="radio" name="create-target" value="__new__" checked>
+            <span>Create a new experiment</span>
+          </label>
+          <input type="text" id="m-new-name" class="target-new-name" placeholder="Experiment name…" autocomplete="off">
+
+          <p class="create-group-label spaced">Continue an experiment</p>
+          {% for exp in experiments %}
+          <label class="target-option">
+            <input type="radio" name="create-target" value="{{ exp.id }}">
+            <span>{{ exp.id }}</span>
+          </label>
+          {% endfor %}
+          {% if not experiments %}
+          <p class="atom-small" style="color: var(--ink-mute);">No experiments yet.</p>
+          {% endif %}
+        </div>
+
+        <div class="create-manifest">
+          <div class="manifest-editor">
+            <div class="manifest-gutter" aria-hidden="true"></div>
+            <div class="manifest-buffer-wrap">
+              <pre class="manifest-highlight" aria-hidden="true"></pre>
+              <textarea class="manifest-buffer" id="m-manifest" spellcheck="false"
+                        autocapitalize="off" autocomplete="off" autocorrect="off" wrap="off"></textarea>
+            </div>
+          </div>
+          <div id="m-errors" class="manifest-errors" hidden></div>
+          <div class="create-footer">
+            <button type="button" id="m-submit" class="primary">Create &amp; start round</button>
+            <span id="m-status" class="create-status"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="search-modal" aria-hidden="true">
+    <div class="modal-panel" role="dialog" aria-label="Search permutations">
+      <div class="modal-head">
+        <span>Search</span>
+        <button type="button" class="icon-close" id="search-close" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        {# /search rendered nav-less inside the modal; loaded lazily on first open. #}
+        <iframe class="search-frame" id="search-frame" title="Search permutations" data-src="/search?embed=1"></iframe>
+      </div>
+    </div>
+  </div>
+
+  <script>window.STARTER_MANIFEST = {{ starter_manifest | tojson }};</script>
+  <script src="/static/manifest_editor.js?v={{ asset_version }}"></script>
+  <script src="/static/create_modal.js?v={{ asset_version }}"></script>
+  <script>
+  // Search modal — /search in an iframe, loaded lazily on first open.
+  (function () {
+    const searchModal = document.getElementById('search-modal');
+    const searchFrame = document.getElementById('search-frame');
+    function openSearch() {
+      if (!searchFrame.src) searchFrame.src = searchFrame.dataset.src;
+      searchModal.classList.add('open');
+      searchModal.setAttribute('aria-hidden', 'false');
+    }
+    function closeSearch() {
+      searchModal.classList.remove('open');
+      searchModal.setAttribute('aria-hidden', 'true');
+    }
+    document.getElementById('open-search').addEventListener('click', openSearch);
+    document.getElementById('search-close').addEventListener('click', closeSearch);
+    searchModal.addEventListener('click', (e) => { if (e.target === searchModal) closeSearch(); });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && searchModal.classList.contains('open')) closeSearch();
+    });
+  })();
+  </script>
+  {% endif %}
 </body>
 </html>
