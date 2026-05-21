@@ -1,15 +1,12 @@
 from __future__ import annotations
 
 import argparse
-import inspect
 import json
 import os
 import sys
-from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
-from .ast_strip import strip_to_definitions
-from .state import read_status, status_flock, write_status_atomic, now_iso
+from .state import now_iso, read_status, status_flock, write_status_atomic
 
 
 def _self_promote_to_running(round_dir: Path) -> None:
@@ -48,128 +45,20 @@ def _route_warnings_and_silence_tqdm(round_dir: Path) -> None:
         pass
 
 
-def main() -> None:
-    p = argparse.ArgumentParser(prog="experiment_runner.run_round")
-    p.add_argument("--round-dir", required=True, type=Path)
-    args = p.parse_args()
-    round_dir: Path = args.round_dir
-
-    _self_promote_to_running(round_dir)
-    _route_warnings_and_silence_tqdm(round_dir)
-
-    sfd_args = json.loads((round_dir / "args.json").read_text())
-    source = (round_dir / "code.py").read_text()
-
-    tree = strip_to_definitions(source)
-    ns: dict = {"__name__": "_runner_sfd", "__file__": str(round_dir / "code.py")}
-    exec(compile(tree, str(round_dir / "code.py"), "exec"), ns)
-
-    sfd_identifier = sfd_args["sfd_identifier"]
-    sfd = ns[sfd_identifier]
-    if inspect.isclass(sfd):
-        sfd = sfd()
-
-    import limen
-    method_name = sfd_args["data_source"]["method"]
-    method_params = sfd_args["data_source"]["params"]
-    historical = limen.HistoricalData()
-    data = getattr(historical, method_name)(**method_params)
-    if data is None:
-        data = historical.data  # older Limen versions stored result on instance
-    uel = limen.UniversalExperimentLoop(data=data, sfd=sfd)
-
-    # Optional absolute-date split. When `split_dates` is set in args.json,
-    # forward it into the manifest UEL just instantiated. The manifest's
-    # `split_dates` (set here) takes precedence over the SFD's existing
-    # `split_config` in Limen's `_run_prepare_setup` and `compute_test_bars`;
-    # when absent, the SFD's ratio split runs unchanged.
-    #
-    # The form collects YYYY-MM-DD date strings (app.py already validated
-    # the format + ordering). Here we expand each one to a UTC datetime
-    # with end-of-day-inclusive semantics:
-    #   start_*: YYYY-MM-DD 00:00:00 UTC  (beginning of the typed day)
-    #   end_*:   next-day   00:00:00 UTC  (end of the typed day, since
-    #                                      Limen's windows are [start, end))
-    # So typing train_end=2024-12-31 means "include all bars on Dec 31".
-    # The UTC tzinfo is required because the data column is
-    # `Datetime('ms', 'UTC')` — a naive Python datetime would trigger
-    # `polars.SchemaError: could not evaluate '>=' between
-    # Datetime('ms', 'UTC') and Datetime('μs')`.
-    split_dates = sfd_args.get("split_dates")
-    if split_dates:
-        uel.manifest.set_split_dates(
-            _split_start_dt(split_dates["train_start"]),
-            _split_end_dt(split_dates["train_end"]),
-            _split_start_dt(split_dates["val_start"]),
-            _split_end_dt(split_dates["val_end"]),
-            _split_start_dt(split_dates["test_start"]),
-            _split_end_dt(split_dates["test_end"]),
-        )
-
-    round_id = round_dir.name
-    uel_kwargs = dict(sfd_args["uel_run"])
-    uel_kwargs["experiment_name"] = f"{uel_kwargs['experiment_name']}__r{round_id}"
-    uel.run(**uel_kwargs)
-
-    # Persist round-level metadata for the round-status section to read.
-    # period.json carries the test-period dates Limen actually used
-    # (sourced from uel._alignment, populated per permutation) plus the
-    # authoritative kline_size derived from the row spacing of the data
-    # the round was fed — not the nominal value from args.json, which
-    # might disagree if the SFD massaged params before fetch.
-    #
-    # Scope this in try/except so a metadata-extraction failure does NOT
-    # propagate and cause the watcher to mark a successful round as
-    # "failed" (the real work — uel.run + results.csv — is already done
-    # by the time we get here). Limen's _alignment is a private
-    # attribute with no stability contract; Polars datetime ops can
-    # raise on unusual data shapes. Both are known-fragile relative to
-    # the core deliverable, so we contain the blast radius.
-    # traceback.print_exc() lands in stderr.log, so the failure is
-    # visible (fail-loud), not swallowed.
-    #
-    # Write is atomic: temp + os.replace, mirroring state.py and the
-    # /working endpoint — the reader (round_page) does exists() then
-    # json.loads(), so a partial-write window would yield JSONDecodeError.
-    try:
-        period = _collect_period_info(data, uel)
-        if period:
-            tmp = round_dir / "period.json.tmp"
-            tmp.write_text(json.dumps(period, indent=2, default=str))
-            os.replace(tmp, round_dir / "period.json")
-    except Exception:
-        import traceback
-        traceback.print_exc()
-
-
-def _split_start_dt(date_str: str) -> datetime:
-    return datetime.combine(date.fromisoformat(date_str), time.min, tzinfo=timezone.utc)
-
-
-def _split_end_dt(date_str: str) -> datetime:
-    # End-of-day-inclusive: typing "2024-12-31" means include all of Dec 31.
-    # Limen's split windows are half-open [start, end), so the end datetime
-    # we pass must be midnight of the NEXT day for the typed day to be
-    # included in full.
-    return _split_start_dt(date_str) + timedelta(days=1)
-
-
-def _collect_period_info(data, uel) -> dict:
+def _collect_period_info(yaml_dict: dict, uel) -> dict:
+    """Round-level metadata for the round-status section. kline_size comes
+    straight from the manifest's declarative `data_source` params; the
+    test-period bounds come from `uel._alignment` (populated per
+    permutation, so min(first) / max(last) is the widest window the
+    round's results cover)."""
     out: dict = {}
 
-    # Kline size from actual data row spacing. Mode of consecutive
-    # datetime diffs is the bar size in seconds. Skip if the data has no
-    # 'datetime' column (custom SFD with non-time-series data).
-    if "datetime" in data.columns:
-        diffs = data["datetime"].diff().drop_nulls()
-        if len(diffs) > 0:
-            out["kline_size_seconds"] = int(diffs.dt.total_seconds().mode()[0])
+    manifest = (yaml_dict.get("sfd") or {}).get("manifest") or {}
+    ds_params = (manifest.get("data_source") or {}).get("params") or {}
+    kline_size = ds_params.get("kline_size")
+    if isinstance(kline_size, int):
+        out["kline_size_seconds"] = kline_size
 
-    # Test-period bounds across every permutation Limen ran. When
-    # split_config is fixed for the round, all entries match; when it is
-    # swept via round_params, taking min(first) / max(last) gives the
-    # widest window the round's results cover. all_permutations_same_period
-    # tells callers whether the round-level summary is exact or aggregate.
     alignment = getattr(uel, "_alignment", None) or []
     if alignment:
         firsts = [a["first_test_datetime"] for a in alignment if "first_test_datetime" in a]
@@ -183,6 +72,91 @@ def _collect_period_info(data, uel) -> dict:
             out["permutation_count"] = len(alignment)
 
     return out
+
+
+def main() -> None:
+    p = argparse.ArgumentParser(prog="experiment_runner.run_round")
+    p.add_argument("--round-dir", required=True, type=Path)
+    args = p.parse_args()
+    round_dir: Path = args.round_dir
+
+    _self_promote_to_running(round_dir)
+    _route_warnings_and_silence_tqdm(round_dir)
+
+    # The whole experiment definition is the YAML manifest — there is no
+    # user Python to exec. Limen's own pipeline parses, validates, compiles,
+    # and runs it (this mirrors `limen run`). Imports land after the tqdm
+    # patch so Limen's progress bars stay silenced.
+    from limen.experiment import GridStrategy, RandomStrategy
+    from limen.experiment.experiment_core import UniversalExperimentLoop
+    from limen.experiment.param_domain import ParamDomain
+    from limen.yaml.compiler import CompiledSFD
+    from limen.yaml.parser import parse
+    from limen.yaml.validator import validate
+
+    yaml_dict, parse_errors = parse(round_dir / "manifest.yml")
+    if parse_errors:
+        for e in parse_errors:
+            loc = f" (line {e.line})" if getattr(e, "line", None) else ""
+            print(f"manifest parse error{loc}: {e.message}", file=sys.stderr)
+        sys.exit(1)
+
+    result = validate(yaml_dict)
+    for w in result.warnings:
+        print(f"manifest warning: {w.message}", file=sys.stderr)
+    if not result.valid:
+        for e in result.errors:
+            loc = f" (line {e.line})" if getattr(e, "line", None) else ""
+            path = f" [{e.path}]" if getattr(e, "path", None) else ""
+            print(f"manifest error{path}{loc}: {e.message}", file=sys.stderr)
+        sys.exit(1)
+
+    uel_cfg = yaml_dict.get("uel") or {}
+    sfd_cfg = yaml_dict.get("sfd") or {}
+    params = {k: list(v) for k, v in (sfd_cfg.get("params") or {}).items()}
+    domain = ParamDomain(params)
+    strategy_type = (uel_cfg.get("search_strategy") or {}).get("type", "random")
+    search_strategy = GridStrategy(domain) if strategy_type == "grid" else RandomStrategy(domain)
+
+    test_mode = (yaml_dict.get("metadata") or {}).get("mode", "development") == "development"
+    compiled = CompiledSFD(yaml_dict)
+
+    # round_dir is experiments/<eid>/rounds/<rid>. UEL names the results CSV
+    # by the experiment_name passed to run() and writes it to the cwd (the
+    # subprocess runs with cwd=round_dir), so the file lands at
+    # round_dir/<eid>__r<rid>.csv — exactly where the results / search /
+    # bundle layer expects it.
+    eid = round_dir.parent.parent.name
+    round_id = round_dir.name
+
+    uel = UniversalExperimentLoop(
+        sfd=compiled,
+        search_strategy=search_strategy,
+        test_mode=test_mode,
+        feedback_interval=int(uel_cfg.get("feedback_interval", 100)),
+        checkpoint_interval=int(uel_cfg.get("checkpoint_interval", 1000)),
+        yaml_reference=dict(yaml_dict),
+    )
+    uel.run(
+        experiment_name=f"{eid}__r{round_id}",
+        n_permutations=int(uel_cfg.get("n_permutations", 50)),
+        prep_each_round=bool(uel_cfg.get("prep_each_round", True)),
+    )
+
+    # period.json — contained in try/except so a metadata-extraction failure
+    # does not flip a finished round to "failed"; traceback.print_exc lands
+    # it in stderr.log (fail-loud, not swallowed). Atomic write (temp +
+    # os.replace) since round_page does exists() then json.loads() and a
+    # partial-write window would raise JSONDecodeError.
+    try:
+        period = _collect_period_info(yaml_dict, uel)
+        if period:
+            tmp = round_dir / "period.json.tmp"
+            tmp.write_text(json.dumps(period, indent=2, default=str))
+            os.replace(tmp, round_dir / "period.json")
+    except Exception:
+        import traceback
+        traceback.print_exc()
 
 
 if __name__ == "__main__":
