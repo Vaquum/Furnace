@@ -6,7 +6,8 @@
 {% endblock %}
 {% block content %}
 
-<div class="section">
+<div class="search-split">
+<div class="section search-panel">
   <h2 class="atom-heading"><span class="numeral">01</span><span>Filters</span></h2>
 
   <div class="filter-grid">
@@ -55,7 +56,7 @@
   </div>
 </div>
 
-<div class="section">
+<div class="section search-panel">
   <h2 class="atom-heading">
     <span class="numeral">02</span>
     <span>Matching rounds</span>
@@ -73,6 +74,7 @@
     <tbody id="search-results-rows"></tbody>
   </table>
   <p id="search-empty" class="empty" style="display: none;">No matching rounds.</p>
+</div>
 </div>
 
 <script>

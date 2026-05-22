@@ -971,6 +971,25 @@ a.topbar-nav {
   white-space: nowrap;
 }
 a.topbar-nav:hover { color: var(--accent); }
+/* Build identity — the package version and the commit SHA the running
+   app is built from, far right on every view. The SHA links to that
+   commit on GitHub; no link underline — it rides in the bar chrome. */
+.topbar-build {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--gap-s);
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--t-code);
+}
+a.topbar-build {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+.topbar-build .build-ver { color: var(--ink-mute); }
+.topbar-build .build-sha { color: var(--ink-soft); }
+a.topbar-build:hover { color: inherit; border-bottom: 0; }
+a.topbar-build:hover .build-sha { color: var(--accent); }
 
 /* ---- Round viewer — status / progress bar + the star stats table ---- */
 
@@ -1014,6 +1033,13 @@ a.topbar-nav:hover { color: var(--accent); }
   color: var(--fg-2);
 }
 #terminate-status:empty { display: none; }
+/* Tight icon cluster — the-lab's .icon-group rhythm: the bar's page-local
+   and global icons sit close together, not bar-spaced apart. */
+.bar-icons {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
 .bar-icon {
   display: inline-flex;
   align-items: center;
@@ -1525,11 +1551,13 @@ table.results-table tbody tr.row-enter {
 .range-slider input[type="range"]::-webkit-slider-thumb:hover {
   width: 20px;
   height: 20px;
+  margin-top: 2px;
 }
 .range-slider input[type="range"]:active::-webkit-slider-thumb {
   width: 24px;
   height: 24px;
   background: var(--accent);
+  margin-top: 0;
 }
 .range-slider input[type="range"]:focus-visible::-webkit-slider-thumb {
   outline: var(--border-w) solid var(--accent);
@@ -1674,7 +1702,7 @@ p.empty {
   min-width: 0;
   overflow: hidden;
 }
-.create-manifest .manifest-editor { flex: 1 1 auto; min-height: 0; }
+.create-manifest .manifest-editor { flex: 1 1 auto; min-height: 0; position: relative; }
 .create-group-label {
   font: var(--text-data-em);
   letter-spacing: var(--track-label);
