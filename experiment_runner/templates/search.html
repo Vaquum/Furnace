@@ -52,7 +52,7 @@
     <button id="reset-btn" type="button">Reset</button>
     <a id="export-btn" class="btn" href="/search/bundle">Export bundle</a>
     <button id="copy-curl-btn" type="button">Copy curl</button>
-    <span id="copy-curl-status" class="atom-small" style="margin-left: var(--gap-s); align-self: center; color: var(--ink-mute);"></span>
+    <span id="copy-curl-status" class="atom-small" style="margin-left: var(--s-3); align-self: center; color: var(--fg-3);"></span>
   </div>
 </div>
 
@@ -60,7 +60,7 @@
   <h2 class="atom-heading">
     <span class="numeral">02</span>
     <span>Matching rounds</span>
-    <span id="results-meta" class="atom-small" style="margin-left: auto; color: var(--ink-mute); letter-spacing: 0.04em;"></span>
+    <span id="results-meta" class="atom-small" style="margin-left: auto; color: var(--fg-3);"></span>
   </h2>
   <table class="search-results-table">
     <thead>
@@ -318,7 +318,7 @@ async function copyCurl() {
     status.style.color = 'var(--accent)';
   } catch (err) {
     status.textContent = 'copy failed';
-    status.style.color = 'var(--negative)';
+    status.style.color = 'var(--neg)';
   }
   setTimeout(() => { status.textContent = ''; }, 1500);
 }

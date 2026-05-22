@@ -22,9 +22,9 @@
 
   function setStatus(text, kind) {
     statusEl.textContent = text || '';
-    statusEl.style.color = kind === 'error' ? 'var(--negative)'
+    statusEl.style.color = kind === 'error' ? 'var(--neg)'
       : kind === 'ok' ? 'var(--accent)'
-      : 'var(--ink-mute)';
+      : 'var(--fg-3)';
   }
 
   function clearErrors() {

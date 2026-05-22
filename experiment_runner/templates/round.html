@@ -147,7 +147,7 @@ document.getElementById('terminate-btn').addEventListener('click', async () => {
     let body = {};
     try { body = await r.json(); } catch (e) {}
     status.textContent = `${r.status} ${body.error || ''}`;
-    status.style.color = 'var(--ink-warm)';
+    status.style.color = 'var(--fg)';
   }
 });
 

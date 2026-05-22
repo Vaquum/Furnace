@@ -35,8 +35,10 @@ def test_tokenizer_tags_param_sweep_placeholders() -> None:
 
 def test_token_palette_is_vivid_and_manifest_specific() -> None:
     """style.css colours every YAML token from the palette — the
-    manifest-specific `tok-limen` (cyan) and `tok-param` (magenta)
-    included. The two stars are not muted grey."""
+    manifest-specific `tok-limen` (cyan, via the editor-local
+    --syntax-limen) and `tok-param` (magenta, via --danger) included. The
+    two stars are not muted grey — the manifest editor is the operator-
+    affirmed exception to the neutral-syntax rule."""
     css = (STATIC / "style.css").read_text(encoding="utf-8")
     for cls in (
         "tok-key", "tok-limen", "tok-param", "tok-string", "tok-plain",
@@ -45,10 +47,10 @@ def test_token_palette_is_vivid_and_manifest_specific() -> None:
         assert f".{cls} " in css, f"missing token class .{cls}"
     limen = css[css.index(".tok-limen") :]
     limen = limen[: limen.index("}")]
-    assert "var(--positive)" in limen or "#C4E8F4" in limen
+    assert "var(--syntax-limen)" in limen
     param = css[css.index(".tok-param") :]
     param = param[: param.index("}")]
-    assert "#DC65A6" in param
+    assert "var(--danger)" in param
 
 
 def test_token_palette_is_consolidated() -> None:
