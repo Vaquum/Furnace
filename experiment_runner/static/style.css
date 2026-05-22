@@ -402,8 +402,9 @@ textarea.atom-code-block:focus {
   border-left: var(--border-w-accent) solid var(--accent);
   border-radius: var(--radius);
   /* Fill the content area below the top control bar, leaving room for the
-     save row below. Falls back to a generous min-height. */
-  height: calc(100vh - 180px);
+     save row below: the --topbar-h chrome, the save row (--control-h), and
+     the surrounding pane padding / margins. Falls back to a min-height. */
+  height: calc(100vh - var(--topbar-h) - var(--control-h) - 4 * var(--s-5));
   min-height: 480px;
   overflow: hidden;
   position: relative;
