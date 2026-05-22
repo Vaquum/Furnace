@@ -229,25 +229,25 @@ def test_ensure_round_index_no_longer_normalizes_by_bars_total() -> None:
     assert "for m in _SEARCH_METRICS" in text
 
 
-def test_pyproject_version_is_0_17_0() -> None:
-    """Conventional Commits feat = minor bump. Version moves 0.16.0 → 0.17.0
-    for the global control bar + search-page slice. This assertion is the
-    repo's single pin on the current version — whichever slice bumps the
-    version updates it here (and the CHANGELOG check below)."""
+def test_pyproject_version_is_0_17_1() -> None:
+    """Conventional Commits fix = patch bump. Version moves 0.17.0 → 0.17.1
+    for the live round-progress fix. This assertion is the repo's single
+    pin on the current version — whichever slice bumps the version updates
+    it here (and the CHANGELOG check below)."""
     data = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    assert data["project"]["version"] == "0.17.0"
+    assert data["project"]["version"] == "0.17.1"
 
 
-def test_changelog_has_v0_17_0_entry() -> None:
+def test_changelog_has_v0_17_1_entry() -> None:
     """A CHANGELOG header for the new version must exist with at least
     one content line so the version-gate is satisfied."""
     text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     lines = text.splitlines()
-    header_idx = next((i for i, ln in enumerate(lines) if ln.strip() == "# v0.17.0"), -1)
-    assert header_idx != -1, "missing '# v0.17.0' header in CHANGELOG.md"
+    header_idx = next((i for i, ln in enumerate(lines) if ln.strip() == "# v0.17.1"), -1)
+    assert header_idx != -1, "missing '# v0.17.1' header in CHANGELOG.md"
     next_header_idx = next(
         (i for i in range(header_idx + 1, len(lines)) if lines[i].startswith("# v")),
         len(lines),
     )
     content = [ln for ln in lines[header_idx + 1 : next_header_idx] if ln.strip()]
-    assert content, "v0.17.0 CHANGELOG entry is empty"
+    assert content, "v0.17.1 CHANGELOG entry is empty"

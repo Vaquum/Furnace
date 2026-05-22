@@ -1,3 +1,7 @@
+# v0.17.1
+
+- Fix the round-status progress and stats sitting dead for the whole run. In v0.16.0 `limen run` wrote each round's artefacts into a timestamped `results/<name>_<datetime>/` directory that `run_round.py` relocated to `<round>/limen_output/` only after the run finished — so the round page's progress counter stayed at `0` and the stats table stayed empty until the round completed. The seed manifest now pins `uel.output_path` to `limen_output`, so `limen run` writes its artefacts straight into `<round>/limen_output/` — a fixed path, no timestamped subdirectory — and grows `results.csv` there row by row. The round-status poll reads that file as it grows, so the top-bar progress and the stats distribution climb live as permutations complete. `run_round.py` no longer relocates anything, and fails loud if a round's manifest does not direct output to `limen_output/`.
+
 # v0.17.0
 
 - The control bar is the same global control on every view. The `+` (create) and search icons join the persistent `JOBS` home link as fixed control-bar elements — they now live in `base.html` and render top-right on every page, not only the jobs landing page, so creating an experiment or round and searching are reachable without first navigating home. The create and search modals move into the shared layout to back them; `STARTER_MANIFEST` becomes a Jinja global and every page route passes its experiment list so the create modal renders anywhere.

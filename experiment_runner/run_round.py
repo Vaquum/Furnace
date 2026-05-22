@@ -103,29 +103,27 @@ def main() -> None:
         print(f"run_round: `limen run` exited {result.returncode}", file=sys.stderr)
         sys.exit(result.returncode)
 
-    # `limen run` writes its artefacts to ./results/<name>_<timestamp>/ —
-    # results.csv, metadata.json, round_data.jsonl, and a copy of the
-    # manifest. Relocate that one directory to the fixed name `limen_output`
-    # so the results / search / bundle layer has a predictable path. Only
-    # the directory is renamed; its contents are limen's, untouched.
-    results_parent = round_dir / "results"
-    subdirs = (
-        [d for d in sorted(results_parent.iterdir()) if d.is_dir()]
-        if results_parent.is_dir() else []
-    )
-    if not subdirs:
-        print("run_round: `limen run` produced no output directory", file=sys.stderr)
+    # The manifest's `uel.output_path: limen_output` directs `limen run` to
+    # write its artefacts — results.csv, metadata.json, round_data.jsonl,
+    # and a copy of the manifest — straight into <round_dir>/limen_output/.
+    # The location is fixed by the manifest, so nothing is relocated; and
+    # `limen run` grows results.csv there row by row as permutations
+    # complete, which is what lets the round-status poll read progress live.
+    limen_output = round_dir / "limen_output"
+    if not limen_output.is_dir():
+        print(
+            "run_round: `limen run` wrote no limen_output/ — the round's "
+            "manifest must set `uel.output_path: limen_output`",
+            file=sys.stderr,
+        )
         sys.exit(1)
-    os.replace(subdirs[-1], round_dir / "limen_output")
-    if not list(results_parent.iterdir()):
-        results_parent.rmdir()
 
     # period.json — kline_size + permutation count, taken from limen's
     # artefacts (see _collect_period_info). Contained so a metadata read
     # failure cannot flip a finished round to "failed"; the write is
     # atomic since round_page does exists() then json.loads().
     try:
-        period = _collect_period_info(round_dir / "limen_output")
+        period = _collect_period_info(limen_output)
         if period:
             tmp = round_dir / "period.json.tmp"
             tmp.write_text(json.dumps(period, indent=2))
