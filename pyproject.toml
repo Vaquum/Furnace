@@ -4,13 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "new-repository-template"
-version = "0.17.1"
+version = "0.17.2"
 description = "Gate-enforced Python repository template."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-  "dagster",
-  "dagster-cloud",
   "boto3",
   "pandas",
   "requests",
@@ -31,7 +29,6 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-  "dagster-webserver",
   "pytest",
   "pytest-asyncio",
   "ruff==0.15.11",

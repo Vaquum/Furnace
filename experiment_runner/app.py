@@ -13,6 +13,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import zipfile
 from datetime import datetime
@@ -422,6 +423,32 @@ def _experiment_analytics(rounds: list[dict]) -> dict[str, float | None]:
     return out
 
 
+# Worst-case wait before a terminated round's process group is force-killed.
+# limen's cooperative shutdown — finish the in-flight permutation, write a
+# resumable checkpoint, finalize its artefacts — completes well within this;
+# the SIGKILL backstop fires only for a limen that never exits, so a stopped
+# round can never hang forever on `terminating`.
+_TERMINATE_GRACE_SECONDS = 300
+
+
+def _terminate_backstop(pgid: int) -> None:
+    """Force-kill a terminated round's process group if it has not exited on
+    its own within the grace window. Run in a daemon thread by the terminate
+    endpoint: limen's graceful shutdown is the normal path and ends the group
+    well before the grace expires; this SIGKILL is the guarantee that a
+    stopped round always reaches a terminal state. The round's watcher thread
+    does the status finalize — once the group is empty it flips the round
+    `terminating -> terminated` — whichever way the group ended."""
+    deadline = time.monotonic() + _TERMINATE_GRACE_SECONDS
+    try:
+        while time.monotonic() < deadline:
+            os.killpg(pgid, 0)
+            time.sleep(1.0)
+        os.killpg(pgid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
 def create_app(root: Path) -> FastAPI:
     # Auth credentials must be in the environment before the app builds.
     # Refuse to start if any are missing — there is no "no auth" mode.
@@ -816,38 +843,24 @@ def create_app(root: Path) -> FastAPI:
         if not mark_terminating(round_dir):
             return JSONResponse({"error": "already terminal"}, status_code=409)
         pid = read_status(round_dir)["pid"]
+        # Stop the round by signalling run_round.py — the supervisor of the
+        # `limen run` child. run_round.py forwards SIGTERM to limen, which
+        # runs limen's own cooperative shutdown: finish the in-flight
+        # permutation, write a resumable checkpoint, finalize its artefacts,
+        # then exit. run_round.py reaps limen and exits; the round's watcher
+        # thread then flips it `terminating -> terminated`. This returns at
+        # once — limen's graceful shutdown can take a while and the round
+        # page polls for the terminal state — while a daemon backstop
+        # SIGKILLs the group if limen never exits, so the round can never
+        # hang forever on `terminating`.
         try:
-            os.killpg(pid, signal.SIGTERM)
+            os.kill(pid, signal.SIGTERM)
         except ProcessLookupError:
             pass
-        deadline = time.monotonic() + 5.0
-        while time.monotonic() < deadline:
-            try:
-                os.killpg(pid, 0)
-            except ProcessLookupError:
-                break
-            time.sleep(0.1)
-        else:
-            try:
-                os.killpg(pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            kdeadline = time.monotonic() + 1.0
-            while time.monotonic() < kdeadline:
-                try:
-                    os.killpg(pid, 0)
-                except ProcessLookupError:
-                    break
-                time.sleep(0.1)
-        try:
-            os.killpg(pid, 0)
-        except ProcessLookupError:
-            if finalize_status(round_dir, rc=None):
-                sm.unregister(round_dir)
-            return {"ok": True}
-        return JSONResponse(
-            {"error": "process group still alive after SIGKILL grace"}, status_code=504,
-        )
+        threading.Thread(
+            target=_terminate_backstop, args=(pid,), daemon=True,
+        ).start()
+        return {"ok": True}
 
     @app.get("/experiments/{experiment_id}/rounds/{round_id}/log", response_class=PlainTextResponse)
     def round_log(experiment_id: str, round_id: str, source: str = "stdout", since: int = 0):
