@@ -283,11 +283,21 @@ textarea.atom-code-block:focus {
   pointer-events: none;
   color: var(--ink-soft);
 }
-/* YAML token colours — the closed accent palette. Keys read bright, the
-   structural punctuation recedes, literals carry the accent / coral. */
-.tok-key   { color: var(--ink); }
-.tok-punc  { color: var(--ink-mute); }
-.tok-plain { color: var(--ink-soft); }
+/* Manifest YAML token palette — the editor is a control surface, so the
+   colouring is vivid and manifest-specific. The two stars are the
+   manifest's own vocabulary: `limen.*` callable paths (the wiring) in
+   cyan, `{param}` sweep placeholders in magenta. Generic YAML — keys,
+   strings, numbers, the true/false/null literals — carries the rest of
+   the palette; comments and structural punctuation recede to grey. */
+.tok-key     { color: var(--ink); }
+.tok-limen   { color: var(--positive); }
+.tok-param   { color: #DC65A6; }
+.tok-string  { color: #BCABD3; }
+.tok-plain   { color: var(--ink-soft); }
+.tok-number  { color: var(--negative); }
+.tok-keyword { color: var(--accent); }
+.tok-comment { color: var(--ink-mute); }
+.tok-punc    { color: var(--ink-mute); }
 
 /* Manifest page — the editor fills the screen below the top control bar,
    the save row sits under it. */
@@ -384,14 +394,6 @@ textarea.atom-code-block:focus {
   /* The pre is the visible text. Token colours below come from the closed
      accent set (Design-System.md §Channel→Face/colour). */
 }
-/* Global token colours from the closed palette — applied wherever the
-   shared PythonHighlight renders tokens (code editor, diff view, frozen-
-   code snapshot). Kept un-scoped so any future read-only Python panel
-   gets the same paint without bespoke selectors. */
-.tok-comment { color: var(--ink-mute); }
-.tok-string  { color: var(--ink-soft); }
-.tok-number  { color: var(--negative); }
-.tok-keyword { color: var(--accent); }
 
 .code-editor-active-line {
   position: absolute;
