@@ -3,9 +3,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
+from types import FrameType
 
 from .state import now_iso, read_status, status_flock, write_status_atomic
 
@@ -94,14 +97,46 @@ def main() -> None:
     # process's, so they land in the round's stdout.log / stderr.log;
     # TQDM_DISABLE keeps limen's progress bars out of the logs.
     limen = _limen_cli()
-    result = subprocess.run(
+    proc = subprocess.Popen(
         [str(limen), "run", str(round_dir / "manifest.yml")],
         cwd=str(round_dir),
         env={**os.environ, "TQDM_DISABLE": "1"},
     )
-    if result.returncode != 0:
-        print(f"run_round: `limen run` exited {result.returncode}", file=sys.stderr)
-        sys.exit(result.returncode)
+
+    # run_round.py supervises the `limen run` child for its whole life.
+    # The round's stop signal (SIGTERM / SIGINT, sent to this process by
+    # the terminate endpoint) is forwarded to limen, which catches it and
+    # runs its own cooperative shutdown — finish the in-flight permutation,
+    # write a resumable checkpoint, finalize its artefacts — then exits.
+    # run_round.py stays here until limen exits so it REAPS limen itself:
+    # were run_round.py to exit first (the default SIGTERM action), limen
+    # would be orphaned onto the container's PID 1, which does not reap,
+    # and the resulting zombie would hold the round's process group open
+    # and leave the round stuck forever on `terminating`.
+    #
+    # The handler only sets a flag; the poll loop does the forwarding from
+    # the main thread. Calling proc.send_signal() inside the handler can
+    # deadlock — the handler runs on the main thread, which may already
+    # hold Popen's internal waitpid lock inside a blocking wait().
+    stop_requested = False
+
+    def _on_stop(_signum: int, _frame: FrameType | None) -> None:
+        nonlocal stop_requested
+        stop_requested = True
+
+    signal.signal(signal.SIGTERM, _on_stop)
+    signal.signal(signal.SIGINT, _on_stop)
+
+    forwarded = False
+    while proc.poll() is None:
+        if stop_requested and not forwarded:
+            proc.send_signal(signal.SIGTERM)
+            forwarded = True
+        time.sleep(0.25)
+    returncode = proc.wait()
+    if returncode != 0:
+        print(f"run_round: `limen run` exited {returncode}", file=sys.stderr)
+        sys.exit(returncode)
 
     # The manifest's `uel.output_path: limen_output` directs `limen run` to
     # write its artefacts — results.csv, metadata.json, round_data.jsonl,
