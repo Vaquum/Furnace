@@ -15,6 +15,7 @@
   const nameInput = document.getElementById('m-new-name');
   const buffer = document.getElementById('m-manifest');
   const errorsBox = document.getElementById('m-errors');
+  const copyBtn = document.getElementById('m-copy');
 
   let target = '__new__';   // '__new__' or an existing experiment id
   let createdEid = null;    // set once a __new__ submit has created the experiment
@@ -196,4 +197,24 @@
     radio.addEventListener('change', () => { if (radio.checked) selectTarget(radio.value); });
   });
   submitBtn.addEventListener('click', submit);
+
+  // Copy the manifest editor's full text to the clipboard. Uses
+  // window.copyText so it works over plain HTTP too (execCommand
+  // fallback) — the button reports success / failure on its glyph.
+  if (copyBtn) {
+    let copyResetTimer = null;
+    copyBtn.addEventListener('click', async () => {
+      if (copyResetTimer) clearTimeout(copyResetTimer);
+      copyBtn.classList.remove('copied', 'copy-failed');
+      const ok = await window.copyText(buffer.value);
+      copyBtn.textContent = ok ? '✓' : '×';
+      copyBtn.classList.add(ok ? 'copied' : 'copy-failed');
+      copyBtn.title = ok ? 'Copied' : 'Copy failed';
+      copyResetTimer = setTimeout(() => {
+        copyBtn.textContent = '⧉';
+        copyBtn.classList.remove('copied', 'copy-failed');
+        copyBtn.title = 'Copy manifest';
+      }, 1200);
+    });
+  }
 })();
