@@ -1,6 +1,14 @@
 services:
   experiment_runner:
     image: ${EXPERIMENT_RUNNER_IMAGE:?EXPERIMENT_RUNNER_IMAGE must be set}
+    # Run an init process (tini) as PID 1 inside the container. A round runs
+    # as `limen run` under a run_round.py supervisor; should limen's own
+    # multiprocessing children (e.g. the resource_tracker) outlive their
+    # parent they are orphaned onto PID 1, and a bare `python` PID 1 never
+    # reaps them. An unreaped zombie keeps the round's process group alive,
+    # which leaves the round stuck forever on `terminating`. tini reaps
+    # orphans, so the group empties and the round finalizes.
+    init: true
     environment:
       APP_USERNAME: ${APP_USERNAME:?APP_USERNAME must be set}
       APP_PASSWORD: ${APP_PASSWORD:?APP_PASSWORD must be set}

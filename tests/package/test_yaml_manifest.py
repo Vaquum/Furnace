@@ -28,8 +28,10 @@ def test_run_round_invokes_limen_cli() -> None:
     pipeline that could drift from what the CLI does."""
     text = (PKG_DIR / "run_round.py").read_text(encoding="utf-8")
     # The `limen` console script is located and invoked as a subprocess.
+    # run_round.py supervises that child via Popen — it forwards the round's
+    # stop signal to limen and reaps it — rather than a blocking subprocess.run.
     assert "def _limen_cli(" in text
-    assert "subprocess.run(" in text
+    assert "subprocess.Popen(" in text
     assert '"run", str(round_dir / "manifest.yml")' in text
     # No in-process Limen pipeline — the CLI is the only path in.
     assert re.search(r"(?m)^\s*(?:from|import)\s+limen\b", text) is None
