@@ -1326,20 +1326,24 @@ table.results-table tbody tr.row-enter {
 
 .filter-grid {
   display: grid;
-  grid-template-columns: 16ch minmax(0, 1fr) 28ch;
+  grid-template-columns: 26ch minmax(0, 1fr) 18ch;
   column-gap: var(--gap-l);
   row-gap: var(--gap-l);
   align-items: center;
   margin-bottom: var(--gap-m);
 }
 .filter-row { display: contents; }
+/* Metric name — the short display-label form (the results / round-stats
+   labels), lower-case mono. nowrap + ellipsis so a long name can never
+   bleed across into the slider column. */
 .filter-label {
   font-family: var(--font-mono);
-  font-size: var(--t-micro);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-size: var(--t-code);
   color: var(--ink-mute);
-  font-weight: 500;
+  font-weight: 400;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .filter-readout {
   font-family: var(--font-mono);
@@ -1455,7 +1459,7 @@ table.results-table tbody tr.row-enter {
   position: absolute;
   top: 50%;
   height: 2px;
-  background: var(--accent);
+  background: var(--ink-soft);
   transform: translateY(-50%);
   pointer-events: none;
 }

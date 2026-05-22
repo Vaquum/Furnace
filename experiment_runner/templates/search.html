@@ -2,7 +2,6 @@
 {% block title %}Search · experiment_runner{% endblock %}
 {% block meta %}cross-round filter{% endblock %}
 {% block controls %}
-  <a class="topbar-link" href="/">← jobs</a>
   <span class="topbar-id">search permutations</span>
 {% endblock %}
 {% block content %}
@@ -29,7 +28,7 @@
 
     {% for metric in metrics %}
     <div class="filter-row">
-      <span class="filter-label">{{ metric }}</span>
+      <span class="filter-label">{{ metric | display_label }}</span>
       <div class="range-slider"
            data-metric="{{ metric }}"
            data-lo="{{ bounds[metric].min if bounds[metric].min is not none else 0 }}"

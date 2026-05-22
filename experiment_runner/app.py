@@ -436,8 +436,15 @@ def create_app(root: Path) -> FastAPI:
 
     templates = Jinja2Templates(directory=str(PKG_DIR / "templates"))
     templates.env.globals["asset_version"] = ASSET_VERSION
+    # STARTER_MANIFEST is a constant; making it a global lets the creation
+    # modal — now in base.html, reachable from every view — render without
+    # each route threading it through its own context.
+    templates.env.globals["starter_manifest"] = STARTER_MANIFEST
     templates.env.filters["kline_size_display"] = _format_kline_size
     templates.env.filters["metric_fmt"] = _format_metric
+    # Short metric label — the results-table / round-stats display form,
+    # so the search filters read the same as the rest of the UI.
+    templates.env.filters["display_label"] = _display_label
     for k, v in _BUILD_META.items():
         templates.env.globals[k] = v
     sm = StateMachine(root)
@@ -941,6 +948,7 @@ def create_app(root: Path) -> FastAPI:
                 "round_id": round_id,
                 "columns": [{"key": c, "label": _display_label(c),
                              "is_int": c in _RESULTS_INT_COLS} for c in cols],
+                "experiments": _all_experiments(root),
             },
         )
 
@@ -972,6 +980,7 @@ def create_app(root: Path) -> FastAPI:
                 "selected_experiments": scope if scope is not None else _list_experiment_names(root),
                 "metrics": list(_SEARCH_METRICS),
                 "bounds": bounds,
+                "experiments": _all_experiments(root),
             },
         )
 
@@ -1314,7 +1323,11 @@ def _ensure_round_index(round_dir: Path) -> Path | None:
         ])
         .collect()
     )
-    tmp = idx_path.with_suffix(".parquet.tmp")
+    # Unique temp name per build: /search/bounds.json and /search/rounds.json
+    # are fetched concurrently and both rebuild the same round's index — a
+    # shared temp filename makes their os.replace calls race (one moves the
+    # temp away, the other's os.replace then hits FileNotFoundError → 500).
+    tmp = idx_path.parent / f".index.{secrets.token_hex(8)}.parquet.tmp"
     out.write_parquet(tmp, compression="snappy")
     os.replace(tmp, idx_path)
     return idx_path
