@@ -35,12 +35,13 @@ def test_base_html_loads_ibm_plex_fonts() -> None:
 
 
 def test_style_css_carries_the_lab_dark_palette() -> None:
-    """The restyle is value-only — the :root token names are unchanged,
-    but the canvas, accent, and font tokens now hold the-lab's exact
-    dark-theme values so the two apps read as one tool."""
+    """style.css holds the-lab's exact dark-theme palette. Since the
+    design-token alignment slice the values live in :root as named palette
+    atoms — the near-black canvas and the yellow accent among them — and
+    the IBM Plex typefaces are the font atoms."""
     css = (STATIC / "style.css").read_text(encoding="utf-8")
-    assert "--paper: #121212;" in css      # the-lab --bg (near-black canvas)
-    assert "--accent: #DDD941;" in css     # the-lab yellow accent
+    assert "--c-near-black:" in css and "#121212" in css   # the-lab canvas
+    assert "--c-yellow:" in css and "#DDD941" in css        # the-lab accent
     assert '--font-sans: "IBM Plex Sans"' in css
 
 

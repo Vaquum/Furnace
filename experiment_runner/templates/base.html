@@ -7,7 +7,7 @@
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23121212'/%3E%3Crect x='4' y='14' width='24' height='3' fill='%23DDD941'/%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500&display=swap">
   <link rel="stylesheet" href="/static/style.css?v={{ asset_version }}">
   <script defer src="/static/poll.js?v={{ asset_version }}"></script>
 </head>
@@ -69,7 +69,7 @@
           </label>
           {% endfor %}
           {% if not experiments %}
-          <p class="atom-small" style="color: var(--ink-mute);">No experiments yet.</p>
+          <p class="atom-small" style="color: var(--fg-3);">No experiments yet.</p>
           {% endif %}
         </div>
 
