@@ -27,11 +27,15 @@
         out += '<span class="tok-comment">' + escapeHtml(line.slice(i)) + '</span>';
         break;
       }
-      // Quoted string.
+      // Quoted string. A `"{name}"` literal is a parameter-sweep
+      // placeholder — one of the manifest's own substitution points — so
+      // it gets its own colour, distinct from an ordinary string.
       if (c === '"' || c === "'") {
         let j = i + 1;
         while (j < n && line[j] !== c) j++;
-        out += '<span class="tok-string">' + escapeHtml(line.slice(i, Math.min(j + 1, n))) + '</span>';
+        const lit = line.slice(i, Math.min(j + 1, n));
+        const cls = /^\{[^{}]+\}$/.test(lit.slice(1, -1)) ? 'tok-param' : 'tok-string';
+        out += '<span class="' + cls + '">' + escapeHtml(lit) + '</span>';
         i = j + 1;
         continue;
       }
@@ -51,6 +55,10 @@
       const isKey = !colonSeen && /^\s*:/.test(line.slice(j));
       let cls;
       if (isKey) cls = 'tok-key';
+      // A `limen.*` dotted path is a callable the manifest wires in — an
+      // indicator, feature, target, reference architecture. It is the
+      // manifest's own vocabulary, so it carries its own colour.
+      else if (/^limen\./.test(word)) cls = 'tok-limen';
       else if (KEYWORDS.has(word.toLowerCase())) cls = 'tok-keyword';
       else if (/^-?\d[\d._]*$/.test(word)) cls = 'tok-number';
       else cls = 'tok-plain';
