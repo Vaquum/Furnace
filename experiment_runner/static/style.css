@@ -920,6 +920,25 @@ a.topbar-nav {
   white-space: nowrap;
 }
 a.topbar-nav:hover { color: var(--accent); }
+/* Build identity — the package version and the commit SHA the running
+   app is built from, far right on every view. The SHA links to that
+   commit on GitHub; no link underline — it rides in the bar chrome. */
+.topbar-build {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--gap-s);
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--t-code);
+}
+a.topbar-build {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+.topbar-build .build-ver { color: var(--ink-mute); }
+.topbar-build .build-sha { color: var(--ink-soft); }
+a.topbar-build:hover { color: inherit; border-bottom: 0; }
+a.topbar-build:hover .build-sha { color: var(--accent); }
 
 /* ---- Round viewer — status / progress bar + the star stats table ---- */
 
@@ -968,6 +987,13 @@ a.topbar-nav:hover { color: var(--accent); }
   color: var(--ink-soft);
 }
 #terminate-status:empty { display: none; }
+/* Tight icon cluster — the-lab's .icon-group rhythm: the bar's page-local
+   and global icons sit close together, not bar-spaced apart. */
+.bar-icons {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
 .bar-icon {
   display: inline-flex;
   align-items: center;
@@ -988,6 +1014,10 @@ a.topbar-nav:hover { color: var(--accent); }
 a.bar-icon { border-bottom: 0; padding-bottom: 0; }
 .bar-icon:hover { color: var(--ink); background: var(--paper-2); }
 .bar-icon svg { display: block; }
+/* The `hidden` attribute must win over .bar-icon's own display — an author
+   `display` rule otherwise overrides the UA [hidden] rule, which left a
+   terminated round's terminate button stuck visible in the icon group. */
+.bar-icon[hidden] { display: none; }
 .round-terminate:hover { color: var(--negative); }
 
 /* The round viewer's table is the star — replicates the-lab's main data
@@ -1508,17 +1538,24 @@ table.results-table tbody tr.row-enter {
   border: 1px solid var(--accent);
   border-radius: 50%;
   cursor: ew-resize;
-  margin-top: 0;
+  /* Centre the 16px thumb on the 24px runnable track (margin-top is
+     measured from the track top): (24 - 16) / 2 = 4. The thumb grows on
+     hover / active, so each state sets its own margin-top to keep the
+     thumb's centre pinned to the track line — without it the resting
+     thumb sat 4px high, only snapping centred at the 24px active size. */
+  margin-top: 4px;
   transition: width var(--motion), height var(--motion), background var(--motion);
 }
 .range-slider input[type="range"]::-webkit-slider-thumb:hover {
   width: 20px;
   height: 20px;
+  margin-top: 2px;
 }
 .range-slider input[type="range"]:active::-webkit-slider-thumb {
   width: 24px;
   height: 24px;
   background: var(--accent);
+  margin-top: 0;
 }
 .range-slider input[type="range"]:focus-visible::-webkit-slider-thumb {
   outline: 1px solid var(--accent);
@@ -1574,6 +1611,33 @@ p.empty {
   font-style: normal;
   margin: var(--gap-m) 0;
 }
+
+/* ---- Search page layout — filters and results side by side, each a
+   raised panel in the modal idiom (--paper-2 panels on the --paper
+   canvas, the same coloring as .modal / .modal-panel). ---- */
+.search-split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--gap-l);
+  align-items: start;
+}
+.search-panel {
+  margin: 0;
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  padding: var(--gap-l);
+}
+/* The filter grid's fixed columns are sized for a full-width page; in a
+   half-width panel the label / readout columns tighten so the slider
+   keeps room. The label ellipsizes, so a narrow label column is safe;
+   the readout column is fixed-width (not auto) so it does not jitter the
+   slider as the readout text changes width while dragging. */
+.search-panel .filter-grid {
+  grid-template-columns: minmax(0, 13ch) minmax(0, 1fr) 20ch;
+  column-gap: var(--gap-m);
+}
+.filter-readout { white-space: nowrap; }
 
 /* ---- Modal — the-lab QC-modal idiom: opaque takeover + raised panel ---- */
 
@@ -1668,7 +1732,7 @@ p.empty {
   min-width: 0;
   overflow: hidden;
 }
-.create-manifest .manifest-editor { flex: 1 1 auto; min-height: 0; }
+.create-manifest .manifest-editor { flex: 1 1 auto; min-height: 0; position: relative; }
 .create-group-label {
   font-family: var(--font-mono);
   font-size: var(--t-micro);

@@ -20,6 +20,35 @@
     </select>
   </div>
 {% endblock %}
+{# Page-local bar icons — results / bundle / terminate. They render in the
+   shared icon group next to the global search + create (+), so the round
+   page's actions append to the global controls rather than displacing
+   them. The meta block below is the text readout only. #}
+{% block bar_icons %}
+  <a class="bar-icon" href="/experiments/{{ experiment_id }}/rounds/{{ round_id }}/results"
+     title="View results" aria-label="View results">
+    <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4">
+      <rect x="2.25" y="3.25" width="11.5" height="9.5"></rect>
+      <line x1="2.25" y1="6.5" x2="13.75" y2="6.5"></line>
+      <line x1="2.25" y1="9.5" x2="13.75" y2="9.5"></line>
+    </svg>
+  </a>
+  <a class="bar-icon" href="/experiments/{{ experiment_id }}/rounds/{{ round_id }}/bundle"
+     download="{{ experiment_id }}__r{{ round_id }}.zip"
+     title="Download bundle" aria-label="Download bundle">
+    <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M8 2.5 V9.5 M5 7 L8 10 L11 7"></path>
+      <path d="M3.25 12.75 H12.75"></path>
+    </svg>
+  </a>
+  <span id="terminate-status" class="atom-small"></span>
+  <button class="bar-icon round-terminate" id="terminate-btn" type="button"
+          title="Terminate round" aria-label="Terminate round"{% if not active %} hidden{% endif %}>
+    <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
+      <rect x="4" y="4" width="8" height="8" rx="1"></rect>
+    </svg>
+  </button>
+{% endblock %}
 {% block meta %}
   <div class="round-meta">
     <span id="progress-line" class="progress-line">—</span>
@@ -29,29 +58,6 @@
     {% if ps or pe %}
     <span class="round-period">{{ ps[:10] if ps else "—" }} — {{ pe[:10] if pe else "—" }}</span>
     {% endif %}
-    <a class="bar-icon" href="/experiments/{{ experiment_id }}/rounds/{{ round_id }}/results"
-       title="View results" aria-label="View results">
-      <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4">
-        <rect x="2.25" y="3.25" width="11.5" height="9.5"></rect>
-        <line x1="2.25" y1="6.5" x2="13.75" y2="6.5"></line>
-        <line x1="2.25" y1="9.5" x2="13.75" y2="9.5"></line>
-      </svg>
-    </a>
-    <a class="bar-icon" href="/experiments/{{ experiment_id }}/rounds/{{ round_id }}/bundle"
-       download="{{ experiment_id }}__r{{ round_id }}.zip"
-       title="Download bundle" aria-label="Download bundle">
-      <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M8 2.5 V9.5 M5 7 L8 10 L11 7"></path>
-        <path d="M3.25 12.75 H12.75"></path>
-      </svg>
-    </a>
-    <span id="terminate-status" class="atom-small"></span>
-    <button class="bar-icon round-terminate" id="terminate-btn" type="button"
-            title="Terminate round" aria-label="Terminate round"{% if not active %} hidden{% endif %}>
-      <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
-        <rect x="4" y="4" width="8" height="8" rx="1"></rect>
-      </svg>
-    </button>
   </div>
 {% endblock %}
 {% block content %}
