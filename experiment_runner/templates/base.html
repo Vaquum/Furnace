@@ -3,12 +3,17 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  {# Paint the dark canvas on the first frame — before style.css loads —
+     so a page load never flashes white. color-scheme: dark also makes the
+     browser draw form controls and scrollbars dark from the start. #}
+  <style>:root{color-scheme:dark}html,body{background:#121212;margin:0}</style>
   <title>{% block title %}experiment_runner{% endblock %}</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23121212'/%3E%3Crect x='4' y='14' width='24' height='3' fill='%23DDD941'/%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
   <link rel="stylesheet" href="/static/style.css?v={{ asset_version }}">
+  <script defer src="/static/clipboard.js?v={{ asset_version }}"></script>
   <script defer src="/static/poll.js?v={{ asset_version }}"></script>
 </head>
 <body>
@@ -27,14 +32,34 @@
       {% block controls %}{% endblock %}
     </div>
     <div class="topbar-right">
+      {# Icon group, left → right: the view's own page-local icons, then the
+         always-present global search + create (+). The two global icons are
+         the rightmost of the cluster on every view — page icons prepend, so
+         search and + never move. #}
+      <div class="bar-icons">
+        {% block bar_icons %}{% endblock %}
+        <button type="button" id="open-search" class="bar-icon" title="Search permutations" aria-label="Search permutations">
+          <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+            <circle cx="7" cy="7" r="4.25"></circle>
+            <line x1="10.2" y1="10.2" x2="13.75" y2="13.75"></line>
+          </svg>
+        </button>
+        <button type="button" id="open-create" class="bar-icon" title="New experiment or round" aria-label="New experiment or round">+</button>
+      </div>
       {% block meta %}{% endblock %}
-      <button type="button" id="open-search" class="bar-icon" title="Search permutations" aria-label="Search permutations">
-        <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
-          <circle cx="7" cy="7" r="4.25"></circle>
-          <line x1="10.2" y1="10.2" x2="13.75" y2="13.75"></line>
-        </svg>
-      </button>
-      <button type="button" id="open-create" class="bar-icon" title="New experiment or round" aria-label="New experiment or round">+</button>
+      {# Build identity, rightmost on every view: the version and the commit
+         the running app is built from. The short SHA links to that exact
+         commit on GitHub. git_full_sha is empty only if the build resolved
+         no SHA — then just the version shows, with no broken link. #}
+      {% if git_full_sha %}
+      <a class="topbar-build" href="{{ repo_url }}/commit/{{ git_full_sha }}" target="_blank" rel="noopener"
+         title="Running build — v{{ package_version }}, commit {{ git_short_sha }}. Open this commit on GitHub.">
+        <span class="build-ver">v{{ package_version }}</span>
+        <span class="build-sha">{{ git_short_sha }}</span>
+      </a>
+      {% else %}
+      <span class="topbar-build"><span class="build-ver">v{{ package_version }}</span></span>
+      {% endif %}
     </div>
   </header>
   {% endif %}
@@ -75,6 +100,7 @@
 
         <div class="create-manifest">
           <div class="manifest-editor">
+            <button class="code-block-copy" id="m-copy" type="button" title="Copy manifest" aria-label="Copy manifest">⧉</button>
             <div class="manifest-gutter" aria-hidden="true"></div>
             <div class="manifest-buffer-wrap">
               <pre class="manifest-highlight" aria-hidden="true"></pre>

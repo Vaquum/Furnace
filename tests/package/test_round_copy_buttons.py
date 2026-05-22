@@ -42,11 +42,12 @@ def test_copy_button_css_rule_defined() -> None:
 
 def test_diff_view_wires_copy_buttons() -> None:
     """The round-page hydration script wires every .code-block-copy via a
-    single querySelectorAll, calls navigator.clipboard.writeText with the
-    target's textContent, and surfaces failure on the icon."""
+    single querySelectorAll and copies the target's textContent through the
+    shared window.copyText helper (clipboard.js), surfacing failure on the
+    icon. The raw navigator.clipboard call lives in the helper, not here."""
     js = (PKG_DIR / 'static' / 'diff_view.js').read_text(encoding='utf-8')
     assert "querySelectorAll('.code-block-copy')" in js
-    assert 'navigator.clipboard.writeText' in js
+    assert 'window.copyText' in js
     assert 'data-copy-target' in js or 'dataset.copyTarget' in js
     # Failure path flashes the icon; same pattern as the editor's copy button.
     assert "'copy-failed'" in js or '"copy-failed"' in js
