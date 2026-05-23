@@ -934,17 +934,28 @@ def create_app(root: Path) -> FastAPI:
         round_dir = _round_dir(experiment_id, round_id)
         base = f"{experiment_id}__r{round_id}"
         # The bundle is `limen run`'s output directory verbatim — results.csv,
-        # metadata.json, round_data.jsonl, and the manifest copy — so what the
-        # REST API hands out is exactly the artefacts the CLI produced, with
-        # nothing reconstructed by experiment_runner.
+        # metadata.json, round_data.jsonl, and the manifest copy — plus the
+        # round-level frozen manifest so the bundle is self-describing.
         limen_output = round_dir / "limen_output"
+        manifest_path = round_dir / "manifest.yml"
 
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            # Round-level frozen manifest — the submission the operator
+            # canonicalised — pinned at the bundle root.
+            if manifest_path.is_file():
+                z.writestr(f"{base}/manifest.yml", manifest_path.read_bytes())
+            # Every file under limen_output/, walked recursively — whether
+            # the artefacts sit at the top level (post-v0.17.1 layout) or
+            # in a timestamped subdirectory (legacy layout). The previous
+            # iterdir() was one-level and silently dropped the subdir
+            # case, producing a near-empty zip on legacy rounds. Relative
+            # paths inside limen_output/ are preserved in the bundle.
             if limen_output.is_dir():
-                for artefact in sorted(limen_output.iterdir()):
-                    if artefact.is_file():
-                        z.writestr(f"{base}/{artefact.name}", artefact.read_bytes())
+                for p in sorted(limen_output.rglob("*")):
+                    if p.is_file():
+                        rel = p.relative_to(limen_output)
+                        z.writestr(f"{base}/limen_output/{rel.as_posix()}", p.read_bytes())
 
         headers = {"Content-Disposition": f'attachment; filename="{base}.zip"'}
         return Response(buf.getvalue(), media_type="application/zip", headers=headers)
