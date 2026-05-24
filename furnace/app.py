@@ -27,6 +27,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from . import inference
 from .state import (
     ACTIVE_STATES,
     StateMachine,
@@ -312,6 +313,23 @@ def _allocate_round_id(rounds_dir: Path) -> str:
     existing = sorted(int(p.name) for p in rounds_dir.iterdir() if p.name.isdigit())
     nxt = (existing[-1] + 1) if existing else 1
     return f"{nxt:04d}"
+
+
+def _parse_cohort_permutation_ids(value: str) -> list[int]:
+    pieces = [s.strip() for s in value.split(",") if s.strip()]
+    if not pieces:
+        raise HTTPException(
+            422, "permutation_ids must list at least one integer id",
+        )
+    out: list[int] = []
+    for piece in pieces:
+        try:
+            out.append(int(piece))
+        except ValueError as exc:
+            raise HTTPException(
+                422, f"permutation_ids entry {piece!r} is not an integer",
+            ) from exc
+    return out
 
 
 def _safe_child_dir(base: Path, child: str, pattern: re.Pattern[str], missing: str) -> Path:
@@ -1006,6 +1024,63 @@ def create_app(root: Path) -> FastAPI:
     @app.get("/experiments/{experiment_id}/rounds/{round_id}/stats")
     def round_stats(experiment_id: str, round_id: str):
         return JSONResponse(_compute_round_stats(_round_dir(experiment_id, round_id)))
+
+    @app.get("/experiments/{experiment_id}/rounds/{round_id}/cohort/input")
+    def cohort_input(
+        experiment_id: str,
+        round_id: str,
+        permutation_ids: str,
+        at: str,
+    ):
+        # Search picks (experiment, round, permutation_ids); this endpoint
+        # turns those into the per-permutation x_test payload the cohort
+        # would feed its members at `at`. No training runs here, so the
+        # response is cheap relative to /predict.
+        limen_output = _cohort_limen_output(experiment_id, round_id)
+        pids = _parse_cohort_permutation_ids(permutation_ids)
+        try:
+            body = inference.input_payloads_at(limen_output, pids, at)
+        except (ValueError, FileNotFoundError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(500, str(exc)) from exc
+        return JSONResponse(body)
+
+    @app.get("/experiments/{experiment_id}/rounds/{round_id}/cohort/predict")
+    def cohort_predict(
+        experiment_id: str,
+        round_id: str,
+        permutation_ids: str,
+        at: str,
+    ):
+        # Trains the selected permutations into sensors via Limen's
+        # Trainer, builds a Cohort over them, and returns the aggregated
+        # prediction for the bar starting at `at` + kline_size. Sensors
+        # are reconstructed anew on every call — no cache.
+        limen_output = _cohort_limen_output(experiment_id, round_id)
+        pids = _parse_cohort_permutation_ids(permutation_ids)
+        try:
+            body = inference.predict_at(limen_output, pids, at)
+        except (ValueError, FileNotFoundError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(500, str(exc)) from exc
+        return JSONResponse(body)
+
+    def _cohort_limen_output(experiment_id: str, round_id: str) -> Path:
+        round_dir = _round_dir(experiment_id, round_id)
+        limen_output = round_dir / "limen_output"
+        if not limen_output.is_dir():
+            raise HTTPException(404, "round has no limen_output directory")
+        return limen_output
+
+    # FastAPI holds the references through @app.get; this tuple keeps
+    # pyright's reportUnusedFunction from flagging the two handlers as
+    # dead code, since the decorator return is not a use-site pyright
+    # tracks. Touching only the new handlers keeps the rest of the
+    # endpoint surface untouched.
+    _cohort_handlers = (cohort_input, cohort_predict)
+    del _cohort_handlers
 
     @app.get("/search", response_class=HTMLResponse)
     def search_page(request: Request, experiment_name: str | None = None):

@@ -1,3 +1,7 @@
+# v0.21.0
+
+- Add a cohort-inference surface. Two new endpoints sit under one completed round: `GET /experiments/{exp}/rounds/{rid}/cohort/input?permutation_ids=...&at=...` returns the per-permutation `x_test` row the cohort would feed its members at the chosen datetime, and `GET /experiments/{exp}/rounds/{rid}/cohort/predict?permutation_ids=...&at=...` trains those permutations into sensors via Limen's `Trainer`, builds a `Cohort` over them, and returns the aggregated prediction for the next bar. Both endpoints reject any manifest whose `data_source.params` does not pin BOTH `start_date_limit` and `end_date_limit` — open-ended manifests would let a request fetch an unbounded series. Sensors are reconstructed anew on every call; caching is intentionally out of scope. Furnace shells out to `scripts/cohort_inference.py` for the Trainer + Cohort work the same way it already shells out to `limen run` and `limen validate`, keeping the typed `furnace/` package free of `limen` / `polars` imports at module scope.
+
 # v0.20.0
 
 - Rename the runtime package and deployed app from `experiment_runner` to Furnace. The Python entrypoint is now `python -m furnace`, Docker copies and runs the `furnace` package, deploy configuration uses `FURNACE_*` variables and the `furnace` compose project/service, browser titles render Furnace, and the package metadata installs `furnace` while retaining a minimal `experiment_runner` import/CLI shim for existing callers.
