@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-PKG_DIR = REPO_ROOT / "experiment_runner"
+PKG_DIR = REPO_ROOT / "furnace"
 TEMPLATES = PKG_DIR / "templates"
 STATIC = PKG_DIR / "static"
 
@@ -24,7 +24,7 @@ def test_run_round_invokes_limen_cli() -> None:
     """run_round.py executes the round through the `limen` CLI — a real
     `limen run` subprocess on the round's manifest.yml — so the round's
     artefacts are exactly what the authoritative tool produced.
-    experiment_runner never runs Limen in-process: there is no second
+    furnace never runs Limen in-process: there is no second
     pipeline that could drift from what the CLI does."""
     text = (PKG_DIR / "run_round.py").read_text(encoding="utf-8")
     # The `limen` console script is located and invoked as a subprocess.
@@ -68,7 +68,7 @@ def test_app_defines_manifest_errors_helper() -> None:
     """_manifest_errors validates a manifest string by running the
     `limen validate` CLI — the same binary `limen run` enforces at
     round-start — and returns a flat error list parsed from its stdout.
-    experiment_runner never validates a manifest in-process."""
+    furnace never validates a manifest in-process."""
     text = (PKG_DIR / "app.py").read_text(encoding="utf-8")
     assert "def _manifest_errors(" in text
     idx = text.index("def _manifest_errors(")

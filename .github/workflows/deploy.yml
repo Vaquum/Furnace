@@ -1,4 +1,4 @@
-name: Build And Deploy experiment_runner
+name: Build And Deploy Furnace
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: deploy-experiment_runner
+  group: deploy-furnace
   cancel-in-progress: false
 
 permissions:
@@ -16,10 +16,10 @@ permissions:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
-  DEPLOY_DIR: /opt/experiment_runner
-  PROJECT_NAME: experiment_runner
-  EXPERIMENT_RUNNER_PORT: ${{ vars.EXPERIMENT_RUNNER_PORT || '8502' }}
-  EXPERIMENT_RUNNER_HOST_DATA_ROOT: ${{ vars.EXPERIMENT_RUNNER_HOST_DATA_ROOT || '/data/experiments' }}
+  DEPLOY_DIR: /opt/furnace
+  PROJECT_NAME: furnace
+  FURNACE_PORT: ${{ vars.FURNACE_PORT || vars.EXPERIMENT_RUNNER_PORT || '8502' }}
+  FURNACE_HOST_DATA_ROOT: ${{ vars.FURNACE_HOST_DATA_ROOT || vars.EXPERIMENT_RUNNER_HOST_DATA_ROOT || '/data/experiments' }}
 
 jobs:
   build:
@@ -73,7 +73,7 @@ jobs:
           set -euo pipefail
           # host-data-root must be exactly /data/experiments — typos like
           # /data/expriments and other paths like /data/notebooks are rejected.
-          root="${EXPERIMENT_RUNNER_HOST_DATA_ROOT}"
+          root="${FURNACE_HOST_DATA_ROOT}"
           case "$root" in
             /data/experiments) : ;;
             *)
@@ -85,10 +85,10 @@ jobs:
       - name: Validate host port
         run: |
           set -euo pipefail
-          port="${EXPERIMENT_RUNNER_PORT}"
+          port="${FURNACE_PORT}"
           case "$port" in
             ''|*[!0-9]*)
-              echo "::error::EXPERIMENT_RUNNER_PORT must be numeric — got: $port"
+              echo "::error::FURNACE_PORT must be numeric — got: $port"
               exit 1
               ;;
           esac
@@ -115,8 +115,8 @@ jobs:
         uses: appleboy/ssh-action@v1.2.0
         env:
           DEPLOY_IMAGE: ${{ steps.img.outputs.image }}
-          DEPLOY_PORT: ${{ env.EXPERIMENT_RUNNER_PORT }}
-          DEPLOY_DATA_ROOT: ${{ env.EXPERIMENT_RUNNER_HOST_DATA_ROOT }}
+          DEPLOY_PORT: ${{ env.FURNACE_PORT }}
+          DEPLOY_DATA_ROOT: ${{ env.FURNACE_HOST_DATA_ROOT }}
           DEPLOY_DIR: ${{ env.DEPLOY_DIR }}
           REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REGISTRY_USER: ${{ github.actor }}
@@ -149,28 +149,28 @@ jobs:
               esac
             done
             # Persist resolved values to .env so subsequent operator-run
-            # `docker compose -f /opt/experiment_runner/docker-compose.yml ps`
+            # `docker compose -f /opt/furnace/docker-compose.yml ps`
             # commands (run without these vars exported) interpolate cleanly.
             # Auth secrets are written to .env too so compose substitutes
             # them into the container environment; the file is mode 0600
             # via umask and lives under the operator-controlled
-            # /opt/experiment_runner directory.
+            # /opt/furnace directory.
             umask 077
             {
-              printf 'EXPERIMENT_RUNNER_IMAGE=%s\n' "$DEPLOY_IMAGE"
-              printf 'EXPERIMENT_RUNNER_PORT=%s\n' "$DEPLOY_PORT"
-              printf 'EXPERIMENT_RUNNER_HOST_DATA_ROOT=%s\n' "$DEPLOY_DATA_ROOT"
+              printf 'FURNACE_IMAGE=%s\n' "$DEPLOY_IMAGE"
+              printf 'FURNACE_PORT=%s\n' "$DEPLOY_PORT"
+              printf 'FURNACE_HOST_DATA_ROOT=%s\n' "$DEPLOY_DATA_ROOT"
               printf 'APP_USERNAME=%s\n' "$DEPLOY_APP_USERNAME"
               printf 'APP_PASSWORD=%s\n' "$DEPLOY_APP_PASSWORD"
               printf 'API_SECRET=%s\n' "$DEPLOY_API_SECRET"
             } > .env
-            export EXPERIMENT_RUNNER_IMAGE="$DEPLOY_IMAGE"
-            export EXPERIMENT_RUNNER_PORT="$DEPLOY_PORT"
-            export EXPERIMENT_RUNNER_HOST_DATA_ROOT="$DEPLOY_DATA_ROOT"
+            export FURNACE_IMAGE="$DEPLOY_IMAGE"
+            export FURNACE_PORT="$DEPLOY_PORT"
+            export FURNACE_HOST_DATA_ROOT="$DEPLOY_DATA_ROOT"
             export APP_USERNAME="$DEPLOY_APP_USERNAME"
             export APP_PASSWORD="$DEPLOY_APP_PASSWORD"
             export API_SECRET="$DEPLOY_API_SECRET"
             echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$REGISTRY_USER" --password-stdin
-            docker compose -p experiment_runner -f docker-compose.yml pull
-            docker compose -p experiment_runner -f docker-compose.yml up -d --wait
-            docker compose -p experiment_runner -f docker-compose.yml ps
+            docker compose -p furnace -f docker-compose.yml pull
+            docker compose -p furnace -f docker-compose.yml up -d --wait
+            docker compose -p furnace -f docker-compose.yml ps

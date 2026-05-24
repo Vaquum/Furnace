@@ -13,7 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-PKG_DIR = REPO_ROOT / 'experiment_runner'
+PKG_DIR = REPO_ROOT / 'furnace'
 
 
 def test_diff_view_module_exists() -> None:

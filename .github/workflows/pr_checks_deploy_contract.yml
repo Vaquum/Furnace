@@ -64,12 +64,12 @@ jobs:
       - name: Compose ports all bind container port 8502 with an explicit host port
         run: |
           set -euo pipefail
-          # Walk every entry under services.experiment_runner.ports and
+          # Walk every entry under services.furnace.ports and
           # require each one (a) targets container port 8502 and (b) has
           # an explicit host port. The container port must not drift —
           # otherwise the deploy.yml + Dockerfile + healthcheck contract
           # silently breaks. The explicit host port is what the operator
-          # controls via vars.EXPERIMENT_RUNNER_PORT; without it Docker
+          # controls via vars.FURNACE_PORT; without it Docker
           # would publish on a random ephemeral port and bypass that
           # control entirely. Host IP is intentionally unconstrained so
           # an operator can pick loopback for dev or all-interfaces in
@@ -77,10 +77,10 @@ jobs:
           python <<'PY'
           import re, sys, yaml
           d = yaml.safe_load(open('deploy/docker-compose.yml'))
-          svc = (d.get('services') or {}).get('experiment_runner') or {}
+          svc = (d.get('services') or {}).get('furnace') or {}
           ports = svc.get('ports')
           if not ports:
-              print('::error::experiment_runner service has no ports')
+              print('::error::furnace service has no ports')
               sys.exit(1)
           # Mask `${VAR:-DEFAULT}` blocks before splitting so their inner
           # `:` doesn't fool the segment count. After masking, an empty
@@ -117,17 +117,17 @@ jobs:
               else:
                   errors.append(f'  port {entry!r}: unrecognized form')
           if errors:
-              print('::error::experiment_runner ports must all target 8502 with an explicit host port:')
+              print('::error::furnace ports must all target 8502 with an explicit host port:')
               for line in errors:
                   print(line)
               sys.exit(1)
           PY
 
-      - name: Compose experiment_runner mounts satisfy /data/experiments rw bind contract
+      - name: Compose furnace mounts satisfy /data/experiments rw bind contract
         run: |
           set -euo pipefail
           # Structural YAML check on every entry under
-          # services.experiment_runner.volumes — not just the first.
+          # services.furnace.volumes — not just the first.
           # SPEC MVC line 44 asserts the live container reports its first
           # mount as /data/experiments:/data/experiments:true (docker
           # inspect ... index .Mounts 0). The first mount must satisfy
@@ -139,10 +139,10 @@ jobs:
           python <<'PY'
           import re, sys, yaml
           d = yaml.safe_load(open('deploy/docker-compose.yml'))
-          svc = (d.get('services') or {}).get('experiment_runner') or {}
+          svc = (d.get('services') or {}).get('furnace') or {}
           mounts = svc.get('volumes') or []
           if not mounts:
-              print('::error::experiment_runner service has no volumes')
+              print('::error::furnace service has no volumes')
               sys.exit(1)
 
           src_re = re.compile(r'\$\{[A-Z_][A-Z0-9_]*\s*:-\s*/data/experiments\s*\}')
@@ -203,7 +203,7 @@ jobs:
                   )
 
           if errors:
-              print('::error::experiment_runner volumes do not satisfy the bind-only /data/experiments contract:')
+              print('::error::furnace volumes do not satisfy the bind-only /data/experiments contract:')
               for line in errors:
                   print(line)
               sys.exit(1)
@@ -243,7 +243,7 @@ jobs:
       - name: CLI exposes --host
         run: |
           set -euo pipefail
-          test "$(grep -c '\-\-host' experiment_runner/__main__.py)" -ge 1
+          test "$(grep -c '\-\-host' furnace/__main__.py)" -ge 1
 
       - name: Dockerfile does not chown/chmod/rm /data
         run: |
@@ -288,7 +288,7 @@ jobs:
           failures = []
           for root, expected in cases:
               env = os.environ.copy()
-              env['EXPERIMENT_RUNNER_HOST_DATA_ROOT'] = root
+              env['FURNACE_HOST_DATA_ROOT'] = root
               r = subprocess.run(['bash', '-c', script], env=env, capture_output=True, text=True)
               status = 'pass' if (r.returncode == 0) == (expected == 0) else 'FAIL'
               if status == 'FAIL':

@@ -92,6 +92,10 @@ def find_python_files(root: Path, excludes: list[str]) -> list[Path]:
     return files
 
 
+def budget_package_root_name(budget: dict[str, object]) -> str:
+    return str(budget.get('typing_package_root') or budget.get('package_root') or '')
+
+
 def count_pattern(files: list[Path], pattern: str) -> int:
     """Count non-overlapping matches of `pattern` across `files`. Any
     read or decode error is a fatal setup failure (not a silent skip);
@@ -311,7 +315,7 @@ REQUIRED_PYRIGHT: Final[dict[str, object]] = {
 # The `include` list pyright must analyze. Shrinking this to an empty
 # list or a non-existent path drops filesAnalyzed to zero, trivially
 # passing the error-count ratchet. Gate asserts exact match.
-REQUIRED_PYRIGHT_INCLUDE: Final[list[str]] = ['new_repository_template']
+REQUIRED_PYRIGHT_INCLUDE: Final[list[str]] = ['furnace']
 
 FORBIDDEN_VALUES: Final[frozenset[object]] = frozenset(
     {'none', 'warning', 'information', 'info', 'false', False}
@@ -392,7 +396,7 @@ def gate_pyright_config(config: dict[str, object]) -> list[str]:
 
 def gate_escape_hatch_ratchet(budget: dict[str, object]) -> list[str]:
     failures: list[str] = []
-    package_root_name = str(budget.get('package_root', ''))
+    package_root_name = budget_package_root_name(budget)
     if not package_root_name:
         return ['typing_budget.json must set package_root']
     package_root = REPO_ROOT / package_root_name
@@ -441,7 +445,7 @@ def gate_escape_hatch_ratchet(budget: dict[str, object]) -> list[str]:
 # -------------------------------------------------------------------
 
 def gate_any_references_ast(budget: dict[str, object]) -> list[str]:
-    package_root_name = str(budget.get('package_root', ''))
+    package_root_name = budget_package_root_name(budget)
     if not package_root_name:
         return ['typing_budget.json must set package_root']
     package_root = REPO_ROOT / package_root_name
@@ -780,7 +784,7 @@ def gate_files_analyzed(
         ]
     analyzed = raw_analyzed
 
-    package_root_name = str(budget.get('package_root', ''))
+    package_root_name = budget_package_root_name(budget)
     if not package_root_name:
         return ['typing_budget.json must set package_root']
     package_root = REPO_ROOT / package_root_name
@@ -834,7 +838,7 @@ def update_budget(pyright_json_path: str | None) -> None:
         budget['any_references'] = {'total': 0}
         budget['schema_version'] = 2
 
-    package_root = REPO_ROOT / str(budget['package_root'])
+    package_root = REPO_ROOT / budget_package_root_name(budget)
     excludes = [str(x) for x in budget.get('excludes', [])]
     files = find_python_files(package_root, excludes)
 

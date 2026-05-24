@@ -1,4 +1,4 @@
-# DISABLED until experiment_runner becomes a public repository.
+# DISABLED until furnace becomes a public repository.
 #
 # GitHub Code Scanning (CodeQL) requires GitHub Advanced Security on private
 # repositories. Until either the repo is made public or GHAS is purchased,

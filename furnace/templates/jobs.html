@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}experiment_runner{% endblock %}
+{% block title %}Furnace{% endblock %}
 {% set total_rounds = experiments | sum(attribute='round_count') %}
 {% block meta %}<span>{{ experiments | length }} experiments · {{ total_rounds }} rounds</span>{% endblock %}
 {% block content %}

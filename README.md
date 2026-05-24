@@ -4,7 +4,7 @@
   <br>
 </h1>
 
-<h3 align="center">new_repository_template: Python package with repository law built in.</h3>
+<h3 align="center">Furnace: web runner for Limen experiments.</h3>
 
 <p align="center">
   <a href="#value-proposition">Value Proposition</a> •
@@ -21,7 +21,10 @@
 
 # Quick Start
 
-{QUICK_START}
+```bash
+APP_USERNAME=user APP_PASSWORD=pass API_SECRET=secret \
+  python -m furnace --root /data/experiments --host 0.0.0.0 --port 8502
+```
 
 # Contributing
 

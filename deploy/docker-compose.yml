@@ -1,6 +1,6 @@
 services:
-  experiment_runner:
-    image: ${EXPERIMENT_RUNNER_IMAGE:?EXPERIMENT_RUNNER_IMAGE must be set}
+  furnace:
+    image: ${FURNACE_IMAGE:?FURNACE_IMAGE must be set}
     # Run an init process (tini) as PID 1 inside the container. A round runs
     # as `limen run` under a run_round.py supervisor; should limen's own
     # multiprocessing children (e.g. the resource_tracker) outlive their
@@ -14,10 +14,10 @@ services:
       APP_PASSWORD: ${APP_PASSWORD:?APP_PASSWORD must be set}
       API_SECRET: ${API_SECRET:?API_SECRET must be set}
     ports:
-      - "${EXPERIMENT_RUNNER_PORT:-8502}:8502"
+      - "${FURNACE_PORT:-8502}:8502"
     volumes:
       - type: bind
-        source: ${EXPERIMENT_RUNNER_HOST_DATA_ROOT:-/data/experiments}
+        source: ${FURNACE_HOST_DATA_ROOT:-/data/experiments}
         target: /data/experiments
         read_only: false
     healthcheck:
