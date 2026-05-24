@@ -1,4 +1,4 @@
-"""Tests for slice S15: restyle experiment_runner to ~/dev/the-lab and
+"""Tests for slice S15: restyle furnace to ~/dev/the-lab and
 redesign the jobs and round pages. Source-level checks against the
 templates, static assets, and app.py — the codebase's established test
 idiom (app.py can't be imported without fastapi, so the tests assert on
@@ -19,7 +19,7 @@ from __future__ import annotations
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-PKG_DIR = REPO_ROOT / "experiment_runner"
+PKG_DIR = REPO_ROOT / "furnace"
 TEMPLATES = PKG_DIR / "templates"
 STATIC = PKG_DIR / "static"
 

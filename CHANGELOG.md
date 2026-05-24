@@ -1,3 +1,7 @@
+# v0.20.0
+
+- Rename the runtime package and deployed app from `experiment_runner` to Furnace. The Python entrypoint is now `python -m furnace`, Docker copies and runs the `furnace` package, deploy configuration uses `FURNACE_*` variables and the `furnace` compose project/service, browser titles render Furnace, and the package metadata installs `furnace` while retaining a minimal `experiment_runner` import/CLI shim for existing callers.
+
 # v0.19.1
 
 - Fix the round bundle endpoint returning a near-empty zip. The yaml-manifest refactor narrowed `GET /experiments/{eid}/rounds/{rid}/bundle` to a one-level `iterdir()` over `limen_output/`, which silently dropped every artefact when `limen run` wrote into a timestamped subdirectory (the legacy layout still present on rounds that pre-date v0.17.1) — leaving consumers with a ~22 KB zip containing nothing useful. The bundle now walks `limen_output/` recursively so artefacts under any subdirectory are included, and pins the round-level frozen `manifest.yml` at the bundle root so the archive is self-describing without depending on `limen run`'s own manifest copy. Locked in by `tests/package/test_round_bundle.py`.

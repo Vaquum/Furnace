@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-PKG_DIR = REPO_ROOT / 'experiment_runner'
+PKG_DIR = REPO_ROOT / 'furnace'
 
 
 def test_round_page_has_copy_buttons() -> None:

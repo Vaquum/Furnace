@@ -3,7 +3,7 @@
    yellow accent, IBM Plex Sans + Mono loaded from Google Fonts in
    base.html, dense 11-13px type, 2px corner radius, 80ms transitions.
    The token NAMES below are unchanged — templates and the static JS
-   reference them by name — only their values move, so experiment_runner
+   reference them by name — only their values move, so Furnace
    and the-lab read as one and the same tool.
 */
 

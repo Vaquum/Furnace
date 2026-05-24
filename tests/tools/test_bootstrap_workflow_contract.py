@@ -36,12 +36,15 @@ def test_initial_specialization_uses_bootstrap_modes() -> None:
     source_template = 'new' '-repository-template'
     for workflow in (
         RULESET_WORKFLOW,
-        TYPING_WORKFLOW,
         VERSION_WORKFLOW,
         FAIL_LOUD_WORKFLOW,
     ):
         text = workflow.read_text(encoding='utf-8')
         assert f'base == "{source_template}" and head == repo' in text
+
+    typing_text = TYPING_WORKFLOW.read_text(encoding='utf-8')
+    assert "bootstrap_names = {repo, 'furnace'}" in typing_text
+    assert f"base == '{source_template}' and head in bootstrap_names" in typing_text
 
 
 def test_lint_workflow_has_no_template_package_root() -> None:

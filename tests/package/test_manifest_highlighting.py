@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-STATIC = REPO_ROOT / "experiment_runner" / "static"
+STATIC = REPO_ROOT / "furnace" / "static"
 
 
 def test_tokenizer_tags_limen_callable_paths() -> None:

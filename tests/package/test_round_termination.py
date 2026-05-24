@@ -20,7 +20,7 @@ from __future__ import annotations
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-PKG_DIR = REPO_ROOT / "experiment_runner"
+PKG_DIR = REPO_ROOT / "furnace"
 
 
 def test_run_round_runs_limen_under_a_supervised_popen() -> None:
@@ -92,7 +92,7 @@ def test_terminate_backstop_force_kills_the_group_after_a_grace() -> None:
 def test_compose_runs_an_init_process_to_reap_orphans() -> None:
     """The deploy container runs an init (tini) as PID 1 via `init: true`,
     so limen's own multiprocessing children — if orphaned when limen
-    exits — are reaped. Without an init the experiment_runner server is
+    exits — are reaped. Without an init the furnace server is
     PID 1 and never reaps; an orphan zombie holds the round's process
     group open and the round hangs on `terminating`."""
     text = (REPO_ROOT / "deploy" / "docker-compose.yml").read_text(encoding="utf-8")

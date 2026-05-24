@@ -19,7 +19,7 @@ from __future__ import annotations
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-PKG_DIR = REPO_ROOT / "experiment_runner"
+PKG_DIR = REPO_ROOT / "furnace"
 TEMPLATES = PKG_DIR / "templates"
 STATIC = PKG_DIR / "static"
 

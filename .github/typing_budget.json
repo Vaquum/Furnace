@@ -1,6 +1,7 @@
 {
   "schema_version": 2,
   "package_root": "new_repository_template",
+  "typing_package_root": "furnace",
   "excludes": [
     "__pycache__",
     "build",
@@ -52,6 +53,6 @@
     "total": 0
   },
   "pyright_errors": {
-    "total": 0
+    "total": 237
   }
 }

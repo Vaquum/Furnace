@@ -3,12 +3,17 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "new-repository-template"
-version = "0.19.1"
-description = "Gate-enforced Python repository template."
+name = "furnace"
+version = "0.20.0"
+description = "Web runner for Limen experiments."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+  "fastapi",
+  "starlette>=1.0.0",
+  "uvicorn[standard]",
+  "jinja2",
+  "python-multipart",
   "boto3",
   "pandas",
   "requests",
@@ -20,12 +25,14 @@ dependencies = [
   "huggingface_hub",
   "lz4>=4.0.0",
   "clickhouse-cityhash>=1.0.2",
-  "freezegun>=1.5.0",
   "numpy>=2.0",
   "scipy>=1.13",
   "aiosqlite>=0.20",
   "orjson>=3.10",
 ]
+
+[project.scripts]
+furnace = "furnace.__main__:main"
 
 [project.optional-dependencies]
 dev = [
@@ -43,13 +50,21 @@ dev = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["new_repository_template*"]
+include = ["furnace*", "experiment_runner*"]
 exclude = ["tests*", "demo*"]
+
+[tool.setuptools.package-data]
+furnace = [
+  "requirements.txt",
+  "static/*.css",
+  "static/*.js",
+  "templates/*.html",
+]
 
 [tool.pyright]
 pythonVersion = "3.12"
 typeCheckingMode = "strict"
-include = ["new_repository_template"]
+include = ["furnace"]
 exclude = [
   "**/__pycache__",
   "build",
@@ -141,15 +156,15 @@ max-statements = 50
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["new_repository_template"]
+known-first-party = ["furnace", "experiment_runner"]
 
 [tool.vulture]
-paths = ["new_repository_template"]
+paths = ["furnace"]
 min_confidence = 80
 
 [tool.coverage.run]
 branch = true
-source = ["new_repository_template"]
+source = ["furnace"]
 
 [tool.coverage.report]
 show_missing = true
