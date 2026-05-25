@@ -29,6 +29,7 @@ dependencies = [
   "scipy>=1.13",
   "aiosqlite>=0.20",
   "orjson>=3.10",
+  "vaquum_limen @ git+https://github.com/Vaquum/Limen.git@main",
 ]
 
 [project.scripts]
