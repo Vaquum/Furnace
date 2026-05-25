@@ -234,6 +234,52 @@ def test_inference_endpoints_handle_value_and_runtime_errors() -> None:
             f"{fn} must raise HTTPException(500, ...) for Trainer failure"
 
 
+def test_parse_at_returns_tzaware_utc() -> None:
+    """Limen's ``HistoricalData`` normalises kline ``datetime`` columns to
+    ``Datetime('us', 'UTC')`` — tz-aware. Polars refuses to compare a
+    tz-aware column against a naive literal (``SchemaError``), so
+    ``_parse_at`` must return a tz-aware UTC datetime. A naive ISO
+    string is interpreted as UTC. This test locks the contract in
+    source — a future refactor that goes back to ``replace(tzinfo=None)``
+    fails here."""
+    text = _inference_text()
+    assert "tzinfo=timezone.utc" in text, \
+        "_parse_at must tag naive ISO inputs as UTC"
+    assert "replace(tzinfo=None)" not in text, \
+        "_parse_at must NOT strip tz to naive — Polars refuses naive vs UTC comparison"
+
+
+def test_predict_payload_includes_xval_yval() -> None:
+    """``Sensor.predict`` for calibrated logreg (``apply_calibrated_predict``)
+    and TabPFN (``data_dict_to_numpy(data, ['x_val', 'y_val', 'x_test'])``)
+    both index the data dict for ``x_val`` / ``y_val`` and raise
+    ``KeyError`` otherwise. The per-permutation payload must carry
+    those keys through from the manifest's ``prepare_data`` so the
+    cohort supports calibrated and TabPFN architectures, not only
+    bare logreg."""
+    text = _inference_text()
+    assert "_member_payload" in text, \
+        "predict_at must build payloads via _member_payload"
+    payload_start = text.index("def _member_payload(")
+    nxt = text.find("\ndef ", payload_start + 1)
+    body = text[payload_start : nxt if nxt != -1 else len(text)]
+    assert "x_val" in body and "x_test" in body, \
+        "_member_payload must thread x_val alongside x_test"
+    assert "y_val" in body, \
+        "_member_payload must thread y_val for calibration / TabPFN"
+
+
+def test_predict_response_reports_predicts_at() -> None:
+    """The endpoint contract is *predict for the NEXT bar*. The response
+    must surface that next datetime so the caller does not have to
+    re-derive it from ``at`` + ``kline_size_seconds``."""
+    text = _inference_text()
+    assert '"predicts_at"' in text, \
+        "predict_at response must include the predicts_at field"
+    assert "timedelta(seconds=" in text, \
+        "predict_at must compute predicts_at = at + kline_size_seconds"
+
+
 def test_cohort_endpoints_require_existing_limen_output() -> None:
     """A round has no inference surface until ``limen run`` has produced
     ``limen_output/``. Both endpoints check the directory exists and

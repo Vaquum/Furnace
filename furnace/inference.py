@@ -26,7 +26,7 @@ Sensors are reconstructed anew on every call — no in-process cache."""
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -166,14 +166,20 @@ def _load_round_params(
 
 
 def _parse_at(value: str) -> datetime:
-    """Parse the ``at`` query parameter as ISO 8601. Limen klines are
-    timezone-naive UTC; we coerce any tz-aware input to naive UTC so
-    the equality check against the test window's datetimes succeeds."""
+    """Parse the ``at`` query parameter as ISO 8601 and return a
+    tz-aware UTC datetime.
+
+    Limen's ``HistoricalData`` normalises every kline ``datetime``
+    column to ``Datetime('μs', 'UTC')`` — tz-aware, not naive. A
+    ``pl.lit(naive_datetime) == pl.col(aware_col)`` raises
+    ``SchemaError`` (Polars refuses tz-mismatched comparisons), so we
+    must hand Polars a tz-aware value. A naive ``at`` is interpreted
+    as UTC."""
     normalized = value.replace("Z", "+00:00") if value.endswith("Z") else value
     parsed = datetime.fromisoformat(normalized)
     if parsed.tzinfo is None:
-        return parsed
-    return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _as_dataframe(value: object, where: str) -> pl.DataFrame:
@@ -289,6 +295,25 @@ def input_payloads_at(
     }
 
 
+def _member_payload(prepared: dict[str, object], when: datetime) -> dict[str, object]:
+    """Build the per-member input dict the cohort feeds to one Sensor
+    at ``when``. ``x_test`` is the single row at ``when``; ``x_val`` /
+    ``y_val`` are passed through whole because Limen's calibrated
+    architectures (``apply_calibrated_predict``) and TabPFN
+    (``arrays = data_dict_to_numpy(data, ['x_val', 'y_val', 'x_test'])``)
+    both index the dict for those keys and would otherwise raise
+    KeyError. For uncalibrated logreg / random_binary the extra keys
+    are simply ignored."""
+    payload: dict[str, object] = {"x_test": _row_at(prepared, when)}
+    x_val = prepared.get("x_val")
+    if x_val is not None:
+        payload["x_val"] = x_val
+    y_val = prepared.get("y_val")
+    if y_val is not None:
+        payload["y_val"] = y_val
+    return payload
+
+
 def predict_at(
     limen_output_dir: Path,
     permutation_ids: list[int],
@@ -300,6 +325,7 @@ def predict_at(
     → Cohort.predict — is the Limen Cohort docs flow verbatim."""
     assert_bounded_window(limen_output_dir)
     when = _parse_at(at)
+    kline = _kline_size_seconds(limen_output_dir)
     round_params_by_pid = _load_round_params(limen_output_dir, permutation_ids)
     trainer = Trainer(limen_output_dir)
     sensors: list[Sensor] = trainer.train(permutation_ids)
@@ -307,8 +333,7 @@ def predict_at(
     payloads_by_pid: dict[int, dict[str, object]] = {}
     for pid in permutation_ids:
         prepared = _prepared_for_round(trainer, round_params_by_pid[pid])
-        row = _row_at(prepared, when)
-        payloads_by_pid[pid] = {"x_test": row}
+        payloads_by_pid[pid] = _member_payload(prepared, when)
 
     cohort = Cohort(
         experiment_log_path=str(limen_output_dir),
@@ -324,9 +349,11 @@ def predict_at(
     result_obj: object = predictor.predict({"_by_permutation_id": payloads_by_pid})
     result = _as_object_dict(result_obj, "Cohort.predict result")
 
+    predicts_at = when + timedelta(seconds=kline)
     body: dict[str, object] = {
         "at": when.isoformat(),
-        "kline_size_seconds": _kline_size_seconds(limen_output_dir),
+        "predicts_at": predicts_at.isoformat(),
+        "kline_size_seconds": kline,
         "permutation_ids": list(permutation_ids),
         "aggregation_mode": cohort.aggregation_mode,
         "prediction": _scalar_or_list(result.get("_preds")),
