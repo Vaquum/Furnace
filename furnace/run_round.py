@@ -82,6 +82,26 @@ def _collect_period_info(limen_output: Path) -> dict:
     return out
 
 
+def _link_limen_output(round_dir: Path) -> None:
+    """Bridge ``<round>/limen_output`` to Limen's ``results/limen_output``.
+
+    Limen writes its artefacts under ``<cwd>/results/<uel.output_path>`` — it
+    always prepends a fixed ``results/`` base — so with the round's
+    ``uel.output_path: limen_output`` the output lands in
+    ``<round_dir>/results/limen_output/``. Furnace's contract is
+    ``<round_dir>/limen_output/`` (the round-status poll, the round page,
+    inference, and the post-run check below all read it). A relative symlink
+    reconciles the two in one place, so every reader keeps using
+    ``limen_output/`` unchanged. It is created before ``limen run`` starts, so
+    the live poll resolves the moment limen writes its first row; it dangles
+    harmlessly until then.
+    """
+    link = round_dir / "limen_output"
+    if link.is_symlink() or link.exists():
+        return
+    link.symlink_to(Path("results") / "limen_output")
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="furnace.run_round")
     p.add_argument("--round-dir", required=True, type=Path)
@@ -89,6 +109,7 @@ def main() -> None:
     round_dir: Path = args.round_dir
 
     _self_promote_to_running(round_dir)
+    _link_limen_output(round_dir)
 
     # The whole experiment is run by the `limen` CLI. `limen run` parses,
     # validates, compiles, and executes the round's manifest.yml — the same
@@ -138,17 +159,17 @@ def main() -> None:
         print(f"run_round: `limen run` exited {returncode}", file=sys.stderr)
         sys.exit(returncode)
 
-    # The manifest's `uel.output_path: limen_output` directs `limen run` to
-    # write its artefacts — results.csv, metadata.json, round_data.jsonl,
-    # and a copy of the manifest — straight into <round_dir>/limen_output/.
-    # The location is fixed by the manifest, so nothing is relocated; and
-    # `limen run` grows results.csv there row by row as permutations
-    # complete, which is what lets the round-status poll read progress live.
+    # `limen run` writes its artefacts — results.csv, metadata.json,
+    # round_data.jsonl, and a copy of the manifest — into
+    # <round_dir>/results/limen_output/ (Limen prepends a fixed `results/`
+    # base to `uel.output_path: limen_output`). _link_limen_output above
+    # symlinked <round_dir>/limen_output onto it, so the round-status poll
+    # grows results.csv live and this is_dir() check resolves through the link.
     limen_output = round_dir / "limen_output"
     if not limen_output.is_dir():
         print(
-            "run_round: `limen run` wrote no limen_output/ — the round's "
-            "manifest must set `uel.output_path: limen_output`",
+            "run_round: `limen run` produced no results/limen_output/ — the "
+            "round's manifest must set `uel.output_path: limen_output`",
             file=sys.stderr,
         )
         sys.exit(1)
