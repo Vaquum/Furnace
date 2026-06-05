@@ -1,3 +1,7 @@
+# v0.22.0
+
+- Mount the tdw Arrow bar store read-only into the Furnace container so a round can run a Limen manifest whose `data_source` is `HistoricalData.get_arrow_file` reading `/opt/arrow/<series>/latest.arrow` — true zero-copy, ~65× faster data-load than `get_spot_klines` over the same window, with bit-identical results. `deploy/docker-compose.yml` adds a second mount (`type: volume`, `read_only: true`, target `/opt/arrow`) backed by a top-level `external: true` `arrow` volume (name `tdw-control-plane_arrow`, overridable via `ARROW_VOLUME_NAME`); the `/data/experiments` rw bind stays the first mount. `pr_checks_deploy_contract` is narrowed — not relaxed — to admit exactly one new shape beyond binds: a read-only mount of a top-level external volume (external volumes are not created or destroyed by this compose project, and read-only blocks any write-back); every other rule (mount[0] = `/data/experiments` rw bind, no `/data/notebooks`, writable named volumes forbidden, no destructive operations) is retained. `tests/package/test_arrow_mount.py` pins the mount shape under the required `pr_checks_tests` gate. No application code changes — manifests are already free-form and validated by `limen validate`; the inference surface, which needs `kline_size`, is unchanged and out of scope.
+
 # v0.21.1
 
 - Add a PRD issue form and keep the Furnace slice issue form loadable by removing its empty title field. The existing slice significance contract remains intact for the repository's slice gate.

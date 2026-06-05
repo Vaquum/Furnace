@@ -20,6 +20,15 @@ services:
         source: ${FURNACE_HOST_DATA_ROOT:-/data/experiments}
         target: /data/experiments
         read_only: false
+      # The tdw Arrow bar store, mounted read-only so rounds can run Limen
+      # manifests whose data_source is HistoricalData.get_arrow_file with a
+      # /opt/arrow/<series>/latest.arrow path. read_only:true means Furnace
+      # can never write back into the shared store; the volume is external
+      # (declared below), so this compose never creates or deletes it.
+      - type: volume
+        source: arrow
+        target: /opt/arrow
+        read_only: true
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8502/health', timeout=5)"]
       interval: 10s
@@ -27,3 +36,12 @@ services:
       retries: 12
       start_period: 20s
     restart: unless-stopped
+
+volumes:
+  # External: the Arrow bar store volume is created and written by the
+  # tdw-control-plane stack on the same host; Furnace only references it.
+  # external:true keeps this compose from creating or removing it, so a
+  # teardown of the Furnace project never touches the shared store.
+  arrow:
+    external: true
+    name: ${ARROW_VOLUME_NAME:-tdw-control-plane_arrow}

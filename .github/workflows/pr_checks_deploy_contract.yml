@@ -180,18 +180,34 @@ jobs:
               path = m.group(1) if m else source
               return path == '/data/notebooks' or path.startswith('/data/notebooks/')
 
-          # Every additional mount must also be a long-form bind and must
-          # not touch /data/notebooks via either target or source. Catches
-          # future PRs that keep mount[0] intact while adding a second
-          # named-volume or /data/notebooks mount alongside it.
+          # Read-only mounts of a top-level external volume are exempt from the
+          # bind-only rule: an external volume is not created or destroyed by
+          # this compose project, and read_only:true blocks any write-back.
+          top_volumes = d.get('volumes') or {}
+          external_volume_names = {
+              name for name, spec in top_volumes.items()
+              if isinstance(spec, dict) and spec.get('external') is True
+          }
+
+          # Every additional mount must be a long-form bind (or the read-only
+          # external volume carved out above) and must not touch /data/notebooks
+          # via either target or source. Catches future PRs that keep mount[0]
+          # intact while adding a writable named-volume or /data/notebooks mount.
           for i, m in enumerate(mounts[1:], start=1):
               if not isinstance(m, dict):
                   errors.append(f'  mount[{i}]: must be a long-form mapping with type: bind, got {m!r}')
                   continue
-              if m.get('type') != 'bind':
+              ro_external_volume = (
+                  m.get('type') == 'volume'
+                  and m.get('read_only') is True
+                  and m.get('source') in external_volume_names
+              )
+              if m.get('type') != 'bind' and not ro_external_volume:
                   errors.append(
-                      f'  mount[{i}]: type must be "bind" — got {m.get("type")!r} '
-                      '(named volumes are deletable by destructive volume ops and forbidden under the /data/* safety boundary)'
+                      f'  mount[{i}]: must be a bind, or a read-only mount of a '
+                      f'top-level external volume — got type={m.get("type")!r} '
+                      f'read_only={m.get("read_only")!r} source={m.get("source")!r} '
+                      '(writable named volumes remain forbidden under the /data/* safety boundary)'
                   )
               if m.get('target') == '/data/notebooks':
                   errors.append(f'  mount[{i}]: target /data/notebooks is forbidden by SPEC safety boundary (JupyterLab owns it)')
@@ -209,10 +225,26 @@ jobs:
               sys.exit(1)
           PY
 
-      - name: Compose has no top-level named volumes
+      - name: Compose top-level volumes are all external
         run: |
           set -euo pipefail
-          python -c "import yaml,sys; d=yaml.safe_load(open('deploy/docker-compose.yml')); sys.exit(0 if 'volumes' not in (d or {}) else 1)"
+          # A non-external named volume is created and removed together with
+          # this compose project, so it falls under the /data/* deletion-safety
+          # ban. An external volume is only referenced here — this project's
+          # teardown never creates or destroys it — so top-level volumes are
+          # permitted as long as EVERY one is declared external: true.
+          python <<'PY'
+          import sys, yaml
+          d = yaml.safe_load(open('deploy/docker-compose.yml')) or {}
+          vols = d.get('volumes') or {}
+          offenders = sorted(
+              name for name, spec in vols.items()
+              if not (isinstance(spec, dict) and spec.get('external') is True)
+          )
+          if offenders:
+              print(f'::error::top-level volumes must all be external: true; offending: {offenders}')
+              sys.exit(1)
+          PY
 
       - name: No volume-destructive ops in workflows or compose
         run: |
