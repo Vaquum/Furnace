@@ -1,3 +1,7 @@
+# v0.21.1
+
+- Add a PRD issue form and keep the Furnace slice issue form loadable by removing its empty title field. The existing slice significance contract remains intact for the repository's slice gate.
+
 # v0.21.0
 
 - Add a cohort-inference surface. Two new endpoints sit under one completed round: `GET /experiments/{exp}/rounds/{rid}/cohort/input?permutation_ids=...&at=...` returns the per-permutation `x_test` row the cohort would feed its members at the chosen datetime, and `GET /experiments/{exp}/rounds/{rid}/cohort/predict?permutation_ids=...&at=...` trains those permutations into sensors via Limen's `Trainer`, builds a `Cohort` over them, and returns the aggregated prediction for the next bar. The implementation follows the Limen `docs/Cohort.md` flow byte-for-byte — `Trainer(limen_output_dir).train(permutation_ids)` produces `limen.experiment.Sensor` instances, `limen.cohort.Cohort.set_members(sensors)` binds them, `cohort.predict({'_by_permutation_id': payloads})` aggregates — all in-process inside `furnace/inference.py`. Both endpoints reject any manifest whose `data_source.params` does not pin BOTH `start_date_limit` and `end_date_limit` so a request never fetches an unbounded series. Sensors are reconstructed anew on every call; caching is intentionally out of scope.
