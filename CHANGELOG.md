@@ -1,3 +1,7 @@
+# v0.26.0
+
+- Add a `/version` endpoint returning the build provenance (`sha`, `date`, `subject`) baked into the image at build time, so Smithy can render Furnace's actually-running version on its landing tile instead of a hand-set value. Bakes `BUILD_DATE` and `GIT_SUBJECT` into the image alongside the existing `GIT_SHA`.
+
 # v0.25.1
 
 - Fix `GET /cohort/input` returning HTTP 500. `klines_window_at`'s `last_bar` field carried the kline row's raw `datetime`, which the `JSONResponse` encoder cannot serialize (`TypeError: Object of type datetime is not JSON serializable`) — so the endpoint 500'd on every call. The datetime is now rendered ISO like the other datetimes in the payload; the remaining kline columns are already JSON-native float/int. Found in live testing on the server: `/cohort/predict` worked end-to-end but `/cohort/input` 500'd, because the package tests called `klines_window_at` directly and never serialized its result through `json.dumps`. A new test (`test_klines_window_is_json_serializable`) now round-trips the whole payload through `json.dumps`, closing that gap.
