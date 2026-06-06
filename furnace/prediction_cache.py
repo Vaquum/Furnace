@@ -39,13 +39,6 @@ _REASON_CODE: dict[str | None, int] = {
     "sensor-error": 4,
 }
 
-_SCHEMA: dict[str, pl.DataType] = {
-    "ts": pl.Int64(),
-    "prediction": pl.Int8(),
-    "probability": pl.Float64(),
-    "reason_code": pl.Int8(),
-}
-
 
 def cache_path(series: str, conduit_root: Path = CONDUIT_ROOT) -> Path:
     """The serving file for one canonical series: ``<root>/<series>/latest.arrow``."""
@@ -87,16 +80,45 @@ def _series_klines(series: str, arrow_root: Path) -> pl.DataFrame:
     return HistoricalData().get_arrow_file(str(arrow_root / series / "latest.arrow"))
 
 
+def _reason_code(reason: object) -> int:
+    """A ``BarPrediction.reason`` -> its envelope code, failing loud on an
+    unmapped reason rather than coercing it to ``sensor-error``: a reason a
+    future limen adds must be mapped deliberately, not silently mislabelled in a
+    surface a consumer reads as ground truth."""
+    if reason is not None and not isinstance(reason, str):
+        raise TypeError(f"BarPrediction.reason must be str | None, got {reason!r}")
+    return _REASON_CODE[reason]
+
+
 def _to_frame(bars: list[object]) -> pl.DataFrame:
-    """BarPredictions -> the fixed-width PRD frame, ts-sorted."""
-    rows: list[tuple[int | None, int | float | None, float | None, int]] = []
-    for bar in bars:
-        when = getattr(bar, "datetime")
-        ts = int(when.timestamp() * 1_000_000_000) if when is not None else None
-        reason = getattr(bar, "reason")
-        code = _REASON_CODE.get(reason if isinstance(reason, str) else None, 4)
-        rows.append((ts, getattr(bar, "prediction"), getattr(bar, "probability"), code))
-    return pl.DataFrame(rows, schema=_SCHEMA, orient="row").sort("ts").rechunk()
+    """BarPredictions -> the fixed-width PRD frame, ts-sorted. ``ts`` is the
+    exact UTC epoch-ns of the bar via polars ``dt.epoch`` (not the float
+    ``datetime.timestamp() * 1e9`` path, whose ~1e18 magnitude exceeds float64's
+    exact-integer range) so a consumer joins it to the canonical klines' ``ts``
+    exactly. Bars with no datetime (sensor-error / all-members-errored) have no
+    addressable ``ts`` and are dropped, keeping ``backfill`` and ``top_up``
+    consistent — without that, ``top_up``'s ``unique(subset=["ts"])`` would
+    collapse every null-ts row in the cache into one on the next append."""
+    frame = pl.DataFrame(
+        {
+            "datetime": [getattr(bar, "datetime") for bar in bars],
+            "prediction": [getattr(bar, "prediction") for bar in bars],
+            "probability": [getattr(bar, "probability") for bar in bars],
+            "reason_code": [_reason_code(getattr(bar, "reason")) for bar in bars],
+        }
+    )
+    return (
+        frame.with_columns(pl.col("datetime").dt.epoch("ns").cast(pl.Int64).alias("ts"))
+        .select(
+            pl.col("ts"),
+            pl.col("prediction").cast(pl.Int8),
+            pl.col("probability").cast(pl.Float64),
+            pl.col("reason_code").cast(pl.Int8),
+        )
+        .drop_nulls("ts")
+        .sort("ts")
+        .rechunk()
+    )
 
 
 def _write_atomic(frame: pl.DataFrame, path: Path) -> None:

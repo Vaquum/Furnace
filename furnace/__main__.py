@@ -25,6 +25,13 @@ def main():
 
     if args.scheduler:
         # Separate process from the web app: `python -m furnace --root … --scheduler`.
+        # Configure visible logging here (the entrypoint owns it) so the loop's
+        # per-tick timing and any per-cohort failure surface on stdout.
+        import logging
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        )
         from .cache_scheduler import run_forever
         run_forever(interval_seconds=args.scheduler_interval, root=root)
         return
