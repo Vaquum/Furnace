@@ -189,10 +189,20 @@ jobs:
               if isinstance(spec, dict) and spec.get('external') is True
           }
 
-          # Every additional mount must be a long-form bind (or the read-only
-          # external volume carved out above) and must not touch /data/notebooks
-          # via either target or source. Catches future PRs that keep mount[0]
-          # intact while adding a writable named-volume or /data/notebooks mount.
+          # Read-WRITE mount of a top-level external volume is admitted for
+          # exactly one target: /opt/conduit, the Conduit prediction store
+          # Furnace produces. It is safe because (a) the volume is external —
+          # this compose never creates or deletes it, so the /data/* deletion-
+          # safety ban does not apply — and (b) /opt/conduit is outside /data
+          # entirely. Every OTHER writable named volume remains forbidden. This
+          # is a narrowing (one new blessed target), not a relaxation.
+          RW_EXTERNAL_VOLUME_TARGETS = {'/opt/conduit'}
+
+          # Every additional mount must be a long-form bind, the read-only
+          # external volume carved out above, or the read-write /opt/conduit
+          # external volume — and must not touch /data/notebooks via either
+          # target or source. Catches future PRs that keep mount[0] intact while
+          # adding a writable named-volume or /data/notebooks mount.
           for i, m in enumerate(mounts[1:], start=1):
               if not isinstance(m, dict):
                   errors.append(f'  mount[{i}]: must be a long-form mapping with type: bind, got {m!r}')
@@ -202,12 +212,19 @@ jobs:
                   and m.get('read_only') is True
                   and m.get('source') in external_volume_names
               )
-              if m.get('type') != 'bind' and not ro_external_volume:
+              rw_conduit_external_volume = (
+                  m.get('type') == 'volume'
+                  and m.get('source') in external_volume_names
+                  and m.get('target') in RW_EXTERNAL_VOLUME_TARGETS
+              )
+              if m.get('type') != 'bind' and not ro_external_volume and not rw_conduit_external_volume:
                   errors.append(
-                      f'  mount[{i}]: must be a bind, or a read-only mount of a '
-                      f'top-level external volume — got type={m.get("type")!r} '
+                      f'  mount[{i}]: must be a bind, a read-only mount of a '
+                      f'top-level external volume, or a read-write mount of the '
+                      f'/opt/conduit external volume — got type={m.get("type")!r} '
                       f'read_only={m.get("read_only")!r} source={m.get("source")!r} '
-                      '(writable named volumes remain forbidden under the /data/* safety boundary)'
+                      f'target={m.get("target")!r} '
+                      '(every other writable named volume remains forbidden under the /data/* safety boundary)'
                   )
               if m.get('target') == '/data/notebooks':
                   errors.append(f'  mount[{i}]: target /data/notebooks is forbidden by SPEC safety boundary (JupyterLab owns it)')

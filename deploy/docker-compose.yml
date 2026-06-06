@@ -29,6 +29,16 @@ services:
         source: arrow
         target: /opt/arrow
         read_only: true
+      # The Conduit prediction store, mounted read-write: Furnace WRITES the
+      # per-series prediction Arrow files here (/opt/conduit/<series>/latest.arrow)
+      # and same-host consumers read them zero-copy. This is the producer-side
+      # mirror of the read-only /opt/arrow mount above. The volume is external
+      # (declared below) and owned by Furnace; external:true keeps this compose
+      # from creating or removing it, so a teardown never destroys served data.
+      - type: volume
+        source: conduit
+        target: /opt/conduit
+        read_only: false
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8502/health', timeout=5)"]
       interval: 10s
@@ -45,3 +55,12 @@ volumes:
   arrow:
     external: true
     name: ${ARROW_VOLUME_NAME:-tdw-control-plane_arrow}
+  # External: the Conduit prediction store volume, owned by Furnace (it is the
+  # producer). external:true keeps this compose from creating or removing it,
+  # so a teardown of the Furnace project never deletes served predictions; the
+  # volume is provisioned out-of-band (e.g. `docker volume create`) and read by
+  # same-host consumers. read-write on the furnace mount above so Furnace can
+  # write the per-series prediction Arrow files.
+  conduit:
+    external: true
+    name: ${CONDUIT_VOLUME_NAME:-furnace_conduit}
