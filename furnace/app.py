@@ -537,12 +537,14 @@ def create_app(root: Path) -> FastAPI:
 
     @app.middleware("http")
     async def _auth_middleware(request: Request, call_next):
-        # Exempt the healthcheck path, the static-file mount, and the
-        # already-public HEAD / smoke-check (per slice S02). Every other
-        # request must carry either HTTP Basic with APP_USERNAME/APP_PASSWORD
-        # or `Authorization: Bearer <API_SECRET>`.
+        # Exempt the healthcheck path, the public build-provenance endpoint
+        # (/version — non-sensitive sha/date/subject, read unauthenticated by
+        # Smithy's landing tile, genuinely mirroring /health), the static-file
+        # mount, and the already-public HEAD / smoke-check (per slice S02).
+        # Every other request must carry either HTTP Basic with
+        # APP_USERNAME/APP_PASSWORD or `Authorization: Bearer <API_SECRET>`.
         path = request.url.path
-        if path == "/health" or path == "/static" or path.startswith("/static/"):
+        if path in ("/health", "/version") or path == "/static" or path.startswith("/static/"):
             return await call_next(request)
         if request.method == "HEAD" and path == "/":
             return await call_next(request)
@@ -579,9 +581,7 @@ def create_app(root: Path) -> FastAPI:
     def health():
         return {"status": "ok"}
 
-    @app.get("/version")
-    def version():
-        return _version_info()
+    app.add_api_route("/version", _version_info, methods=["GET"])
 
     @app.on_event("shutdown")
     def _on_shutdown() -> None:

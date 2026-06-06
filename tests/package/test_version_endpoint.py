@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -27,6 +28,15 @@ def test_version_info_defaults_blank(monkeypatch: pytest.MonkeyPatch) -> None:
     assert app_mod._version_info() == {"sha": "", "date": "", "subject": ""}
 
 
-def test_version_route_delegates_to_version_info() -> None:
-    assert '@app.get("/version")' in APP_SOURCE
-    assert "return _version_info()" in APP_SOURCE
+def test_version_route_registers_version_info() -> None:
+    # Registered via add_api_route, not @app.get: that keeps _version_info a
+    # referenced argument, so strict pyright does not flag it as an unused
+    # decorated route closure (which would exceed the frozen typing budget).
+    assert re.search(r"add_api_route\(\s*['\"]/version['\"],\s*_version_info", APP_SOURCE)
+
+
+def test_version_is_auth_exempt_like_health() -> None:
+    """/version is public build provenance (read unauthenticated by Smithy's
+    landing tile), so it must sit in the auth middleware's exemption alongside
+    /health rather than 401."""
+    assert re.search(r"path in \([^)]*['\"]/version['\"]", APP_SOURCE)

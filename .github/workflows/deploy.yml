@@ -53,8 +53,8 @@ jobs:
         id: build_meta
         run: |
           set -euo pipefail
-          echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
-          echo "subject=$(git log -1 --pretty=%s)" >> "$GITHUB_OUTPUT"
+          printf 'build_date=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          printf 'subject=%s\n' "$(git log -1 --pretty=%s)" >> "$GITHUB_OUTPUT"
 
       - name: Build and push
         uses: docker/build-push-action@v6
