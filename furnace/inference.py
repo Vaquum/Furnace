@@ -203,7 +203,14 @@ def klines_window_at(limen_output_dir: Path, at: str) -> dict[str, object]:
     if klines.height:
         for raw in klines.tail(1).iter_rows(named=True):
             narrowed = cast(dict[object, object], raw)
-            last_bar = {str(k): v for k, v in narrowed.items()}
+            # The row's ``datetime`` value is a python datetime, which the
+            # JSONResponse encoder cannot serialize — render it ISO like every
+            # other datetime in this payload. The remaining kline columns are
+            # plain float/int, already JSON-native.
+            last_bar = {
+                str(k): (_iso(v) if isinstance(v, datetime) else v)
+                for k, v in narrowed.items()
+            }
     return {
         "at": when.isoformat(),
         "kline_size_seconds": kline_size,
