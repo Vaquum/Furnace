@@ -316,21 +316,28 @@ def _allocate_round_id(rounds_dir: Path) -> str:
     return f"{nxt:04d}"
 
 
-def _parse_cohort_permutation_ids(value: str) -> list[int]:
+def _parse_cohort_permutation_ids(value: str) -> list[str]:
+    # permutation_ids are Limen round_ids — SHA-256 hex strings, not ints.
     pieces = [s.strip() for s in value.split(",") if s.strip()]
     if not pieces:
         raise HTTPException(
-            422, "permutation_ids must list at least one integer id",
+            422, "permutation_ids must list at least one round_id",
         )
-    out: list[int] = []
     for piece in pieces:
-        try:
-            out.append(int(piece))
-        except ValueError as exc:
+        # Validate shape here so a malformed token (wrong length, non-hex, or
+        # path-traversal characters) gets a localized 422 instead of failing
+        # deeper in Limen — a round_id is a 64-char lowercase-hex SHA-256.
+        if not re.fullmatch(r"[0-9a-f]{64}", piece):
             raise HTTPException(
-                422, f"permutation_ids entry {piece!r} is not an integer",
-            ) from exc
-    return out
+                422,
+                f"permutation_ids entry {piece!r} is not a round_id "
+                "(64-char lowercase hex)",
+            )
+    if len(set(pieces)) != len(pieces):
+        # Mirror Limen's Cohort uniqueness contract (and cohorts.py): a
+        # duplicate would double-count a member and break cohort_id identity.
+        raise HTTPException(422, "permutation_ids must be unique")
+    return pieces
 
 
 def _safe_child_dir(base: Path, child: str, pattern: re.Pattern[str], missing: str) -> Path:
@@ -1030,17 +1037,16 @@ def create_app(root: Path) -> FastAPI:
     def cohort_input(
         experiment_id: str,
         round_id: str,
-        permutation_ids: str,
         at: str,
     ):
-        # Search picks (experiment, round, permutation_ids); this endpoint
-        # turns those into the per-permutation x_test payload the cohort
-        # would feed its members at `at`. No training runs here, so the
-        # response is cheap relative to /predict.
+        # The raw klines window the cohort would feed its members to predict
+        # the bar at `at` — window bounds, bar count, columns, and the final
+        # bar. Pulled from the manifest's data_source; the window is
+        # pid-independent (every member sees the same klines), so there is no
+        # training and no permutation_ids here.
         limen_output = _cohort_limen_output(experiment_id, round_id)
-        pids = _parse_cohort_permutation_ids(permutation_ids)
         try:
-            body = inference.input_payloads_at(limen_output, pids, at)
+            body = inference.klines_window_at(limen_output, at)
         except (ValueError, FileNotFoundError) as exc:
             raise HTTPException(400, str(exc)) from exc
         except RuntimeError as exc:
@@ -1054,10 +1060,10 @@ def create_app(root: Path) -> FastAPI:
         permutation_ids: str,
         at: str,
     ):
-        # Trains the selected permutations into sensors via Limen's
-        # Trainer, builds a Cohort over them, and returns the aggregated
-        # prediction for the bar starting at `at` + kline_size. Sensors
-        # are reconstructed anew on every call — no cache.
+        # Trains the selected permutations into sensors via Limen's Trainer,
+        # binds a Cohort over them, pulls a klines window ending at `at` from
+        # the manifest's data_source, and returns the cohort's BarPrediction
+        # for the bar at `at`. Sensors are rebuilt on every call — no cache.
         limen_output = _cohort_limen_output(experiment_id, round_id)
         pids = _parse_cohort_permutation_ids(permutation_ids)
         try:
