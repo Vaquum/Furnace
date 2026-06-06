@@ -83,6 +83,24 @@ def test_predict_against_installed_limen(
     assert out["permutation_ids"] == list(rids)
 
 
+def test_klines_window_is_json_serializable(
+    cohort_round: tuple[Path, list[str], str],
+    fake_spot_klines: None,
+) -> None:
+    """``klines_window_at`` is returned to the client via ``JSONResponse``, so
+    its whole payload — including ``last_bar``, a kline row that carries a
+    ``datetime`` — must round-trip through ``json.dumps``. A raw datetime there
+    500s the /cohort/input endpoint, which this pins."""
+    round_dir, _rids, at = cohort_round
+    window = inference.klines_window_at(round_dir, at)
+    json.dumps(window)  # must not raise (the response is JSON-encoded)
+    assert window["n_klines"] > 0
+    last_bar = window["last_bar"]
+    assert isinstance(last_bar, dict)
+    assert isinstance(last_bar["datetime"], str)
+    assert window["data_source"] == "limen.data.HistoricalData.get_spot_klines"
+
+
 def test_cohort_routes_registered() -> None:
     """app.py wires both cohort endpoints to the inference module."""
     app_text = (PKG_DIR / "app.py").read_text(encoding="utf-8")
