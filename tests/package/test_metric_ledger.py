@@ -250,4 +250,4 @@ def test_changelog_has_v0_26_1_entry() -> None:
         len(lines),
     )
     content = [ln for ln in lines[header_idx + 1 : next_header_idx] if ln.strip()]
-    assert content, "v0.25.0 CHANGELOG entry is empty"
+    assert content, "v0.26.1 CHANGELOG entry is empty"
