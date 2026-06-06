@@ -1,27 +1,32 @@
-"""Cohort inference endpoints — in-process, no subprocess hop.
+"""Cohort inference — drive Limen's raw_klines Sensor/Cohort API in-process.
 
-Follows Limen's documented Cohort flow byte-for-byte:
+Given a completed round, a set of permutation_ids (Limen round_ids), and a
+datetime ``at``, pull a bounded klines window ending at ``at`` from the
+manifest's declared data_source, rebuild the member Sensors via
+``Trainer.train``, bind them into a ``Cohort``, and return the cohort's
+``BarPrediction`` for the bar at ``at``.
+
+The flow is Limen's documented inference path verbatim (see Limen's own
+``test_e2e_loop_trainer_sensor``)::
 
     trainer = Trainer(limen_output_dir)
-    sensors = trainer.train(permutation_ids)           # list[limen.experiment.Sensor]
-    cohort = Cohort(experiment_log_path=..., permutation_ids=...)
+    sensors = trainer.train(permutation_ids)        # list[Sensor]
+    cohort  = Cohort(experiment_log_path=..., permutation_ids=...)
     cohort.set_members(sensors)
-    cohort.predict({'_by_permutation_id': payloads_by_pid})
+    bar = cohort.predict(raw_klines)                # raw_klines: pl.DataFrame -> BarPrediction
 
-Every callable on that path is a real Limen type. We do not construct
-``Sensor`` ourselves, we do not train outside ``Trainer``, we do not
-aggregate outside ``Cohort``. The two public functions —
-``input_payloads_at`` and ``predict_at`` — differ only in whether
-``Trainer.train(...)`` runs: ``/cohort/input`` reuses the manifest's
-data pipeline to fish out the row at the requested datetime,
-``/cohort/predict`` adds the train + cohort steps on top.
+``Sensor.predict`` / ``Cohort.predict`` take a raw klines DataFrame (the
+same schema the manifest's data_source produces) and return a
+``BarPrediction`` — the Sensor computes its own features through the
+compiled manifest, so we never touch ``prepare_data``. Sensors are rebuilt
+on every call; consumer-side persistence is ``furnace.sensor_registry``'s
+concern, wired into the serving path by a later slice.
 
-Inference requires both ``start_date_limit`` and ``end_date_limit``
-on the manifest's data source. An open-ended manifest would let a
-request fetch an unbounded series, so we reject it before any
-Trainer / Cohort work runs.
-
-Sensors are reconstructed anew on every call — no in-process cache."""
+Inference requires the manifest to declare ``split_dates`` — without the
+training window the Sensor cannot mask in-sample bars, so a request could
+silently be served a prediction on data the model trained on. A manifest
+without ``split_dates`` is rejected before any data pull or training.
+"""
 
 from __future__ import annotations
 
@@ -30,48 +35,50 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Protocol, cast
 
-import numpy as np
 import polars as pl
 from limen.cohort import Cohort
+from limen.data import HistoricalData
 from limen.experiment import Sensor, Trainer
 
+# Bars of history pulled before ``at`` so the manifest's indicators clear
+# their warm-up before the bar we score. Generous for the canonical feature
+# set (long-period indicators, fractional differencing); pulling more is
+# cheap because get_spot_klines resolves one dataset snapshot regardless of
+# the window and ``Cohort.predict`` scores only the last bar. If a manifest
+# needs a longer warm-up than this, the bar at ``at`` returns
+# ``reason='warm-up'`` honestly rather than a fabricated value.
+_WARMUP_BARS = 2048
 
-class _ManifestSurface(Protocol):
-    """The subset of Limen's MLManifest we touch. Declared here so we
-    cross the Limen-typing boundary once, via a typed cast, and the
-    rest of the module stays under strict pyright with no Unknowns."""
+# The one data_source this slice serves. Limen's own inference tests call
+# get_spot_klines directly; per the one-bar-type-per-cohort decision we
+# accept exactly this method and fail loud on anything else (dollar bars,
+# arrow files) rather than silently substituting a different source.
+_SUPPORTED_DATA_SOURCE = "limen.data.HistoricalData.get_spot_klines"
 
-    def prepare_data(
-        self,
-        raw_data: object,
-        round_params: dict[str, object],
-    ) -> dict[str, object]: ...
+_DATE_FMT = "%Y-%m-%d %H:%M:%S"
 
 
-class _CohortPredictor(Protocol):
-    """Cohort.predict is typed as ``dict | tuple`` with unparameterised
-    members; pyright reports the call site as partially unknown. We
-    cast to this Protocol where we call predict (without the tuple-
-    return variants) so the return is ``object`` and gets narrowed
-    through the same JSON gate the rest of the module uses."""
+class _SensorTrainer(Protocol):
+    """``Trainer.train`` is annotated ``list[int]`` in Limen, but round_ids
+    are SHA-256 strings and the method accepts them verbatim (verified
+    end-to-end). We cross that one loose-annotation boundary through a
+    structural Protocol so the call site is typed to the real string-id
+    contract instead of casting to ``Any``."""
 
-    def predict(self, X: dict[str, object]) -> object: ...
+    def train(self, permutation_ids: list[str]) -> list[Sensor]: ...
 
 
 def _loads_object(text: str) -> object:
-    """``json.loads`` is typed as ``Any``; the rest of the module accepts
-    only ``object`` and isinstance-narrows from there, so we wrap the
-    boundary in a single helper instead of sprinkling unchecked
-    ``Any``-flavoured locals through the call graph."""
+    """``json.loads`` is typed ``Any``; the module narrows from ``object``
+    via isinstance, so the boundary is wrapped once here."""
     decoded: object = json.loads(text)
     return decoded
 
 
 def _as_object_dict(value: object, where: str) -> dict[str, object]:
     """Narrow ``object`` to ``dict[str, object]`` or raise. ``isinstance(x,
-    dict)`` only narrows to a bare ``dict`` (Unknown-keyed under strict
-    pyright), so we cast the runtime-narrowed value to
-    ``dict[object, object]`` and walk it explicitly."""
+    dict)`` narrows only to a bare ``dict`` under strict pyright, so cast the
+    runtime-narrowed value to ``dict[object, object]`` and walk it."""
     if not isinstance(value, dict):
         raise ValueError(f"{where} is not a JSON object")
     narrowed = cast(dict[object, object], value)
@@ -89,43 +96,46 @@ def _read_metadata(limen_output_dir: Path) -> dict[str, object]:
     return _as_object_dict(_loads_object(text), str(metadata_path))
 
 
-def _data_source_params(metadata: dict[str, object]) -> dict[str, object]:
-    yaml_ref = metadata.get("yaml_reference")
-    yaml_ref_dict = _as_object_dict(yaml_ref, "metadata.yaml_reference")
-    sfd = _as_object_dict(yaml_ref_dict.get("sfd"), "metadata.yaml_reference.sfd")
-    manifest_cfg = _as_object_dict(
-        sfd.get("manifest"), "metadata.yaml_reference.sfd.manifest"
-    )
-    data_source = _as_object_dict(
-        manifest_cfg.get("data_source"),
+def _manifest_cfg(metadata: dict[str, object]) -> dict[str, object]:
+    yaml_ref = _as_object_dict(metadata.get("yaml_reference"), "metadata.yaml_reference")
+    sfd = _as_object_dict(yaml_ref.get("sfd"), "metadata.yaml_reference.sfd")
+    return _as_object_dict(sfd.get("manifest"), "metadata.yaml_reference.sfd.manifest")
+
+
+def _data_source(metadata: dict[str, object]) -> dict[str, object]:
+    return _as_object_dict(
+        _manifest_cfg(metadata).get("data_source"),
         "metadata.yaml_reference.sfd.manifest.data_source",
     )
-    return _as_object_dict(
-        data_source.get("params"),
+
+
+def assert_split_dates(limen_output_dir: Path) -> dict[str, object]:
+    """Reject a manifest without ``split_dates``. The training window is what
+    lets the Sensor mark a requested datetime as in-sample
+    (``reason='inside-training-window'``); without it inference could serve a
+    prediction on data the model trained on. Returns the split_dates block so
+    callers can surface it."""
+    manifest_cfg = _manifest_cfg(_read_metadata(limen_output_dir))
+    split_obj = manifest_cfg.get("split_dates")
+    if split_obj is None:
+        raise ValueError(
+            "inference requires the manifest to declare split_dates so the "
+            "requested datetime can be confirmed out-of-sample; this "
+            "manifest has none"
+        )
+    split = _as_object_dict(split_obj, "metadata.yaml_reference.sfd.manifest.split_dates")
+    if not split:
+        raise ValueError("manifest split_dates is empty; inference needs a training window")
+    return split
+
+
+def _kline_size_seconds(metadata: dict[str, object]) -> int:
+    params = _as_object_dict(
+        _data_source(metadata).get("params"),
         "metadata.yaml_reference.sfd.manifest.data_source.params",
     )
-
-
-def assert_bounded_window(limen_output_dir: Path) -> tuple[str, str]:
-    """Reject manifests without a closed
-    ``[start_date_limit, end_date_limit]`` window. The two literals
-    are returned so callers can surface them in responses or errors."""
-    params = _data_source_params(_read_metadata(limen_output_dir))
-    start = params.get("start_date_limit")
-    end = params.get("end_date_limit")
-    if not isinstance(start, str) or not isinstance(end, str):
-        raise ValueError(
-            "inference requires the manifest's data_source.params to set "
-            "BOTH start_date_limit and end_date_limit; "
-            f"got start_date_limit={start!r}, end_date_limit={end!r}"
-        )
-    return start, end
-
-
-def _kline_size_seconds(limen_output_dir: Path) -> int:
-    params = _data_source_params(_read_metadata(limen_output_dir))
     kline = params.get("kline_size")
-    if not isinstance(kline, int):
+    if not isinstance(kline, int) or isinstance(kline, bool):
         raise ValueError(
             "manifest data_source.params.kline_size must be an int (seconds); "
             f"got {kline!r}"
@@ -133,48 +143,19 @@ def _kline_size_seconds(limen_output_dir: Path) -> int:
     return kline
 
 
-def _load_round_params(
-    limen_output_dir: Path,
-    permutation_ids: list[int],
-) -> dict[int, dict[str, object]]:
-    path = limen_output_dir / "round_data.jsonl"
-    entries: dict[int, dict[str, object]] = {}
-    with path.open("r", encoding="utf-8") as f:
-        for raw_line in f:
-            line = raw_line.strip()
-            if not line:
-                continue
-            obj = _loads_object(line)
-            if not isinstance(obj, dict):
-                continue
-            row = cast(dict[object, object], obj)
-            rid = row.get("round_id")
-            rp = row.get("round_params")
-            if isinstance(rid, int) and isinstance(rp, dict):
-                params = cast(dict[object, object], rp)
-                rp_out: dict[str, object] = {}
-                for k, v in params.items():
-                    if isinstance(k, str):
-                        rp_out[k] = v
-                entries[rid] = rp_out
-    missing = [pid for pid in permutation_ids if pid not in entries]
-    if missing:
+def _data_source_method(metadata: dict[str, object]) -> str:
+    method = _data_source(metadata).get("method")
+    if not isinstance(method, str):
         raise ValueError(
-            f"permutation ids missing from round_data.jsonl: {missing}"
+            f"manifest data_source.method must be a string; got {method!r}"
         )
-    return {pid: entries[pid] for pid in permutation_ids}
+    return method
 
 
 def _parse_at(value: str) -> datetime:
-    """Parse the ``at`` query parameter as ISO 8601 and return a
-    tz-aware UTC datetime.
-
-    Limen's ``HistoricalData`` normalises every kline ``datetime``
-    column to ``Datetime('μs', 'UTC')`` — tz-aware, not naive. A
-    ``pl.lit(naive_datetime) == pl.col(aware_col)`` raises
-    ``SchemaError`` (Polars refuses tz-mismatched comparisons), so we
-    must hand Polars a tz-aware value. A naive ``at`` is interpreted
-    as UTC."""
+    """Parse the ``at`` query parameter as ISO 8601 and return a tz-aware UTC
+    datetime. Limen normalises kline ``datetime`` to ``Datetime('μs','UTC')``;
+    a naive ``at`` is interpreted as UTC."""
     normalized = value.replace("Z", "+00:00") if value.endswith("Z") else value
     parsed = datetime.fromisoformat(normalized)
     if parsed.tzinfo is None:
@@ -182,183 +163,100 @@ def _parse_at(value: str) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
-def _as_dataframe(value: object, where: str) -> pl.DataFrame:
-    if not isinstance(value, pl.DataFrame):
-        raise ValueError(f"{where} is not a polars DataFrame")
-    return value
+def _iso(value: object) -> str | None:
+    """Render a klines/BarPrediction datetime (a python ``datetime`` once
+    Polars hands it back, or ``None``) as an ISO string."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value)
 
 
-def _row_at(prepared: dict[str, object], at: datetime) -> pl.DataFrame:
-    """Limen's MLManifest.prepare_data ships ``price_data_for_backtest``
-    whose ``datetime`` series is row-aligned with ``x_test`` after every
-    transform and NaN drop. That series is the only reliable map from
-    row index back to datetime once the standalone ``datetime`` column
-    has been dropped from the splits."""
-    pdb_raw = prepared.get("price_data_for_backtest")
-    if pdb_raw is None:
+def _fetch_klines(
+    metadata: dict[str, object],
+    end: datetime,
+    kline_size: int,
+) -> pl.DataFrame:
+    """Pull the klines window ``[end - _WARMUP_BARS*kline_size, end]`` from the
+    manifest's declared data_source. Only get_spot_klines is served for now;
+    any other declared method fails loud."""
+    method = _data_source_method(metadata)
+    if method != _SUPPORTED_DATA_SOURCE:
         raise ValueError(
-            "manifest's prepare_data did not produce price_data_for_backtest; "
-            "inference at a chosen datetime requires the OHLCV columns so "
-            "the row-to-datetime mapping survives the transform drops"
+            f"inference currently serves {_SUPPORTED_DATA_SOURCE} only; this "
+            f"manifest's data_source.method is {method!r}"
         )
-    pdb = _as_dataframe(pdb_raw, "price_data_for_backtest")
-    if "datetime" not in pdb.columns:
-        raise ValueError("price_data_for_backtest has no 'datetime' column")
-    indexed = pdb.with_row_index("_row_idx").filter(
-        pl.col("datetime") == pl.lit(at)
+    start = end - timedelta(seconds=_WARMUP_BARS * kline_size)
+    return HistoricalData().get_spot_klines(
+        kline_size=kline_size,
+        start_date_limit=start.strftime(_DATE_FMT),
+        end_date_limit=end.strftime(_DATE_FMT),
     )
-    if indexed.height == 0:
-        first = pdb["datetime"].min()
-        last = pdb["datetime"].max()
-        raise ValueError(
-            f"datetime {at.isoformat()} is not in the test window of this "
-            f"round (test runs from {first} to {last}); pick a datetime "
-            "inside that window"
-        )
-    if indexed.height > 1:
-        raise ValueError(
-            f"datetime {at.isoformat()} matched {indexed.height} rows in "
-            "the test window — round data is not unique-keyed by datetime"
-        )
-    idx_value = indexed["_row_idx"][0]
-    if not isinstance(idx_value, int):
-        raise ValueError(f"row index returned non-int: {idx_value!r}")
-    x_test = _as_dataframe(prepared.get("x_test"), "x_test")
-    if idx_value >= x_test.height:
-        raise ValueError(
-            f"row index {idx_value} out of range for x_test "
-            f"(height={x_test.height})"
-        )
-    return x_test.slice(idx_value, 1)
 
 
-def _prepared_for_round(
-    trainer: Trainer,
-    round_params: dict[str, object],
-) -> dict[str, object]:
-    """Re-run the manifest's ``prepare_data`` for one permutation. Limen's
-    own Cohort docs example threads ``trainer._manifest`` /
-    ``trainer._data`` through ``prepare_data`` — we go through
-    ``getattr`` so the access is a string-keyed attribute lookup
-    (pyright's ``reportPrivateUsage`` is name-keyed, not type-keyed),
-    then narrow to ``_ManifestSurface`` so the call site itself is
-    typed."""
-    manifest: _ManifestSurface = cast(_ManifestSurface, getattr(trainer, "_manifest"))
-    raw_data: object = getattr(trainer, "_data")
-    prepared_obj: object = manifest.prepare_data(raw_data, round_params)
-    return _as_object_dict(prepared_obj, "manifest.prepare_data result")
-
-
-def _row_to_records(row: pl.DataFrame) -> list[dict[str, object]]:
-    records: list[dict[str, object]] = []
-    for raw in row.iter_rows(named=True):
-        narrowed = cast(dict[object, object], raw)
-        records.append({str(k): v for k, v in narrowed.items()})
-    return records
-
-
-def _scalar_or_list(payload: object) -> object:
-    """Cohort returns numpy arrays for ``_preds`` and ``_probs``. For a
-    one-row inference call we want a plain scalar; otherwise we hand
-    back a Python list. ``numpy.ndarray.item()`` is the dedicated
-    scalar extractor and raises for size != 1, so it doubles as the
-    branch guard."""
-    if not isinstance(payload, np.ndarray):
-        return payload
-    raw_list = cast(list[object], payload.tolist()) if payload.size > 1 else None
-    if raw_list is None:
-        return cast(object, payload.item())
-    return raw_list
-
-
-def input_payloads_at(
-    limen_output_dir: Path,
-    permutation_ids: list[int],
-    at: str,
-) -> dict[str, object]:
-    """Return the per-permutation ``x_test`` row the cohort would feed
-    its members at ``at``. No training runs — this only reuses the
-    manifest's ``prepare_data`` pipeline."""
-    assert_bounded_window(limen_output_dir)
+def klines_window_at(limen_output_dir: Path, at: str) -> dict[str, object]:
+    """Return the raw klines window the cohort would consume to predict the
+    bar at ``at`` — the window bounds, bar count, columns, and the final bar
+    (the one whose features drive the prediction). No training runs."""
+    split = assert_split_dates(limen_output_dir)
+    metadata = _read_metadata(limen_output_dir)
+    kline_size = _kline_size_seconds(metadata)
     when = _parse_at(at)
-    round_params_by_pid = _load_round_params(limen_output_dir, permutation_ids)
-    trainer = Trainer(limen_output_dir)
-    payloads: dict[str, list[dict[str, object]]] = {}
-    for pid in permutation_ids:
-        prepared = _prepared_for_round(trainer, round_params_by_pid[pid])
-        row = _row_at(prepared, when)
-        payloads[str(pid)] = _row_to_records(row)
+    klines = _fetch_klines(metadata, when, kline_size)
+    dt_col = klines.get_column("datetime") if "datetime" in klines.columns else None
+    last_bar: dict[str, object] = {}
+    if klines.height:
+        for raw in klines.tail(1).iter_rows(named=True):
+            narrowed = cast(dict[object, object], raw)
+            last_bar = {str(k): v for k, v in narrowed.items()}
     return {
         "at": when.isoformat(),
-        "permutation_ids": list(permutation_ids),
-        "payloads": payloads,
+        "kline_size_seconds": kline_size,
+        "data_source": _data_source_method(metadata),
+        "split_dates": split,
+        "n_klines": klines.height,
+        "window_start": _iso(dt_col.min()) if dt_col is not None else None,
+        "window_end": _iso(dt_col.max()) if dt_col is not None else None,
+        "columns": list(klines.columns),
+        "last_bar": last_bar,
     }
-
-
-def _member_payload(prepared: dict[str, object], when: datetime) -> dict[str, object]:
-    """Build the per-member input dict the cohort feeds to one Sensor
-    at ``when``. ``x_test`` is the single row at ``when``; ``x_val`` /
-    ``y_val`` are passed through whole because Limen's calibrated
-    architectures (``apply_calibrated_predict``) and TabPFN
-    (``arrays = data_dict_to_numpy(data, ['x_val', 'y_val', 'x_test'])``)
-    both index the dict for those keys and would otherwise raise
-    KeyError. For uncalibrated logreg / random_binary the extra keys
-    are simply ignored."""
-    payload: dict[str, object] = {"x_test": _row_at(prepared, when)}
-    x_val = prepared.get("x_val")
-    if x_val is not None:
-        payload["x_val"] = x_val
-    y_val = prepared.get("y_val")
-    if y_val is not None:
-        payload["y_val"] = y_val
-    return payload
 
 
 def predict_at(
     limen_output_dir: Path,
-    permutation_ids: list[int],
+    permutation_ids: list[str],
     at: str,
 ) -> dict[str, object]:
-    """Train sensors, build a cohort over the requested permutations,
-    feed it per-permutation payloads at ``at``, return the aggregated
-    prediction. The sequencing — Trainer → Sensors → Cohort.set_members
-    → Cohort.predict — is the Limen Cohort docs flow verbatim."""
-    assert_bounded_window(limen_output_dir)
+    """Train the member sensors, bind a cohort over the requested
+    permutations, and return the cohort's aggregated ``BarPrediction`` for the
+    bar at ``at``. Sequencing — Trainer → Sensors → Cohort.set_members →
+    Cohort.predict(klines) — is the Limen inference flow verbatim."""
+    assert_split_dates(limen_output_dir)
+    metadata = _read_metadata(limen_output_dir)
+    kline_size = _kline_size_seconds(metadata)
     when = _parse_at(at)
-    kline = _kline_size_seconds(limen_output_dir)
-    round_params_by_pid = _load_round_params(limen_output_dir, permutation_ids)
-    trainer = Trainer(limen_output_dir)
-    sensors: list[Sensor] = trainer.train(permutation_ids)
+    klines = _fetch_klines(metadata, when, kline_size)
 
-    payloads_by_pid: dict[int, dict[str, object]] = {}
-    for pid in permutation_ids:
-        prepared = _prepared_for_round(trainer, round_params_by_pid[pid])
-        payloads_by_pid[pid] = _member_payload(prepared, when)
+    trainer = cast(_SensorTrainer, Trainer(limen_output_dir))
+    sensors = trainer.train(permutation_ids)
 
     cohort = Cohort(
         experiment_log_path=str(limen_output_dir),
         permutation_ids=list(permutation_ids),
     )
     cohort.set_members(sensors)
-    # Cohort.predict's signature is ``dict | tuple`` with unparameterised
-    # members; we never request the tuple-return variants, so the
-    # runtime is always a dict. Cross the Limen-typing boundary through
-    # ``_CohortPredictor`` so the return is ``object`` and we narrow
-    # via the same gate JSON payloads go through.
-    predictor = cast(_CohortPredictor, cohort)
-    result_obj: object = predictor.predict({"_by_permutation_id": payloads_by_pid})
-    result = _as_object_dict(result_obj, "Cohort.predict result")
+    bar = cohort.predict(klines)
 
-    predicts_at = when + timedelta(seconds=kline)
-    body: dict[str, object] = {
+    return {
         "at": when.isoformat(),
-        "predicts_at": predicts_at.isoformat(),
-        "kline_size_seconds": kline,
+        "datetime": _iso(bar.datetime),
+        "prediction": bar.prediction,
+        "probability": bar.probability,
+        "reason": bar.reason,
         "permutation_ids": list(permutation_ids),
         "aggregation_mode": cohort.aggregation_mode,
-        "prediction": _scalar_or_list(result.get("_preds")),
+        "cohort_id": cohort.cohort_id,
+        "kline_size_seconds": kline_size,
+        "n_klines": klines.height,
     }
-    probs = result.get("_probs")
-    if probs is not None:
-        body["probability"] = _scalar_or_list(probs)
-    return body
