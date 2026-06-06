@@ -189,10 +189,30 @@ jobs:
               if isinstance(spec, dict) and spec.get('external') is True
           }
 
-          # Every additional mount must be a long-form bind (or the read-only
-          # external volume carved out above) and must not touch /data/notebooks
-          # via either target or source. Catches future PRs that keep mount[0]
-          # intact while adding a writable named-volume or /data/notebooks mount.
+          # Read-WRITE mount of the external `conduit` volume at /opt/conduit
+          # is the one blessed writable-volume shape: Furnace produces the
+          # Conduit prediction store there. It is admitted only when ALL of
+          # these hold, so it cannot be widened by accident and — critically —
+          # cannot be used to write into a DIFFERENT external volume (e.g. the
+          # read-only `arrow` bar store) by mounting it rw at /opt/conduit:
+          #   - source is the `conduit` compose volume specifically (not any
+          #     external volume that happens to land on /opt/conduit),
+          #   - `conduit` is declared external (never created/destroyed here, so
+          #     the /data/* deletion-safety ban does not apply),
+          #   - the target is /opt/conduit (outside /data entirely),
+          #   - it is read-write (read_only is not True) — matching the
+          #     producer role and the predicate's name.
+          # Every OTHER writable named volume — and the conduit volume at any
+          # other target, and any non-conduit external volume at /opt/conduit —
+          # remains forbidden. This is a narrowing, not a relaxation.
+          CONDUIT_VOLUME_SOURCE = 'conduit'
+          CONDUIT_TARGET = '/opt/conduit'
+
+          # Every additional mount must be a long-form bind, the read-only
+          # external volume carved out above, or the read-write conduit external
+          # volume — and must not touch /data/notebooks via either target or
+          # source. Catches future PRs that keep mount[0] intact while adding a
+          # writable named-volume or /data/notebooks mount.
           for i, m in enumerate(mounts[1:], start=1):
               if not isinstance(m, dict):
                   errors.append(f'  mount[{i}]: must be a long-form mapping with type: bind, got {m!r}')
@@ -202,12 +222,22 @@ jobs:
                   and m.get('read_only') is True
                   and m.get('source') in external_volume_names
               )
-              if m.get('type') != 'bind' and not ro_external_volume:
+              rw_conduit_external_volume = (
+                  m.get('type') == 'volume'
+                  and m.get('source') == CONDUIT_VOLUME_SOURCE
+                  and m.get('source') in external_volume_names
+                  and m.get('target') == CONDUIT_TARGET
+                  and m.get('read_only') is not True
+              )
+              if m.get('type') != 'bind' and not ro_external_volume and not rw_conduit_external_volume:
                   errors.append(
-                      f'  mount[{i}]: must be a bind, or a read-only mount of a '
-                      f'top-level external volume — got type={m.get("type")!r} '
+                      f'  mount[{i}]: must be a bind, a read-only mount of a '
+                      f'top-level external volume, or a read-write mount of the '
+                      f'external `conduit` volume at /opt/conduit — got type={m.get("type")!r} '
                       f'read_only={m.get("read_only")!r} source={m.get("source")!r} '
-                      '(writable named volumes remain forbidden under the /data/* safety boundary)'
+                      f'target={m.get("target")!r} '
+                      '(every other writable named volume — including a non-conduit external '
+                      'volume mounted at /opt/conduit — remains forbidden under the /data/* safety boundary)'
                   )
               if m.get('target') == '/data/notebooks':
                   errors.append(f'  mount[{i}]: target /data/notebooks is forbidden by SPEC safety boundary (JupyterLab owns it)')
