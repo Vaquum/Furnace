@@ -78,7 +78,12 @@ _YAML = dedent("""\
 
 
 def _parse_limit(value: str) -> datetime:
-    return datetime.fromisoformat(str(value).replace(" ", "T")).replace(tzinfo=UTC)
+    # Naive inputs are interpreted as UTC; tz-aware inputs are converted (not
+    # reinterpreted) so an offset datetime maps to the same instant.
+    parsed = datetime.fromisoformat(str(value).replace(" ", "T"))
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def _fake_spot_klines(

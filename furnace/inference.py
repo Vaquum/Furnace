@@ -33,12 +33,12 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Protocol, cast
+from typing import cast
 
 import polars as pl
 from limen.cohort import Cohort
 from limen.data import HistoricalData
-from limen.experiment import Sensor, Trainer
+from limen.experiment import Trainer
 
 # Bars of history pulled before ``at`` so the manifest's indicators clear
 # their warm-up before the bar we score. Generous for the canonical feature
@@ -56,16 +56,6 @@ _WARMUP_BARS = 2048
 _SUPPORTED_DATA_SOURCE = "limen.data.HistoricalData.get_spot_klines"
 
 _DATE_FMT = "%Y-%m-%d %H:%M:%S"
-
-
-class _SensorTrainer(Protocol):
-    """``Trainer.train`` is annotated ``list[int]`` in Limen, but round_ids
-    are SHA-256 strings and the method accepts them verbatim (verified
-    end-to-end). We cross that one loose-annotation boundary through a
-    structural Protocol so the call site is typed to the real string-id
-    contract instead of casting to ``Any``."""
-
-    def train(self, permutation_ids: list[str]) -> list[Sensor]: ...
 
 
 def _loads_object(text: str) -> object:
@@ -238,8 +228,7 @@ def predict_at(
     when = _parse_at(at)
     klines = _fetch_klines(metadata, when, kline_size)
 
-    trainer = cast(_SensorTrainer, Trainer(limen_output_dir))
-    sensors = trainer.train(permutation_ids)
+    sensors = Trainer(limen_output_dir).train(permutation_ids)
 
     cohort = Cohort(
         experiment_log_path=str(limen_output_dir),

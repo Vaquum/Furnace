@@ -73,3 +73,23 @@ def test_version_mismatch_triggers_regenerate(
     sidecar.write_text(json.dumps(data))
 
     assert sensor_registry.load_sensor(tmp_path, pid) is None
+
+
+def test_sidecar_permutation_id_mismatch_returns_none(
+    cohort_round: tuple[Path, list[str], str],
+    fake_spot_klines: None,
+    tmp_path: Path,
+) -> None:
+    """A sidecar whose recorded permutation_id does not match the requested one
+    (stale/corrupted store) makes ``load_sensor`` return ``None`` rather than
+    unpickling the paired — possibly wrong — sensor."""
+    round_dir, rids, _at = cohort_round
+    sensor = Trainer(round_dir).train(rids)[0]
+    pid = sensor_registry.persist_sensor(sensor, tmp_path)
+
+    sidecar = tmp_path / f"{pid}.json"
+    data = json.loads(sidecar.read_text())
+    data["permutation_id"] = "some-other-round-id"
+    sidecar.write_text(json.dumps(data))
+
+    assert sensor_registry.load_sensor(tmp_path, pid) is None

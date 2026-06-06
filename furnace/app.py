@@ -323,6 +323,10 @@ def _parse_cohort_permutation_ids(value: str) -> list[str]:
         raise HTTPException(
             422, "permutation_ids must list at least one round_id",
         )
+    if len(set(pieces)) != len(pieces):
+        # Mirror Limen's Cohort uniqueness contract (and cohorts.py): a
+        # duplicate would double-count a member and break cohort_id identity.
+        raise HTTPException(422, "permutation_ids must be unique")
     return pieces
 
 

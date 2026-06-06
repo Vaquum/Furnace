@@ -94,6 +94,10 @@ def load_sensor(directory: Path, permutation_id: str) -> Sensor | None:
     if not isinstance(recorded_obj, dict):
         return None
     recorded = cast(dict[object, object], recorded_obj)
+    if recorded.get("permutation_id") != permutation_id:
+        # The sidecar records a different (or corrupted) permutation_id than
+        # the one requested — don't trust the paired pickle; regenerate.
+        return None
     for key, value in env_versions().items():
         if recorded.get(key) != value:
             return None
