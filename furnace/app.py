@@ -544,7 +544,7 @@ def create_app(root: Path) -> FastAPI:
         # Every other request must carry either HTTP Basic with
         # APP_USERNAME/APP_PASSWORD or `Authorization: Bearer <API_SECRET>`.
         path = request.url.path
-        if path in ("/health", "/version") or path == "/static" or path.startswith("/static/"):
+        if path == "/health" or path == "/static" or path.startswith("/static/"):
             return await call_next(request)
         if request.method == "HEAD" and path == "/":
             return await call_next(request)

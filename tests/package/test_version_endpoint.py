@@ -35,8 +35,10 @@ def test_version_route_registers_version_info() -> None:
     assert re.search(r"add_api_route\(\s*['\"]/version['\"],\s*_version_info", APP_SOURCE)
 
 
-def test_version_is_auth_exempt_like_health() -> None:
-    """/version is public build provenance (read unauthenticated by Smithy's
-    landing tile), so it must sit in the auth middleware's exemption alongside
-    /health rather than 401."""
-    assert re.search(r"path in \([^)]*['\"]/version['\"]", APP_SOURCE)
+def test_version_requires_auth_like_crucible_and_mill() -> None:
+    """/version carries private-repo build provenance, so it stays behind the
+    API token like every route except /health and /static — Smithy reads it with
+    the token, matching Crucible and Mill. It must NOT be in the auth exemption."""
+    exemption = re.search(r'if path == "/health".*?:', APP_SOURCE)
+    assert exemption is not None
+    assert "/version" not in exemption.group(0)

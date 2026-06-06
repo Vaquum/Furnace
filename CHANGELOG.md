@@ -1,3 +1,7 @@
+# v0.26.1
+
+- Keep `GET /version` behind the API token (remove it from the auth middleware's exemption), matching Crucible and Mill — Smithy reads it with the bearer, so private-repo build provenance is not published on the open port.
+
 # v0.26.0
 
 - Add a `/version` endpoint returning the build provenance (`sha`, `date`, `subject`) baked into the image at build time, so Smithy can render Furnace's actually-running version on its landing tile instead of a hand-set value. Bakes `BUILD_DATE` and `GIT_SUBJECT` into the image alongside the existing `GIT_SHA`.
