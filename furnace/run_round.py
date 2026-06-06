@@ -121,7 +121,21 @@ def main() -> None:
     proc = subprocess.Popen(
         [str(limen), "run", str(round_dir / "manifest.yml")],
         cwd=str(round_dir),
-        env={**os.environ, "TQDM_DISABLE": "1"},
+        # Pin BLAS / OpenMP to one thread per process. Limen's search and
+        # calibration already parallelize across permutations and CV folds;
+        # left uncapped, every concurrent sklearn/numpy fit's OpenBLAS spawns
+        # one thread per core, so N concurrent fits oversubscribe the box
+        # (profiled: 186 threads on 48 cores, most stuck in lock-wait) and a
+        # logreg permutation that should take ~1s took ~35s. One BLAS thread
+        # per fit, parallelism at the permutation level only.
+        env={
+            **os.environ,
+            "TQDM_DISABLE": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+        },
     )
 
     # run_round.py supervises the `limen run` child for its whole life.

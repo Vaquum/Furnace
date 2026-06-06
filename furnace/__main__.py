@@ -13,10 +13,21 @@ def main():
                    help="storage root, e.g. /data/experiments")
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--scheduler", action="store_true",
+                   help="run the per-minute Conduit prediction-cache top-up loop "
+                        "instead of the web app")
+    p.add_argument("--scheduler-interval", type=int, default=60,
+                   help="seconds between scheduler ticks (default 60, the /opt/arrow cadence)")
     args = p.parse_args()
 
     root = args.root.expanduser().resolve()
     (root / "experiments").mkdir(parents=True, exist_ok=True)
+
+    if args.scheduler:
+        # Separate process from the web app: `python -m furnace --root … --scheduler`.
+        from .cache_scheduler import run_forever
+        run_forever(interval_seconds=args.scheduler_interval, root=root)
+        return
 
     app = create_app(root)
 
