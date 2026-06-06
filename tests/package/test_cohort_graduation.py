@@ -10,6 +10,7 @@ its full runtime; deploy/route invariants are pinned against source text).
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from furnace import cohorts
@@ -107,7 +108,9 @@ def test_cohorts_route_registered() -> None:
     assert '@app.get("/cohorts")' in app_text
     assert '@app.get("/graduation"' in app_text
     assert "cohorts.write_cohort_definition(" in app_text
-    assert "from . import cohorts, inference" in app_text
+    # cohorts is imported from the package (possibly co-imported on one
+    # `from . import ...` line — isort merges/reorders, so match flexibly).
+    assert re.search(r"from \. import [\w, ]*\bcohorts\b", app_text)
     search_text = (PKG_DIR / "templates" / "search.html").read_text(encoding="utf-8")
     assert 'href="/graduation"' in search_text
 

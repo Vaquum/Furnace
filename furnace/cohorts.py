@@ -1,8 +1,13 @@
 """Cohort definitions — the persisted record of which decoders (one
 manifest) form a named cohort, written by the graduation view.
 
-A cohort definition is a flat JSON file at ``<root>/cohorts/<cohort_id>.json``
-(Furnace has no DB; this matches the existing flatfile state model). The
+A cohort definition is a flat JSON file under ``<root>/cohorts/`` — one per
+cohort, named ``<folded_cohort_id>.json`` where the canonical ``cohort_id``'s
+``:`` is folded to ``_`` for the filename (the canonical id, with the ``:``,
+is the ``cohort_id`` field *inside* the JSON). A consumer enumerates
+``<root>/cohorts/*.json`` and reads the ``cohort_id`` field; it never
+constructs the filename. Furnace has no DB; this matches the flatfile state
+model, and the file is written atomically (temp + ``os.replace``). The
 ``cohort_id`` is computed exactly as Limen's ``Cohort`` computes it
 (``limen.cohort.Cohort.set_members``) so a Furnace-written definition and a
 Limen-built cohort agree on identity — including Limen's uniqueness contract
@@ -19,6 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import cast
 
@@ -106,7 +112,11 @@ def write_cohort_definition(
         "permutation_ids": sorted(permutation_ids),
     }
     path = cohorts_dir / f"{_filename_for(cohort_id)}.json"
-    path.write_text(json.dumps(definition, indent=2), encoding="utf-8")
+    # Atomic write (temp + os.replace), mirroring the repo's other flatfile
+    # state (state.py) — never leave a partial JSON for a reader to hit.
+    tmp = cohorts_dir / f"{_filename_for(cohort_id)}.json.tmp"
+    tmp.write_text(json.dumps(definition, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
     return cohort_id
 
 

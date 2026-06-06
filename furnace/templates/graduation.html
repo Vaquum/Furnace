@@ -11,8 +11,9 @@
   <p class="atom-small" style="color: var(--ink-mute);">
     Pick one round, select the winning decoders, and name a cohort. One manifest per cohort —
     the cohort's <code>manifest_id</code> is read from the round's own metadata, so every member
-    shares one manifest (Limen's grouping rule). The cohort definition is written to
-    <code>/data/cohorts/&lt;cohort_id&gt;.json</code>.
+    shares one manifest (Limen's grouping rule). The cohort definition is written under
+    <code>/data/cohorts/</code> — one JSON per cohort; the canonical <code>cohort_id</code>
+    is the field inside.
   </p>
 
   <div class="filter-grid">
@@ -95,7 +96,15 @@ async function loadDecoders() {
       label.className = 'ms-option';
       label.style.display = 'inline-flex';
       label.style.marginRight = 'var(--gap-s)';
-      label.innerHTML = `<input type="checkbox" class="grad-perm" value="${id}"><span>${id}</span>`;
+      // Build via DOM (value as a property, text as a text node) — never
+      // interpolate an id into innerHTML, which would be an XSS / markup sink.
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.className = 'grad-perm';
+      cb.value = id;
+      const span = document.createElement('span');
+      span.textContent = id;
+      label.append(cb, span);
       frag.appendChild(label);
     }
     permsBox.appendChild(frag);

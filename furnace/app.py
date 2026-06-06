@@ -1121,7 +1121,18 @@ def create_app(root: Path) -> FastAPI:
             raise HTTPException(400, "name is required")
         if not isinstance(perms, list) or not perms:
             raise HTTPException(400, "permutation_ids must be a non-empty list")
-        permutation_ids = [str(p) for p in cast(list[object], perms)]
+        # Validate element types rather than coercing with str(): a raw `[null]`
+        # / `[{}]` would otherwise become the literal ids 'None' / '{...}', making
+        # cohort identity depend on Python stringification instead of the client
+        # contract. Permutation ids are str or int (bool is an int subclass — reject).
+        permutation_ids: list[str] = []
+        for p in cast(list[object], perms):
+            if isinstance(p, bool) or not isinstance(p, (str, int)):
+                raise HTTPException(400, "permutation_ids entries must be strings or integers")
+            entry = str(p)
+            if not entry:
+                raise HTTPException(400, "permutation_ids entries must be non-empty")
+            permutation_ids.append(entry)
         # Mirror Limen's Cohort uniqueness contract — a duplicate id would hash
         # to a cohort_id Limen could never produce. Reject (fail loud) rather
         # than silently dedupe, since /cohorts is a public endpoint.
