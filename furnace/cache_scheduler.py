@@ -1,0 +1,125 @@
+"""Per-minute Conduit prediction-cache top-up scheduler (PRD slice #71).
+
+Mirrors the ``/opt/arrow`` store's once-a-minute refresh: every interval, for
+each graduated cohort, append the newest closed bar(s) to its
+``/opt/conduit/<series>/latest.arrow`` via ``prediction_cache.top_up``.
+Deterministic and idempotent — a missed tick self-corrects on the next run.
+
+A cohort's series is read from its round manifest's ``get_arrow_file`` data
+source (the ``/opt/arrow/<series>`` the cohort trains and predicts over); a
+cohort whose data source is not an arrow series is skipped — there is no
+``/opt/arrow`` file to top up from.
+
+No ``limen`` import here (only ``furnace.prediction_cache`` /
+``furnace.cohorts``), so this module adds nothing to the pyright stub budget.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import time
+from pathlib import Path
+from typing import cast
+
+from furnace import cohorts, prediction_cache
+
+logger = logging.getLogger(__name__)
+
+DATA_ROOT = Path("/data/experiments")
+
+# yaml_reference.sfd.manifest.data_source.params.file_path
+_FILE_PATH_KEYS = ("yaml_reference", "sfd", "manifest", "data_source", "params", "file_path")
+
+
+def series_for_cohort(cohort_def: dict[str, object]) -> str | None:
+    """The ``/opt/arrow`` series a cohort predicts over, read from its round's
+    ``metadata.json`` ``data_source.file_path`` (``…/opt/arrow/<series>/latest.arrow``
+    → ``<series>``). Returns ``None`` when the cohort's data source is not an
+    arrow series (e.g. get_spot_klines / get_spot_dollar_klines)."""
+    experiment_dir = cohort_def.get("experiment_dir")
+    if not isinstance(experiment_dir, str):
+        return None
+    metadata_path = Path(experiment_dir) / "metadata.json"
+    if not metadata_path.is_file():
+        return None
+    node: object = json.loads(metadata_path.read_text(encoding="utf-8"))
+    for key in _FILE_PATH_KEYS:
+        if not isinstance(node, dict):
+            return None
+        node = cast(dict[object, object], node).get(key)
+    if not isinstance(node, str) or "arrow" not in node:
+        return None
+    return Path(node).parent.name
+
+
+def refresh_once(
+    root: Path = DATA_ROOT,
+    conduit_root: Path = prediction_cache.CONDUIT_ROOT,
+    arrow_root: Path = prediction_cache.ARROW_ROOT,
+) -> dict[str, int]:
+    """One pass: top up every graduated cohort that maps to an arrow series.
+    Returns ``{cohort_name: bars_appended}`` for the cohorts that succeeded. A
+    single cohort raising (a round caught mid-write, a corrupt sensor, a full
+    disk) is logged with its traceback and skipped — it must not starve every
+    other cohort of its refresh this tick. The failure is loud (``logger`` at
+    error level), not swallowed."""
+    out: dict[str, int] = {}
+    for cohort_def in cohorts.list_cohort_definitions(root):
+        series = series_for_cohort(cohort_def)
+        if series is None:
+            continue
+        name_obj = cohort_def.get("name")
+        name = name_obj if isinstance(name_obj, str) else series
+        try:
+            out[name] = prediction_cache.top_up(cohort_def, series, conduit_root, arrow_root)
+        except Exception:
+            logger.exception(
+                "prediction-cache top_up failed for cohort %r (series %r); "
+                "skipping it this tick so the rest of the cache surface still refreshes",
+                name,
+                series,
+            )
+            continue
+    return out
+
+
+def run_forever(
+    interval_seconds: int = 60,
+    root: Path = DATA_ROOT,
+    conduit_root: Path = prediction_cache.CONDUIT_ROOT,
+    arrow_root: Path = prediction_cache.ARROW_ROOT,
+) -> None:
+    """Refresh every cohort's cache once per ``interval_seconds`` forever — the
+    cadence the ``/opt/arrow`` store itself refreshes at. Each tick logs how many
+    bars it appended and how long it took, and warns when a tick overruns the
+    interval (the cache is then lagging the store rather than mirroring it). A
+    tick that raises is logged and retried on the next interval rather than
+    killing the daemon — a dead scheduler tops up nothing until someone notices;
+    ``KeyboardInterrupt`` / ``SystemExit`` still propagate for a clean shutdown.
+    The sleep is measured from the tick's start, so the cadence stays
+    ``interval_seconds`` instead of drifting to ``interval_seconds + work``."""
+    while True:
+        start = time.monotonic()
+        appended: dict[str, int]
+        try:
+            appended = refresh_once(root, conduit_root, arrow_root)
+        except Exception:
+            logger.exception("prediction-cache refresh tick failed; retrying after the interval")
+            appended = {}
+        elapsed = time.monotonic() - start
+        logger.info(
+            "prediction-cache tick: %d cohort(s), %d bar(s) appended in %.1fs",
+            len(appended),
+            sum(appended.values()),
+            elapsed,
+        )
+        if elapsed > interval_seconds:
+            logger.warning(
+                "prediction-cache tick took %.1fs, over the %ds interval — the cache is "
+                "lagging the /opt/arrow cadence (top_up re-predicts each cohort's full "
+                "history per tick; bound the prediction window if this persists)",
+                elapsed,
+                interval_seconds,
+            )
+        time.sleep(max(0.0, interval_seconds - elapsed))
