@@ -13,6 +13,7 @@ manifests, and on the in-process Limen call chain
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -139,7 +140,9 @@ def test_app_routes_use_inference_module() -> None:
     logic in `furnace/inference.py` means the validation and Limen
     orchestration is testable without standing up a FastAPI app."""
     text = _app_text()
-    assert "from . import inference" in text, \
+    # The inference module is imported from the package (possibly co-imported
+    # with sibling modules on one `from . import ...` line — isort merges them).
+    assert re.search(r"from \. import [\w, ]*\binference\b", text), \
         "app.py must import the inference module"
     assert "inference.input_payloads_at(" in text, \
         "/cohort/input must delegate to inference.input_payloads_at"
