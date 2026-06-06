@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% block title %}Graduation · Furnace{% endblock %}
+{% block meta %}sensors → cohort{% endblock %}
+{% block controls %}
+  <span class="topbar-id">graduation</span>
+{% endblock %}
+{% block content %}
+
+<div class="section">
+  <h2 class="atom-heading"><span class="numeral">01</span><span>Graduate decoders to a cohort</span></h2>
+  <p class="atom-small" style="color: var(--ink-mute);">
+    Pick one round, select the winning decoders, and name a cohort. One manifest per cohort —
+    the cohort's <code>manifest_id</code> is read from the round's own metadata, so every member
+    shares one manifest (Limen's grouping rule). The cohort definition is written to
+    <code>/data/cohorts/&lt;cohort_id&gt;.json</code>.
+  </p>
+
+  <div class="filter-grid">
+    <div class="filter-row">
+      <span class="filter-label">Experiment</span>
+      <select id="grad-experiment">
+        <option value="">— choose —</option>
+        {% for e in experiments %}
+        <option value="{{ e.id }}">{{ e.id }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="filter-row">
+      <span class="filter-label">Round</span>
+      <input id="grad-round" type="text" placeholder="0001" autocomplete="off">
+      <button id="grad-load" type="button">Load decoders</button>
+    </div>
+    <div class="filter-row">
+      <span class="filter-label">Cohort name</span>
+      <input id="grad-name" type="text" placeholder="my_cohort" autocomplete="off">
+    </div>
+  </div>
+
+  <div id="grad-perms" style="margin-top: var(--gap-m);"></div>
+
+  <div class="button-row">
+    <button id="grad-create" type="button" class="primary" disabled>Create cohort</button>
+    <span id="grad-status" class="atom-small" style="margin-left: var(--gap-s); align-self: center; color: var(--ink-mute);"></span>
+  </div>
+</div>
+
+<div class="section">
+  <h2 class="atom-heading"><span class="numeral">02</span><span>Existing cohorts</span></h2>
+  <table class="search-results-table">
+    <thead>
+      <tr><th>Name</th><th>Cohort id</th><th class="num">Decoders</th></tr>
+    </thead>
+    <tbody id="cohort-list">
+      {% for c in cohorts %}
+      <tr>
+        <td>{{ c.name }}</td>
+        <td><code>{{ c.cohort_id }}</code></td>
+        <td class="num">{{ c.permutation_ids | length }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p id="cohort-empty" class="empty" {% if cohorts %}style="display:none;"{% endif %}>No cohorts yet.</p>
+</div>
+
+<script>
+const status = document.getElementById('grad-status');
+const permsBox = document.getElementById('grad-perms');
+const createBtn = document.getElementById('grad-create');
+
+function setStatus(text, ok) {
+  status.textContent = text;
+  status.style.color = ok === undefined ? 'var(--ink-mute)' : (ok ? 'var(--accent)' : 'var(--negative)');
+}
+
+async function loadDecoders() {
+  const exp = document.getElementById('grad-experiment').value;
+  const round = document.getElementById('grad-round').value.trim();
+  permsBox.innerHTML = '';
+  createBtn.disabled = true;
+  if (!exp || !round) { setStatus('pick an experiment and round', false); return; }
+  setStatus('loading…');
+  try {
+    const r = await fetch(`/experiments/${encodeURIComponent(exp)}/rounds/${encodeURIComponent(round)}/results.json?limit=500`);
+    if (!r.ok) { setStatus(`round not found (${r.status})`, false); return; }
+    const data = await r.json();
+    const rows = data.rows || [];
+    if (!rows.length) { setStatus('round has no decoders', false); return; }
+    // One checkbox per decoder, keyed by its permutation id (`id` column).
+    const frag = document.createDocumentFragment();
+    for (const row of rows) {
+      const id = String(row.id);
+      const label = document.createElement('label');
+      label.className = 'ms-option';
+      label.style.display = 'inline-flex';
+      label.style.marginRight = 'var(--gap-s)';
+      label.innerHTML = `<input type="checkbox" class="grad-perm" value="${id}"><span>${id}</span>`;
+      frag.appendChild(label);
+    }
+    permsBox.appendChild(frag);
+    createBtn.disabled = false;
+    setStatus(`${rows.length} decoders — select and name the cohort`);
+  } catch (err) {
+    setStatus('load failed', false);
+  }
+}
+
+async function createCohort() {
+  const exp = document.getElementById('grad-experiment').value;
+  const round = document.getElementById('grad-round').value.trim();
+  const name = document.getElementById('grad-name').value.trim();
+  const ids = [...document.querySelectorAll('.grad-perm:checked')].map(c => c.value);
+  if (!name) { setStatus('name is required', false); return; }
+  if (!ids.length) { setStatus('select at least one decoder', false); return; }
+  setStatus('creating…');
+  try {
+    const r = await fetch('/cohorts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ experiment_id: exp, round_id: round, permutation_ids: ids, name }),
+    });
+    const body = await r.json();
+    if (!r.ok) { setStatus(body.detail || 'create failed', false); return; }
+    setStatus(`created ${body.cohort_id}`, true);
+    setTimeout(() => location.reload(), 900);
+  } catch (err) {
+    setStatus('create failed', false);
+  }
+}
+
+document.getElementById('grad-load').addEventListener('click', loadDecoders);
+createBtn.addEventListener('click', createCohort);
+</script>
+{% endblock %}

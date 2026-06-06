@@ -20,6 +20,7 @@ import zipfile
 from datetime import datetime
 from importlib import metadata as importlib_metadata
 from pathlib import Path
+from typing import cast
 
 import polars as pl
 from fastapi import FastAPI, HTTPException, Request
@@ -27,7 +28,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import inference
+from . import cohorts, inference
 from .state import (
     ACTIVE_STATES,
     StateMachine,
@@ -1081,6 +1082,66 @@ def create_app(root: Path) -> FastAPI:
     # endpoint surface untouched.
     _cohort_handlers = (cohort_input, cohort_predict)
     del _cohort_handlers
+
+    @app.get("/graduation", response_class=HTMLResponse)
+    def graduation_page(request: Request):
+        # The graduation view: pick an experiment + round from search, select
+        # the winning permutations, name a cohort, and POST it to /cohorts.
+        # One manifest per cohort (Limen's grouping rule).
+        return templates.TemplateResponse(
+            request,
+            "graduation.html",
+            {
+                "experiments": _all_experiments(root),
+                "cohorts": cohorts.list_cohort_definitions(root),
+            },
+        )
+
+    @app.get("/cohorts")
+    def cohorts_list():
+        return JSONResponse({"cohorts": cohorts.list_cohort_definitions(root)})
+
+    @app.post("/cohorts")
+    async def create_cohort(request: Request):
+        # Graduate selected permutations of one round into a named cohort.
+        # The manifest_id (the cohort grouping key) is read from the round's
+        # own metadata.json — never trusted from the client — so a cohort's
+        # identity is anchored to the experiment artefacts.
+        raw = await request.json()
+        if not isinstance(raw, dict):
+            raise HTTPException(400, "request body must be a JSON object")
+        body = cast(dict[str, object], raw)
+        experiment_id = body.get("experiment_id")
+        round_id = body.get("round_id")
+        name = body.get("name")
+        perms = body.get("permutation_ids")
+        if not isinstance(experiment_id, str) or not isinstance(round_id, str):
+            raise HTTPException(400, "experiment_id and round_id must be strings")
+        if not isinstance(name, str) or not name.strip():
+            raise HTTPException(400, "name is required")
+        if not isinstance(perms, list) or not perms:
+            raise HTTPException(400, "permutation_ids must be a non-empty list")
+        permutation_ids = [str(p) for p in cast(list[object], perms)]
+        limen_output = _cohort_limen_output(experiment_id, round_id)
+        try:
+            manifest_id = cohorts.read_manifest_id(limen_output)
+            cohort_id = cohorts.write_cohort_definition(
+                root,
+                name=name.strip(),
+                experiment_dir=str(limen_output),
+                manifest_id=manifest_id,
+                permutation_ids=permutation_ids,
+            )
+        except (ValueError, FileNotFoundError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return JSONResponse({
+            "cohort_id": cohort_id,
+            "name": name.strip(),
+            "permutation_ids": sorted(permutation_ids),
+        })
+
+    _graduation_handlers = (graduation_page, cohorts_list, create_cohort)
+    del _graduation_handlers
 
     @app.get("/search", response_class=HTMLResponse)
     def search_page(request: Request, experiment_name: str | None = None):
