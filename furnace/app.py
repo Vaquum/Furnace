@@ -84,6 +84,15 @@ def _load_build_meta() -> dict[str, str]:
 _BUILD_META = _load_build_meta()
 
 
+def _version_info() -> dict[str, str]:
+    """Build provenance baked into the image at build time (see Dockerfile)."""
+    return {
+        "sha": os.environ.get("GIT_SHA", ""),
+        "date": os.environ.get("BUILD_DATE", ""),
+        "subject": os.environ.get("GIT_SUBJECT", ""),
+    }
+
+
 # A new experiment is seeded with this manifest. It is a valid Limen YAML
 # manifest (the same shape run_round.py parses → validates → compiles); the
 # `__EXPERIMENT_NAME__` sentinel is substituted with the experiment id at
@@ -569,6 +578,10 @@ def create_app(root: Path) -> FastAPI:
     @app.get("/health")
     def health():
         return {"status": "ok"}
+
+    @app.get("/version")
+    def version():
+        return _version_info()
 
     @app.on_event("shutdown")
     def _on_shutdown() -> None:
