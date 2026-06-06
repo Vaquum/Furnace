@@ -62,6 +62,16 @@ def persist_sensor(sensor: Sensor, directory: Path) -> str:
     setattr(sensor, "_manifest", None)
 
     pkl = _pickle_path(directory, permutation_id)
+    sidecar_path = _sidecar_path(directory, permutation_id)
+
+    # Each file is replaced atomically, but the pair is not. Invalidate any
+    # existing sidecar BEFORE the new pickle goes live, then write the new
+    # sidecar last. A crash mid-write then leaves either the old pair or a
+    # sidecar-less new pickle (load_sensor -> None -> regenerate) — never the
+    # new pickle paired with a stale sidecar whose version key could still
+    # match the env and wrongly authorize a cross-version model.
+    sidecar_path.unlink(missing_ok=True)
+
     pkl_tmp = pkl.with_name(pkl.name + ".tmp")
     with pkl_tmp.open("wb") as f:
         pickle.dump(sensor, f, protocol=pickle.HIGHEST_PROTOCOL)
@@ -72,7 +82,6 @@ def persist_sensor(sensor: Sensor, directory: Path) -> str:
         "manifest_id": sensor.manifest_id,
         "permutation_id": permutation_id,
     }
-    sidecar_path = _sidecar_path(directory, permutation_id)
     sidecar_tmp = sidecar_path.with_name(sidecar_path.name + ".tmp")
     sidecar_tmp.write_text(json.dumps(sidecar, indent=2), encoding="utf-8")
     sidecar_tmp.replace(sidecar_path)
@@ -106,4 +115,8 @@ def load_sensor(directory: Path, permutation_id: str) -> Sensor | None:
         loaded: object = pickle.load(f)
     if not isinstance(loaded, Sensor):
         raise ValueError(f"persisted object at {pkl} is not a limen Sensor")
+    if recorded.get("manifest_id") != loaded.manifest_id:
+        # Sidecar and pickle disagree on manifest_id — a mismatched/torn pair;
+        # regenerate rather than serve a model the sidecar does not describe.
+        return None
     return loaded

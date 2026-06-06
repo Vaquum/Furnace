@@ -323,6 +323,16 @@ def _parse_cohort_permutation_ids(value: str) -> list[str]:
         raise HTTPException(
             422, "permutation_ids must list at least one round_id",
         )
+    for piece in pieces:
+        # Validate shape here so a malformed token (wrong length, non-hex, or
+        # path-traversal characters) gets a localized 422 instead of failing
+        # deeper in Limen — a round_id is a 64-char lowercase-hex SHA-256.
+        if not re.fullmatch(r"[0-9a-f]{64}", piece):
+            raise HTTPException(
+                422,
+                f"permutation_ids entry {piece!r} is not a round_id "
+                "(64-char lowercase hex)",
+            )
     if len(set(pieces)) != len(pieces):
         # Mirror Limen's Cohort uniqueness contract (and cohorts.py): a
         # duplicate would double-count a member and break cohort_id identity.

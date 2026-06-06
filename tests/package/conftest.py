@@ -88,13 +88,22 @@ def _parse_limit(value: str) -> datetime:
 
 def _fake_spot_klines(
     *_args: object,
+    kline_size: int | None = None,
     start_date_limit: str | None = None,
     end_date_limit: str | None = None,
     **_kwargs: object,
 ) -> pl.DataFrame:
     """Drop-in for ``HistoricalData.get_spot_klines`` that serves the committed
     real slice, filtered to the requested ``[start, end]`` window. Never
-    touches the network."""
+    touches the network. ``kline_size`` is checked, not swallowed: the fixture
+    is 1h bars, so a caller asking for a different interval (a manifest or
+    inference drift) fails the fake loudly instead of passing on mismatched
+    data."""
+    if kline_size is not None and kline_size != 3600:
+        raise ValueError(
+            f"cohort fixture is 3600s (1h) bars; got kline_size={kline_size} — "
+            "regenerate the fixture or align the manifest under test"
+        )
     df = pl.read_parquet(_FIXTURE)
     if start_date_limit is not None:
         df = df.filter(pl.col("datetime") >= _parse_limit(start_date_limit))

@@ -99,14 +99,12 @@ def _data_source(metadata: dict[str, object]) -> dict[str, object]:
     )
 
 
-def assert_split_dates(limen_output_dir: Path) -> dict[str, object]:
-    """Reject a manifest without ``split_dates``. The training window is what
-    lets the Sensor mark a requested datetime as in-sample
-    (``reason='inside-training-window'``); without it inference could serve a
-    prediction on data the model trained on. Returns the split_dates block so
-    callers can surface it."""
-    manifest_cfg = _manifest_cfg(_read_metadata(limen_output_dir))
-    split_obj = manifest_cfg.get("split_dates")
+def _split_dates(metadata: dict[str, object]) -> dict[str, object]:
+    """Extract and validate ``split_dates`` from already-read metadata. The
+    training window is what lets the Sensor mark a requested datetime as
+    in-sample (``reason='inside-training-window'``); without it inference could
+    serve a prediction on data the model trained on."""
+    split_obj = _manifest_cfg(metadata).get("split_dates")
     if split_obj is None:
         raise ValueError(
             "inference requires the manifest to declare split_dates so the "
@@ -117,6 +115,12 @@ def assert_split_dates(limen_output_dir: Path) -> dict[str, object]:
     if not split:
         raise ValueError("manifest split_dates is empty; inference needs a training window")
     return split
+
+
+def assert_split_dates(limen_output_dir: Path) -> dict[str, object]:
+    """``_split_dates`` against a round dir — reads ``metadata.json`` once.
+    Used where only the directory is at hand (the route guard, the test)."""
+    return _split_dates(_read_metadata(limen_output_dir))
 
 
 def _kline_size_seconds(metadata: dict[str, object]) -> int:
@@ -189,8 +193,8 @@ def klines_window_at(limen_output_dir: Path, at: str) -> dict[str, object]:
     """Return the raw klines window the cohort would consume to predict the
     bar at ``at`` — the window bounds, bar count, columns, and the final bar
     (the one whose features drive the prediction). No training runs."""
-    split = assert_split_dates(limen_output_dir)
     metadata = _read_metadata(limen_output_dir)
+    split = _split_dates(metadata)
     kline_size = _kline_size_seconds(metadata)
     when = _parse_at(at)
     klines = _fetch_klines(metadata, when, kline_size)
@@ -222,8 +226,8 @@ def predict_at(
     permutations, and return the cohort's aggregated ``BarPrediction`` for the
     bar at ``at``. Sequencing — Trainer → Sensors → Cohort.set_members →
     Cohort.predict(klines) — is the Limen inference flow verbatim."""
-    assert_split_dates(limen_output_dir)
     metadata = _read_metadata(limen_output_dir)
+    _split_dates(metadata)  # guard: require a training window before any work
     kline_size = _kline_size_seconds(metadata)
     when = _parse_at(at)
     klines = _fetch_klines(metadata, when, kline_size)
