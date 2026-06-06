@@ -1122,6 +1122,11 @@ def create_app(root: Path) -> FastAPI:
         if not isinstance(perms, list) or not perms:
             raise HTTPException(400, "permutation_ids must be a non-empty list")
         permutation_ids = [str(p) for p in cast(list[object], perms)]
+        # Mirror Limen's Cohort uniqueness contract — a duplicate id would hash
+        # to a cohort_id Limen could never produce. Reject (fail loud) rather
+        # than silently dedupe, since /cohorts is a public endpoint.
+        if len(set(permutation_ids)) != len(permutation_ids):
+            raise HTTPException(400, "permutation_ids must be unique")
         limen_output = _cohort_limen_output(experiment_id, round_id)
         try:
             manifest_id = cohorts.read_manifest_id(limen_output)

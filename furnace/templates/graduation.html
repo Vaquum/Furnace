@@ -85,6 +85,7 @@ async function loadDecoders() {
     if (!r.ok) { setStatus(`round not found (${r.status})`, false); return; }
     const data = await r.json();
     const rows = data.rows || [];
+    const total = (data.total !== undefined) ? data.total : rows.length;
     if (!rows.length) { setStatus('round has no decoders', false); return; }
     // One checkbox per decoder, keyed by its permutation id (`id` column).
     const frag = document.createDocumentFragment();
@@ -99,7 +100,13 @@ async function loadDecoders() {
     }
     permsBox.appendChild(frag);
     createBtn.disabled = false;
-    setStatus(`${rows.length} decoders — select and name the cohort`);
+    if (total > rows.length) {
+      // No silent caps: results.json is capped at limit=500. Say so rather than
+      // letting the operator believe the list is complete (winners past 500 hide).
+      setStatus(`showing ${rows.length} of ${total} decoders — refine the round to select past the first ${rows.length}`, false);
+    } else {
+      setStatus(`${rows.length} decoders — select and name the cohort`);
+    }
   } catch (err) {
     setStatus('load failed', false);
   }

@@ -5,8 +5,11 @@ A cohort definition is a flat JSON file at ``<root>/cohorts/<cohort_id>.json``
 (Furnace has no DB; this matches the existing flatfile state model). The
 ``cohort_id`` is computed exactly as Limen's ``Cohort`` computes it
 (``limen.cohort.Cohort.set_members``) so a Furnace-written definition and a
-Limen-built cohort agree on identity — ``test_cohort_graduation`` pins the
-formula against a known hash so any Limen drift is caught.
+Limen-built cohort agree on identity — including Limen's uniqueness contract
+(Limen rejects duplicate permutation_ids), which we mirror by rejecting them
+here. ``test_cohort_graduation`` freezes the formula against a literal hash so
+a change to *our* replica is caught; the literal was derived from Limen's
+current formula, so it doubles as the cross-system agreement anchor.
 
 This module is deliberately free of any ``limen`` import: graduation
 persists *which permutations* form a cohort (the manifest_id + ids), not
@@ -87,6 +90,11 @@ def write_cohort_definition(
         raise ValueError("cohort name must be non-empty")
     if not permutation_ids:
         raise ValueError("cohort must have at least one permutation_id")
+    if len(set(permutation_ids)) != len(permutation_ids):
+        # Mirror Limen's Cohort uniqueness contract ('permutation_ids must be
+        # unique'). A duplicate would make our sorted-with-dups payload hash to
+        # a cohort_id Limen could never produce, silently breaking id agreement.
+        raise ValueError("permutation_ids must be unique")
     cohort_id = compute_cohort_id(manifest_id, permutation_ids)
     cohorts_dir = _cohorts_dir(root)
     cohorts_dir.mkdir(parents=True, exist_ok=True)

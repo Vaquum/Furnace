@@ -9,7 +9,6 @@ its full runtime; deploy/route invariants are pinned against source text).
 
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 
@@ -54,18 +53,31 @@ def test_cohort_definition_has_required_keys(tmp_path: Path) -> None:
 
 
 def test_cohort_id_matches_limen_formula() -> None:
-    """`compute_cohort_id` is byte-identical to Limen's
-    `Cohort.set_members` id: `sha256:` + SHA-256 of the canonical
-    `{manifest_id, sorted permutation_ids}` JSON. This pins our replica to
-    Limen's formula so a Furnace definition and a Limen-built cohort agree."""
-    payload = json.dumps(
-        {"manifest_id": _MANIFEST_ID, "permutation_ids": sorted(_PIDS)},
-        sort_keys=True,
-    )
-    expected = f"sha256:{hashlib.sha256(payload.encode()).hexdigest()}"
+    """Freeze ``compute_cohort_id``'s output against a *literal* hash so the
+    actual bytes are pinned — re-deriving the value with the same json+sha256
+    logic would be tautological. The literal below was computed from Limen's
+    current formula (``limen.cohort.Cohort.set_members``: ``sha256:`` + SHA-256
+    of the canonical ``{manifest_id, sorted permutation_ids}`` JSON); a change
+    to either our replica or that formula makes this assertion fail."""
+    expected = "sha256:15c8d648db04a4032d5d057b08cfbe60b2810e1a5580617bc4762f2fb070486e"
     assert cohorts.compute_cohort_id(_MANIFEST_ID, _PIDS) == expected
     # id is order-independent in the input (sorted internally)
     assert cohorts.compute_cohort_id(_MANIFEST_ID, list(reversed(_PIDS))) == expected
+
+
+def test_cohort_rejects_duplicate_permutation_ids(tmp_path: Path) -> None:
+    """Limen's ``Cohort`` rejects duplicate permutation_ids ('must be unique');
+    a duplicate would hash to a cohort_id Limen could never produce. The writer
+    mirrors that fail-loud contract rather than silently deduping."""
+    try:
+        cohorts.write_cohort_definition(
+            tmp_path, name="dup", experiment_dir="/x",
+            manifest_id=_MANIFEST_ID, permutation_ids=["a", "b", "a"],
+        )
+    except ValueError as exc:
+        assert "unique" in str(exc)
+    else:
+        raise AssertionError("expected ValueError for duplicate permutation_ids")
 
 
 def test_read_manifest_id_from_metadata(tmp_path: Path) -> None:
