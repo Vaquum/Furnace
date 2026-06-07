@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "furnace"
-version = "0.27.1"
+version = "0.27.2"
 description = "Web runner for Limen experiments."
 readme = "README.md"
 requires-python = ">=3.12"
