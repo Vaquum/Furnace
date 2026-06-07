@@ -1624,8 +1624,8 @@ p.empty {
   align-items: flex-start;
 }
 .search-filters {
-  flex: 0 0 256px;
-  width: 256px;
+  flex: 0 0 300px;
+  width: 300px;
   position: sticky;
   /* Clear the 61px sticky top control bar (same offset idiom as .modal) so the
      rail never slides under it while the results scroll. */
@@ -1636,6 +1636,9 @@ p.empty {
      reachable (a sticky rail otherwise pins and clips its own bottom). */
   max-height: calc(100vh - 61px - 2 * var(--gap-l));
   overflow-y: auto;
+  /* Reserve the scrollbar's width so the slider bounds never sit under it. */
+  scrollbar-gutter: stable;
+  padding-right: var(--gap-s);
   display: flex;
   flex-direction: column;
   gap: var(--gap-m);

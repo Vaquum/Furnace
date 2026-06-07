@@ -78,6 +78,12 @@
         <tr>
           <th class="col-chevron"></th>
           <th class="col-id">Experiment</th>
+          <th class="num col-metric">Trade PnL p5</th>
+          <th class="num col-metric">Trade PnL p50</th>
+          <th class="num col-metric">Trade PnL p95</th>
+          <th class="num col-metric">Drawdown p5</th>
+          <th class="num col-metric">Drawdown p50</th>
+          <th class="num col-metric">Drawdown p95</th>
           <th class="num col-matches">Matches</th>
         </tr>
       </thead>
@@ -98,6 +104,28 @@ function fmt(v) { return isFinite(v) ? round4(v).toString() : '—'; }
 function escapeHTML(s) {
   return String(s).replace(/[&<>"']/g, c =>
     ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// Landing-table ledger columns: per-round each is the cross-perm median over
+// the matching perms (from the server); per-experiment the mean of its rounds.
+const METRIC_KEYS = ['tp_p5', 'tp_p50', 'tp_p95', 'dd_p5', 'dd_p50', 'dd_p95'];
+
+// Mirror app.py _format_metric: magnitude-adaptive precision, em-dash for null.
+function formatMetric(v) {
+  if (v == null) return '—';
+  const m = Math.abs(v);
+  if (m >= 1000) return v.toFixed(0);
+  if (m >= 100) return v.toFixed(1);
+  if (m >= 10) return v.toFixed(2);
+  return v.toFixed(3);
+}
+function metricCell(v) {
+  const cls = v == null ? ' null' : (v < 0 ? ' neg' : '');
+  return `<td class="num col-metric${cls}">${formatMetric(v)}</td>`;
+}
+function meanMetric(rows, key) {
+  const vs = rows.map(r => r[key]).filter(v => v != null);
+  return vs.length ? vs.reduce((a, b) => a + b, 0) / vs.length : null;
 }
 
 class RangeSlider {
@@ -273,6 +301,7 @@ function renderRounds(data) {
       `<td class="col-chevron"><button type="button" class="chevron" data-toggle="${escapeHTML(exp)}" aria-expanded="false" aria-label="Expand"></button></td>` +
       `<td class="col-id"><a href="/experiments/${encodeURIComponent(exp)}">${escapeHTML(exp)}</a>` +
       `<span class="row-count">${rows.length}</span></td>` +
+      METRIC_KEYS.map(k => metricCell(meanMetric(rows, k))).join('') +
       `<td class="num col-matches">${expCount}</td>`;
     tbody.appendChild(head);
 
@@ -284,6 +313,7 @@ function renderRounds(data) {
       tr.innerHTML =
         `<td class="col-chevron"></td>` +
         `<td class="col-id"><a class="mono" href="/experiments/${encodeURIComponent(exp)}/rounds/${encodeURIComponent(r.round_id)}/results">${escapeHTML(r.round_id)}</a></td>` +
+        METRIC_KEYS.map(k => metricCell(r[k])).join('') +
         `<td class="num col-matches">${r.match_count}</td>`;
       tbody.appendChild(tr);
     }

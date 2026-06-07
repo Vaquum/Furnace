@@ -1652,10 +1652,21 @@ def _matching_rounds(root: Path, filters: _FilterMap, experiment_names: list[str
     if not paths:
         return []
     lf = pl.scan_parquet([str(p) for p in paths])
+    # Per matching round: the count, the manifest sha (constant per round — the
+    # same-manifest key the cohort UI dims against), and each landing-table
+    # ledger metric as the cross-permutation median *over the matching perms*
+    # (mirroring _round_analytics' p50, but filter-aware). NaN -> null first so
+    # the median ignores it, matching the round viewer's drop_nans.
+    aggs: list[pl.Expr] = [
+        pl.len().alias("match_count"),
+        pl.first("code_sha256").alias("code_sha256"),
+    ]
+    for key, col in _ANALYTIC_COLUMNS.items():
+        aggs.append(pl.col(col).fill_nan(None).median().alias(key))
     df = (
         _apply_search_filters(lf, filters)
         .group_by(["experiment_id", "round_id"])
-        .agg(pl.len().alias("match_count"))
+        .agg(aggs)
         .sort(["match_count", "experiment_id", "round_id"], descending=[True, False, True])
         .collect()
     )

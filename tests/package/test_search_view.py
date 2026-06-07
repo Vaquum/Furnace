@@ -62,3 +62,21 @@ def test_results_table_is_experiment_rounds_hierarchy_with_matches() -> None:
     assert "exp-row" in text and "round-row" in text and "chevron" in text
     # dropped columns from the landing table
     assert "Latest activity" not in text and "Last status" not in text
+
+
+def test_results_table_has_landing_metric_columns() -> None:
+    """The results table carries the landing ledger columns (Trade PnL +
+    Drawdown at p5/p50/p95) beside the match count. A round's value is the
+    cross-permutation median over the *matching* perms; an experiment's is the
+    mean of its rounds — rendered with the same magnitude-adaptive formatter."""
+    text = _search()
+    for label in (
+        "Trade PnL p5", "Trade PnL p50", "Trade PnL p95",
+        "Drawdown p5", "Drawdown p50", "Drawdown p95",
+    ):
+        assert label in text, label
+    assert "METRIC_KEYS" in text and "metricCell" in text and "meanMetric" in text
+    # the backend supplies the per-round medians (filter-aware) + the manifest sha
+    app = (REPO_ROOT / "furnace" / "app.py").read_text(encoding="utf-8")
+    assert "pl.col(col).fill_nan(None).median().alias(key)" in app
+    assert 'pl.first("code_sha256").alias("code_sha256")' in app
