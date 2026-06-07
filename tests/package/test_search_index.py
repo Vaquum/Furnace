@@ -123,3 +123,57 @@ def test_selection_bundle_filters_int_id_round(tmp_path: Path) -> None:
     assert csvs, "bundle should carry a CSV for the matched int-id round"
     rows = [ln for ln in z.read(csvs[0]).decode().splitlines() if ln.strip()]
     assert len(rows) == 3  # header + the two matched int-id permutations
+
+
+def test_selection_bundle_rejects_path_traversal(tmp_path: Path) -> None:
+    """A crafted experiment / round id resolves through _safe_child_dir, so it is
+    a 404 — never a path-traversing filesystem read or an unsanitized filename."""
+    from fastapi import HTTPException
+
+    from furnace.app import _build_selection_bundle
+
+    _make_round(tmp_path / "experiments" / "exp" / "rounds" / "0001", ids=["1"], edge=["1.0"])
+    for exp, rounds in [("../exp", ["0001"]), ("exp", ["../0001"]), ("exp", ["0001/x"])]:
+        try:
+            _build_selection_bundle(tmp_path, exp, rounds, {})
+        except HTTPException as exc:
+            assert exc.status_code == 404
+        else:
+            raise AssertionError(f"expected 404 for experiment={exp!r} rounds={rounds!r}")
+
+
+def test_selection_bundle_empty_filter_match_is_empty(tmp_path: Path) -> None:
+    """A filter matching zero perms yields a header-only results.csv — never a
+    silent fall-back to the full round."""
+    import io
+    import zipfile
+
+    from furnace.app import _build_selection_bundle, _parse_filter_params
+
+    _make_round(tmp_path / "experiments" / "exp" / "rounds" / "0001", ids=["7", "8"], edge=["3.0", "4.0"])
+    filters = _parse_filter_params({"backtest_edge_per_signal_bps_p50_min": "100"})
+    data = _build_selection_bundle(tmp_path, "exp", ["0001"], filters)
+
+    z = zipfile.ZipFile(io.BytesIO(data))
+    csvs = [n for n in z.namelist() if n.endswith(".csv")]
+    assert csvs
+    rows = [ln for ln in z.read(csvs[0]).decode().splitlines() if ln.strip()]
+    assert len(rows) == 1  # header only — zero perms matched the filter
+
+
+def test_selection_bundle_rejects_cross_manifest(tmp_path: Path) -> None:
+    """Selecting rounds with different manifests is a 400 — a bundle is one
+    manifest (the shared manifest at the root must describe every round)."""
+    from fastapi import HTTPException
+
+    from furnace.app import _build_selection_bundle
+
+    _make_round(tmp_path / "experiments" / "exp" / "rounds" / "0001", ids=["1"], edge=["1.0"])
+    r2 = _make_round(tmp_path / "experiments" / "exp" / "rounds" / "0002", ids=["2"], edge=["2.0"])
+    (r2 / "manifest.yml").write_text("schema_version: '2.0'\n")  # a different manifest
+    try:
+        _build_selection_bundle(tmp_path, "exp", ["0001", "0002"], {})
+    except HTTPException as exc:
+        assert exc.status_code == 400
+    else:
+        raise AssertionError("expected 400 for a cross-manifest selection")

@@ -548,8 +548,7 @@ def create_app(root: Path) -> FastAPI:
         # curls it from the same host without credentials (the "Get API call"
         # command). It serves read-only experiment artefacts, so keep the port
         # off the public internet to keep the bundle private.
-        if (path == "/health" or path == "/static" or path.startswith("/static/")
-                or path == "/search/bundle"):
+        if path == "/health" or path == "/static" or path.startswith("/static/") or path == "/search/bundle":
             return await call_next(request)
         if request.method == "HEAD" and path == "/":
             return await call_next(request)
@@ -1822,44 +1821,56 @@ def _build_selection_bundle(
     """A bundle of exactly the selected rounds of ONE experiment: the runnable
     manifest plus each round's limen_output filtered to the permutations that
     match the active search filters — the same perms a cohort built from this
-    selection would hold. Single-experiment by construction; never the whole
-    filtered index across experiments."""
-    wanted = {(experiment, rid) for rid in round_ids}
-    perms_by_round = _matching_permutation_ids(root, filters, wanted)
+    selection would hold. Single-experiment and single-manifest by construction;
+    never the whole filtered index across experiments."""
+    # Resolve through _safe_child_dir so `experiment` / `round_ids` cannot path-
+    # traverse and can only be the regex-validated forms (which are also the
+    # filename stem) — a crafted id is a 404, not a filesystem read.
+    exp_dir = _safe_child_dir(root / "experiments", experiment, EXPERIMENT_ID_RE, "experiment not found")
     sorted_rids = sorted(round_ids)
-    base = _selection_bundle_base(experiment, round_ids)
-    exp_rounds = root / "experiments" / experiment / "rounds"
+    round_dirs = [
+        _safe_child_dir(exp_dir / "rounds", rid, ROUND_ID_RE, "round not found")
+        for rid in sorted_rids
+    ]
+    # A bundle, like a cohort, is one manifest: every selected round's
+    # manifest.yml must be byte-identical, or the shared manifest at the bundle
+    # root would not describe some of the rounds.
+    manifests = {(rd / "manifest.yml").read_bytes() for rd in round_dirs if (rd / "manifest.yml").is_file()}
+    if len(manifests) > 1:
+        raise HTTPException(400, "selected rounds span more than one manifest — a bundle is one manifest")
+    perms_by_round = _matching_permutation_ids(root, filters, {(experiment, rid) for rid in sorted_rids})
+    base = _selection_bundle_base(experiment, sorted_rids)
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        # The shared manifest (the selection is one manifest) at the bundle
-        # root — `limen run <base>/manifest.yml` re-runs it (the arrow data
-        # source it names must be mounted at run time).
-        manifest_path = exp_rounds / sorted_rids[0] / "manifest.yml"
-        if manifest_path.is_file():
-            z.writestr(f"{base}/manifest.yml", manifest_path.read_bytes())
-        for rid in sorted_rids:
-            limen = exp_rounds / rid / "limen_output"
-            perms = set(perms_by_round.get((experiment, rid), []))
+        # `limen run <base>/manifest.yml` re-runs it (mount the arrow source).
+        if manifests:
+            z.writestr(f"{base}/manifest.yml", next(iter(manifests)))
+        for rid, rd in zip(sorted_rids, round_dirs):
+            limen = rd / "limen_output"
+            perms = list(perms_by_round.get((experiment, rid), []))
             out = f"{base}/limen_output/{rid}"
             meta_path = limen / "metadata.json"
             if meta_path.is_file():
                 z.writestr(f"{out}/metadata.json", meta_path.read_bytes())
-            csv_path = _round_csv_path(exp_rounds / rid)
+            csv_path = _round_csv_path(rd)
             if csv_path.exists():
                 df = pl.read_csv(csv_path, infer_schema_length=200)
-                # permutation_ids are String (the index normalizes `id`); an
-                # int-id round's CSV `id` infers Int64, so cast before is_in.
-                if perms and "id" in df.columns:
-                    df = df.filter(pl.col("id").cast(pl.String).is_in(list(perms)))
+                # Always filter to the matching perms — a zero-match filter
+                # yields a header-only CSV, never a silent fall-back to the full
+                # round. permutation_ids are String (the index normalizes `id`);
+                # an int-id round's CSV `id` infers Int64, so cast before is_in.
+                if "id" in df.columns:
+                    df = df.filter(pl.col("id").cast(pl.String).is_in(perms))
                 z.writestr(f"{out}/results.csv", df.write_csv())
             rd_path = limen / "round_data.jsonl"
             if rd_path.is_file():
-                # Each line is one permutation's trained sensor, keyed by
-                # `round_id` (the perm hash); keep only the selected perms.
+                # Each line is one perm's trained sensor, keyed by `round_id`;
+                # keep only the matching perms (a zero match keeps none).
+                permset = set(perms)
                 kept = [
                     ln for ln in rd_path.read_text().splitlines()
-                    if ln.strip() and (not perms or str(json.loads(ln).get("round_id")) in perms)
+                    if ln.strip() and str(json.loads(ln).get("round_id")) in permset
                 ]
                 z.writestr(f"{out}/round_data.jsonl", "".join(f"{ln}\n" for ln in kept))
     return buf.getvalue()
