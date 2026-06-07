@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}{{ cohort.name }} · cohort · Furnace{% endblock %}
+{# Cohort view — the cohort counterpart of the round/experiment viewer. A
+   cohort is a round's permutations (possibly filtered), so it shows the same
+   statistics grid, computed over the cohort's own permutation ids. The
+   selector moves between cohorts; the results icon drills into the perm table. #}
+{% block controls %}
+  <div class="round-select-wrap">
+    <select class="round-select" aria-label="Cohort"
+            onchange="if (this.value) location.href = this.value;">
+      {% for c in cohorts %}
+      <option value="/cohorts/{{ c.url_id }}"{% if c.url_id == cohort.url_id %} selected{% endif %}>{{ c.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+{% endblock %}
+{% block bar_icons %}
+  <a class="bar-icon" href="/cohorts/{{ cohort.url_id }}/results"
+     title="View permutations" aria-label="View permutations">
+    <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4">
+      <rect x="2.25" y="3.25" width="11.5" height="9.5"></rect>
+      <line x1="2.25" y1="6.5" x2="13.75" y2="6.5"></line>
+      <line x1="2.25" y1="9.5" x2="13.75" y2="9.5"></line>
+    </svg>
+  </a>
+  <a class="bar-icon" href="/cohorts/{{ cohort.url_id }}/csv" download="{{ cohort.url_id }}.csv"
+     title="Download CSV" aria-label="Download CSV">
+    <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M8 2.5 V9.5 M5 7 L8 10 L11 7"></path>
+      <path d="M3.25 12.75 H12.75"></path>
+    </svg>
+  </a>
+{% endblock %}
+{% block meta %}
+  <div class="round-meta">
+    {% if cohort.cohort_type %}<span class="cohort-type">{{ cohort.cohort_type }}</span>{% endif %}
+    {% if cohort.bar_type %}<span class="round-period mono">{{ cohort.bar_type }}</span>{% endif %}
+    <span>{{ cohort.decoder_count }} decoder{{ '' if cohort.decoder_count == 1 else 's' }}</span>
+    {% if cohort.train_start and cohort.train_end %}
+    <span class="round-period mono">trained {{ cohort.train_start }} → {{ cohort.train_end }}</span>
+    {% endif %}
+  </div>
+{% endblock %}
+{% block content %}
+
+<div class="section">
+  {% if stats %}
+  <table class="progress-table">
+    <thead>
+      <tr>
+        <th>Column</th>
+        <th class="num">p5</th>
+        <th class="num">p25</th>
+        <th class="num">p50</th>
+        <th class="num">p75</th>
+        <th class="num">p95</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in stats %}
+      <tr>
+        <td class="mono">{{ row.label }}</td>
+        {% for p in ['p5', 'p25', 'p50', 'p75', 'p95'] %}
+          {% set v = row[p] %}
+          {% if v is none %}
+          <td class="num null">—</td>
+          {% else %}
+          <td class="num{{ ' neg' if v < 0 else '' }}">{{ v | metric_fmt }}</td>
+          {% endif %}
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="atom-paragraph" style="color: var(--ink-mute);">No results for this cohort's permutations.</p>
+  {% endif %}
+</div>
+
+<details class="section collapsible">
+  <summary class="atom-heading"><span class="numeral">01</span><span>Frozen manifest</span></summary>
+  <div class="code-block-wrap">
+    <button class="code-block-copy" type="button" data-copy-target="frozen-manifest" title="Copy manifest" aria-label="Copy frozen manifest">⧉</button>
+    <pre class="atom-code-block" id="frozen-manifest">{{ frozen_manifest }}</pre>
+  </div>
+</details>
+
+<script defer src="/static/diff_view.js?v={{ asset_version }}"></script>
+
+{% endblock %}

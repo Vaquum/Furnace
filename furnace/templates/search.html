@@ -35,7 +35,7 @@
     {% for metric in metrics %}
     <div class="filter-block" data-metric="{{ metric }}">
       <div class="filter-top">
-        <span class="filter-label" title="{{ metric }}">{{ metric | display_label }}</span>
+        <span class="filter-label" title="{{ metric }}">{{ metric | display_label | replace('_', '_<wbr>') | safe }}</span>
         <span class="filter-readout" data-readout="{{ metric }}"></span>
       </div>
       <div class="filter-bottom">
@@ -65,26 +65,66 @@
       <div class="results-head-left">
         <span class="results-title">Matching rounds</span>
         <span id="results-meta" class="atom-small"></span>
+        <span id="selection-meta" class="atom-small selection-meta" hidden></span>
+        <button id="clear-sel-btn" type="button" class="link-btn" hidden>clear</button>
       </div>
       <div class="results-actions">
-        <a id="export-btn" class="btn" href="/search/bundle">Export bundle</a>
-        <button id="copy-curl-btn" type="button" class="btn">Copy curl</button>
-        <a class="btn" href="/graduation">Graduate to cohort</a>
-        <span id="copy-curl-status" class="atom-small"></span>
+        <span id="api-status" class="atom-small"></span>
+        <a id="download-btn" class="btn" href="/search/bundle">Download bundle</a>
+        <button id="api-btn" type="button" class="btn">Get API call</button>
+        <button id="create-cohort-btn" type="button" class="btn primary" disabled>Create cohort</button>
       </div>
     </div>
+    <div class="table-scroll">
     <table class="experiments-table search-table">
       <thead>
         <tr>
+          <th class="col-select"></th>
           <th class="col-chevron"></th>
           <th class="col-id">Experiment</th>
+          <th class="num col-metric">Trade PnL p5</th>
+          <th class="num col-metric">Trade PnL p50</th>
+          <th class="num col-metric">Trade PnL p95</th>
+          <th class="num col-metric">Drawdown p5</th>
+          <th class="num col-metric">Drawdown p50</th>
+          <th class="num col-metric">Drawdown p95</th>
           <th class="num col-matches">Matches</th>
         </tr>
       </thead>
       <tbody id="search-rows"></tbody>
     </table>
+    </div>
     <p id="search-empty" class="empty" hidden>No matching rounds — widen the filters.</p>
   </section>
+</div>
+
+{# Create-cohort dialog — name + direction/magnitude only. The bar type and the
+   training-window lock are derived from the selected manifest, not asked. #}
+<div class="modal" id="cohort-modal" aria-hidden="true">
+  <div class="modal-panel modal-narrow" role="dialog" aria-label="Create cohort">
+    <div class="modal-head">
+      <span>Create cohort</span>
+      <button type="button" class="icon-close" id="cohort-close" aria-label="Close">✕</button>
+    </div>
+    <div class="modal-body cohort-form">
+      <label class="form-field">
+        <span class="form-label">Name</span>
+        <input type="text" id="cohort-name" placeholder="Name this cohort…" autocomplete="off" spellcheck="false">
+      </label>
+      <div class="form-field">
+        <span class="form-label">Type</span>
+        <div class="type-choice">
+          <label class="target-option"><input type="radio" name="cohort-type" value="direction" checked><span>direction</span></label>
+          <label class="target-option"><input type="radio" name="cohort-type" value="magnitude"><span>magnitude</span></label>
+        </div>
+      </div>
+      <p class="form-note" id="cohort-derived"></p>
+      <div class="form-footer">
+        <button type="button" id="cohort-submit" class="primary">Create cohort</button>
+        <span id="cohort-status" class="atom-small"></span>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -98,6 +138,32 @@ function fmt(v) { return isFinite(v) ? round4(v).toString() : '—'; }
 function escapeHTML(s) {
   return String(s).replace(/[&<>"']/g, c =>
     ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// Landing-table ledger columns: per-round each is the cross-perm p50 over the
+// matching perms (from the server); per-experiment the mean of its rounds.
+const METRIC_KEYS = ['tp_p5', 'tp_p50', 'tp_p95', 'dd_p5', 'dd_p50', 'dd_p95'];
+
+// Treat null/undefined/NaN identically as "no value" (em-dash) — NaN == null is
+// false, so the guards reject it explicitly rather than rendering 'NaN'.
+function hasValue(v) { return v != null && !Number.isNaN(v); }
+
+// Mirror app.py _format_metric: magnitude-adaptive precision, em-dash for null.
+function formatMetric(v) {
+  if (!hasValue(v)) return '—';
+  const m = Math.abs(v);
+  if (m >= 1000) return v.toFixed(0);
+  if (m >= 100) return v.toFixed(1);
+  if (m >= 10) return v.toFixed(2);
+  return v.toFixed(3);
+}
+function metricCell(v) {
+  const cls = !hasValue(v) ? ' null' : (v < 0 ? ' neg' : '');
+  return `<td class="num col-metric${cls}">${formatMetric(v)}</td>`;
+}
+function meanMetric(rows, key) {
+  const vs = rows.map(r => r[key]).filter(hasValue);
+  return vs.length ? vs.reduce((a, b) => a + b, 0) / vs.length : null;
 }
 
 class RangeSlider {
@@ -160,7 +226,10 @@ class RangeSlider {
     const rpct = ((max - this.lo) / range) * 100;
     this.fill.style.left = lpct + '%';
     this.fill.style.width = (rpct - lpct) + '%';
-    this.readout.textContent = `${fmt(min)} — ${fmt(max)}`;
+    // Show the selected range only once this metric is actively narrowed — the
+    // default rail then reads as clean, single-line labels (the full data span
+    // is still on the slider's own min/max bounds below).
+    this.readout.textContent = this.userTouched ? `${fmt(min)} — ${fmt(max)}` : '';
   }
 
   reset() {
@@ -270,9 +339,11 @@ function renderRounds(data) {
     head.className = 'exp-row';
     head.dataset.exp = exp;
     head.innerHTML =
+      `<td class="col-select"></td>` +
       `<td class="col-chevron"><button type="button" class="chevron" data-toggle="${escapeHTML(exp)}" aria-expanded="false" aria-label="Expand"></button></td>` +
       `<td class="col-id"><a href="/experiments/${encodeURIComponent(exp)}">${escapeHTML(exp)}</a>` +
       `<span class="row-count">${rows.length}</span></td>` +
+      METRIC_KEYS.map(k => metricCell(meanMetric(rows, k))).join('') +
       `<td class="num col-matches">${expCount}</td>`;
     tbody.appendChild(head);
 
@@ -280,16 +351,29 @@ function renderRounds(data) {
       const tr = document.createElement('tr');
       tr.className = 'round-row';
       tr.dataset.parent = exp;
+      tr.dataset.key = roundKey(exp, r.round_id);
+      tr.dataset.sha = r.code_sha256;
+      tr.dataset.exp = exp;
+      tr.dataset.round = r.round_id;
+      tr.dataset.matches = r.match_count;
       tr.hidden = true;
       tr.innerHTML =
+        `<td class="col-select"><input type="checkbox" class="round-check" aria-label="Select round ${escapeHTML(r.round_id)} for a cohort"></td>` +
         `<td class="col-chevron"></td>` +
         `<td class="col-id"><a class="mono" href="/experiments/${encodeURIComponent(exp)}/rounds/${encodeURIComponent(r.round_id)}/results">${escapeHTML(r.round_id)}</a></td>` +
+        METRIC_KEYS.map(k => metricCell(r[k])).join('') +
         `<td class="num col-matches">${r.match_count}</td>`;
       tbody.appendChild(tr);
     }
   }
-  meta.textContent = `${expIds.length} experiment${expIds.length === 1 ? '' : 's'} · ${rounds.length} round${rounds.length === 1 ? '' : 's'} · ${totalPerms} permutations`;
+  meta.textContent = `${expIds.length} experiment${expIds.length === 1 ? '' : 's'} · ${rounds.length} round${rounds.length === 1 ? '' : 's'} · ${totalPerms} permutation${totalPerms === 1 ? '' : 's'}`;
+  // Keep the selection to rounds still present in the (re-filtered) results.
+  const present = new Set();
+  document.querySelectorAll('#search-rows tr.round-row').forEach(tr => present.add(tr.dataset.key));
+  for (const k of [...selected]) if (!present.has(k)) selected.delete(k);
+  if (selected.size === 0) lockedSha = null;
   applyExpanded();
+  applySelection();
 }
 
 let refreshTimer = null;
@@ -311,7 +395,7 @@ async function refresh(activeMetric) {
     if (b && b.min != null && b.max != null) sliders[m].setLooBounds(b.min, b.max);
   }
   renderRounds(rd);
-  document.getElementById('export-btn').href = `/search/bundle${tail}`;
+  document.getElementById('download-btn').href = `/search/bundle${tail}`;
 }
 
 async function runSearch() { return refresh(null); }
@@ -321,9 +405,9 @@ function bundleUrl() {
   return `${location.origin}/search/bundle${qs ? '?' + qs : ''}`;
 }
 
-async function copyCurl() {
+async function getApiCall() {
   const cmd = `curl -OJ '${bundleUrl()}'`;
-  const status = document.getElementById('copy-curl-status');
+  const status = document.getElementById('api-status');
   try {
     await navigator.clipboard.writeText(cmd);
     status.textContent = 'copied';
@@ -335,6 +419,58 @@ async function copyCurl() {
   setTimeout(() => { status.textContent = ''; }, 1500);
 }
 
+// ---- Round selection — pick same-manifest rounds for one cohort. A cohort is
+// one manifest (Limen's grouping rule); once a round is picked, every round with
+// a different manifest sha is dimmed and locked out. ----
+const selected = new Set();   // roundKeys
+let lockedSha = null;         // the manifest sha the selection is locked to
+function roundKey(exp, round) { return exp + ' ' + round; }
+
+function applySelection() {
+  document.querySelectorAll('#search-rows tr.round-row').forEach(tr => {
+    const cb = tr.querySelector('.round-check');
+    const isSel = selected.has(tr.dataset.key);
+    cb.checked = isSel;
+    const dim = lockedSha !== null && tr.dataset.sha !== lockedSha && !isSel;
+    tr.classList.toggle('dimmed', dim);
+    cb.disabled = dim;
+  });
+  // An experiment whose every round is locked out is dimmed too.
+  const byExp = {};
+  document.querySelectorAll('#search-rows tr.round-row').forEach(tr => {
+    const e = byExp[tr.dataset.parent] || (byExp[tr.dataset.parent] = { total: 0, dim: 0 });
+    e.total++; if (tr.classList.contains('dimmed')) e.dim++;
+  });
+  document.querySelectorAll('#search-rows tr.exp-row').forEach(er => {
+    const e = byExp[er.dataset.exp];
+    er.classList.toggle('dimmed', !!e && e.total > 0 && e.dim === e.total);
+  });
+  updateSelectionUI();
+}
+
+function updateSelectionUI() {
+  const n = selected.size;
+  document.getElementById('selection-meta').hidden = n === 0;
+  document.getElementById('clear-sel-btn').hidden = n === 0;
+  document.getElementById('selection-meta').textContent =
+    `${n} round${n === 1 ? '' : 's'} selected`;
+  document.getElementById('create-cohort-btn').disabled = n === 0;
+}
+
+function toggleRound(tr, on) {
+  if (on) {
+    if (lockedSha === null) lockedSha = tr.dataset.sha;
+    if (tr.dataset.sha !== lockedSha) { applySelection(); return; }   // locked out — re-sync the stray check
+    selected.add(tr.dataset.key);
+  } else {
+    selected.delete(tr.dataset.key);
+    if (selected.size === 0) lockedSha = null;
+  }
+  applySelection();
+}
+
+function clearSelection() { selected.clear(); lockedSha = null; applySelection(); }
+
 document.querySelectorAll('.filter-block[data-metric]').forEach(block => {
   sliders[block.dataset.metric] = new RangeSlider(block);
 });
@@ -345,7 +481,76 @@ document.getElementById('reset-btn').addEventListener('click', () => {
   updateExpToggleLabel();
   debounceRefresh(null);
 });
-document.getElementById('copy-curl-btn').addEventListener('click', copyCurl);
+document.getElementById('api-btn').addEventListener('click', getApiCall);
+document.getElementById('clear-sel-btn').addEventListener('click', clearSelection);
+
+// ---- Create-cohort dialog ----
+const cohortModal = document.getElementById('cohort-modal');
+function selectedRounds() {
+  const out = [];
+  document.querySelectorAll('#search-rows tr.round-row').forEach(tr => {
+    if (selected.has(tr.dataset.key)) {
+      out.push({ experiment_id: tr.dataset.exp, round_id: tr.dataset.round, matches: parseInt(tr.dataset.matches, 10) || 0 });
+    }
+  });
+  return out;
+}
+function currentFilters() {
+  const f = {};
+  for (const m of METRICS) {
+    const s = sliders[m];
+    if (!s.isFullRange()) { const [lo, hi] = s.values(); f[`${m}_min`] = String(lo); f[`${m}_max`] = String(hi); }
+  }
+  return f;
+}
+function openCohortModal() {
+  if (selected.size === 0) return;
+  const rounds = selectedRounds();
+  const total = rounds.reduce((s, r) => s + r.matches, 0);
+  document.getElementById('cohort-derived').textContent =
+    `${total} decoder${total === 1 ? '' : 's'} from ${rounds.length} round${rounds.length === 1 ? '' : 's'}. ` +
+    `Bar type and the training-window lock are set automatically from the manifest (validation + test bars stay servable).`;
+  document.getElementById('cohort-name').value = '';
+  document.getElementById('cohort-status').textContent = '';
+  cohortModal.classList.add('open');
+  cohortModal.setAttribute('aria-hidden', 'false');
+  document.getElementById('cohort-name').focus();
+}
+function closeCohortModal() {
+  cohortModal.classList.remove('open');
+  cohortModal.setAttribute('aria-hidden', 'true');
+}
+async function submitCohort() {
+  const name = document.getElementById('cohort-name').value.trim();
+  const type = document.querySelector('input[name="cohort-type"]:checked').value;
+  const status = document.getElementById('cohort-status');
+  if (!name) { status.textContent = 'name is required'; status.style.color = 'var(--negative)'; return; }
+  const body = {
+    name, cohort_type: type,
+    rounds: selectedRounds().map(r => ({ experiment_id: r.experiment_id, round_id: r.round_id })),
+    filters: currentFilters(),
+  };
+  status.textContent = 'creating…'; status.style.color = 'var(--ink-mute)';
+  try {
+    const r = await fetch('/cohorts', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    if (r.ok) { window.location.href = '/cohorts'; return; }
+    let msg = `error ${r.status}`;
+    try { const j = await r.json(); msg = j.detail || msg; } catch (_) {}
+    status.textContent = msg; status.style.color = 'var(--negative)';
+  } catch (e) { status.textContent = 'request failed'; status.style.color = 'var(--negative)'; }
+}
+document.getElementById('create-cohort-btn').addEventListener('click', openCohortModal);
+document.getElementById('cohort-submit').addEventListener('click', submitCohort);
+document.getElementById('cohort-name').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); submitCohort(); }
+});
+document.getElementById('cohort-close').addEventListener('click', closeCohortModal);
+cohortModal.addEventListener('click', e => { if (e.target === cohortModal) closeCohortModal(); });
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && cohortModal.classList.contains('open')) closeCohortModal();
+});
 
 // Chevron expand / collapse on the results table.
 document.getElementById('search-rows').addEventListener('click', e => {
@@ -354,6 +559,13 @@ document.getElementById('search-rows').addEventListener('click', e => {
   const id = chev.dataset.toggle;
   if (expanded.has(id)) expanded.delete(id); else expanded.add(id);
   applyExpanded();
+});
+
+// Round checkbox selection.
+document.getElementById('search-rows').addEventListener('change', e => {
+  const cb = e.target.closest('.round-check');
+  if (!cb) return;
+  toggleRound(cb.closest('tr.round-row'), cb.checked);
 });
 
 expToggle.addEventListener('click', e => {

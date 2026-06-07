@@ -1,10 +1,11 @@
-"""Tests for the sensor-to-cohort graduation slice: the operator selects
-winning decoders from one round and writes a cohort definition.
+"""Tests for the cohort lifecycle: the operator selects same-manifest rounds
+from search, creates a named cohort, and browses it (a cohort is a round's
+permutations, possibly filtered).
 
 `furnace/cohorts.py` is pure (no `limen`, no FastAPI), so it is tested
-directly. The `/cohorts` route registration is asserted source-level
-against `app.py` — the codebase's idiom (app.py can't be imported without
-its full runtime; deploy/route invariants are pinned against source text).
+directly. The `/cohorts` route registration is asserted source-level against
+`app.py` — the codebase's idiom (app.py can't be imported without its full
+runtime; deploy/route invariants are pinned against source text).
 """
 
 from __future__ import annotations
@@ -26,7 +27,8 @@ def test_create_cohort_writes_definition_file(tmp_path: Path) -> None:
     """Writing a cohort definition lands one JSON file under
     `<root>/cohorts/`, named by the (folded) cohort_id."""
     cid = cohorts.write_cohort_definition(
-        tmp_path, name="alpha", experiment_dir="/data/x/rounds/0001/limen_output",
+        tmp_path, name="alpha", cohort_type="direction",
+        experiment_dir="/data/x/rounds/0001/limen_output",
         manifest_id=_MANIFEST_ID, permutation_ids=_PIDS,
     )
     files = list((tmp_path / "cohorts").glob("*.json"))
@@ -38,19 +40,37 @@ def test_create_cohort_writes_definition_file(tmp_path: Path) -> None:
 
 def test_cohort_definition_has_required_keys(tmp_path: Path) -> None:
     """The written definition carries exactly the keys a cohort consumer
-    needs: cohort_id, name, experiment_dir, manifest_id, permutation_ids
-    (the ids stored sorted, matching the cohort_id derivation)."""
+    needs: cohort_id, name, cohort_type, experiment_dir, manifest_id,
+    permutation_ids (the ids stored sorted, matching the cohort_id
+    derivation)."""
     cohorts.write_cohort_definition(
-        tmp_path, name="alpha", experiment_dir="/data/x/rounds/0001/limen_output",
+        tmp_path, name="alpha", cohort_type="magnitude",
+        experiment_dir="/data/x/rounds/0001/limen_output",
         manifest_id=_MANIFEST_ID, permutation_ids=_PIDS,
     )
     definition = json.loads(next((tmp_path / "cohorts").glob("*.json")).read_text())
     assert set(definition) == {
-        "cohort_id", "name", "experiment_dir", "manifest_id", "permutation_ids",
+        "cohort_id", "name", "cohort_type", "experiment_dir",
+        "manifest_id", "permutation_ids",
     }
     assert definition["name"] == "alpha"
+    assert definition["cohort_type"] == "magnitude"
     assert definition["manifest_id"] == _MANIFEST_ID
     assert definition["permutation_ids"] == sorted(_PIDS)
+
+
+def test_cohort_type_must_be_direction_or_magnitude(tmp_path: Path) -> None:
+    """cohort_type is the operator's classification; an unknown value fails
+    loud rather than being stored as-is."""
+    try:
+        cohorts.write_cohort_definition(
+            tmp_path, name="x", cohort_type="sideways", experiment_dir="/x",
+            manifest_id=_MANIFEST_ID, permutation_ids=["p1"],
+        )
+    except ValueError as exc:
+        assert "cohort_type" in str(exc)
+    else:
+        raise AssertionError("expected ValueError for an unknown cohort_type")
 
 
 def test_cohort_id_matches_limen_formula() -> None:
@@ -72,7 +92,7 @@ def test_cohort_rejects_duplicate_permutation_ids(tmp_path: Path) -> None:
     mirrors that fail-loud contract rather than silently deduping."""
     try:
         cohorts.write_cohort_definition(
-            tmp_path, name="dup", experiment_dir="/x",
+            tmp_path, name="dup", cohort_type="direction", experiment_dir="/x",
             manifest_id=_MANIFEST_ID, permutation_ids=["a", "b", "a"],
         )
     except ValueError as exc:
@@ -89,7 +109,7 @@ def test_read_manifest_id_from_metadata(tmp_path: Path) -> None:
 
 
 def test_read_manifest_id_missing_fails(tmp_path: Path) -> None:
-    """A round whose metadata has no manifest_id cannot be graduated — the
+    """A round whose metadata has no manifest_id cannot form a cohort — the
     grouping key would be ambiguous, so it fails loud rather than inventing one."""
     (tmp_path / "metadata.json").write_text(json.dumps({"sfd_module": "x"}))
     try:
@@ -100,28 +120,94 @@ def test_read_manifest_id_missing_fails(tmp_path: Path) -> None:
         raise AssertionError("expected ValueError for missing manifest_id")
 
 
-def test_cohorts_route_registered() -> None:
-    """app.py registers the graduation surface: GET /graduation, GET /cohorts,
-    and POST /cohorts (the create handler), and the search page links to it."""
-    app_text = (PKG_DIR / "app.py").read_text(encoding="utf-8")
-    assert '@app.post("/cohorts")' in app_text
-    assert '@app.get("/cohorts")' in app_text
-    assert '@app.get("/graduation"' in app_text
-    assert "cohorts.write_cohort_definition(" in app_text
-    # cohorts is imported from the package (possibly co-imported on one
-    # `from . import ...` line — isort merges/reorders, so match flexibly).
-    assert re.search(r"from \. import [\w, ]*\bcohorts\b", app_text)
-    search_text = (PKG_DIR / "templates" / "search.html").read_text(encoding="utf-8")
-    assert 'href="/graduation"' in search_text
-
-
 def test_list_cohort_definitions(tmp_path: Path) -> None:
     """Listing returns every written definition; empty when none exist."""
     assert cohorts.list_cohort_definitions(tmp_path) == []
     cohorts.write_cohort_definition(
-        tmp_path, name="a", experiment_dir="/x", manifest_id=_MANIFEST_ID,
-        permutation_ids=["p1"],
+        tmp_path, name="a", cohort_type="direction", experiment_dir="/x",
+        manifest_id=_MANIFEST_ID, permutation_ids=["p1"],
     )
     listed = cohorts.list_cohort_definitions(tmp_path)
     assert len(listed) == 1
     assert listed[0]["name"] == "a"
+
+
+def test_delete_cohort_definition(tmp_path: Path) -> None:
+    """Deleting by cohort_id removes the file; deleting an absent id is a
+    no-op that reports False rather than raising."""
+    cid = cohorts.write_cohort_definition(
+        tmp_path, name="a", cohort_type="direction", experiment_dir="/x",
+        manifest_id=_MANIFEST_ID, permutation_ids=["p1"],
+    )
+    assert cohorts.delete_cohort_definition(tmp_path, cid) is True
+    assert cohorts.list_cohort_definitions(tmp_path) == []
+    assert cohorts.delete_cohort_definition(tmp_path, cid) is False
+
+
+def test_delete_cohort_rejects_path_traversal(tmp_path: Path) -> None:
+    """A crafted cohort_id cannot unlink a .json file outside <root>/cohorts/:
+    the deletion resolves by enumerating the cohorts dir, never by building a
+    path from the id, so `../victim` matches nothing and the victim survives."""
+    victim = tmp_path / "victim.json"          # a reachable file outside cohorts/
+    victim.write_text("{}")
+    cohorts.write_cohort_definition(
+        tmp_path, name="a", cohort_type="direction", experiment_dir="/x",
+        manifest_id=_MANIFEST_ID, permutation_ids=["p1"],
+    )
+    assert cohorts.delete_cohort_definition(tmp_path, "../victim") is False
+    assert victim.exists()
+
+
+def test_find_cohort_definition_by_url_id(tmp_path: Path) -> None:
+    """`find_cohort_definition` resolves a cohort by its URL id (the folded
+    cohort_id) without building a path from the input; an unknown id is None."""
+    cid = cohorts.write_cohort_definition(
+        tmp_path, name="a", cohort_type="direction", experiment_dir="/x",
+        manifest_id=_MANIFEST_ID, permutation_ids=["p1"],
+    )
+    url_id = cid.replace(":", "_")
+    found = cohorts.find_cohort_definition(tmp_path, url_id)
+    assert found is not None and found["cohort_id"] == cid
+    assert cohorts.find_cohort_definition(tmp_path, "sha256_deadbeef") is None
+
+
+def test_cohort_display_meta_exposes_url_id_and_type(tmp_path: Path) -> None:
+    """The display meta a cohort page renders carries the URL id (folded
+    cohort_id), the operator type, and the decoder count."""
+    cid = cohorts.write_cohort_definition(
+        tmp_path, name="a", cohort_type="magnitude", experiment_dir="/x",
+        manifest_id=_MANIFEST_ID, permutation_ids=["p1", "p2"],
+    )
+    meta = cohorts.cohort_display_meta(
+        next(c for c in cohorts.list_cohort_definitions(tmp_path) if c["cohort_id"] == cid)
+    )
+    assert meta["url_id"] == cid.replace(":", "_")
+    assert meta["cohort_type"] == "magnitude"
+    assert meta["decoder_count"] == 2
+
+
+def test_cohort_routes_registered() -> None:
+    """app.py registers the cohort surface — the list, create, delete, and the
+    detail/drilldown pages — and the graduation surface is gone."""
+    app_text = (PKG_DIR / "app.py").read_text(encoding="utf-8")
+    assert '@app.get("/cohorts"' in app_text
+    assert '@app.post("/cohorts")' in app_text
+    assert '@app.delete("/cohorts/{cohort_id:path}")' in app_text
+    assert '@app.get("/cohorts/{url_id}"' in app_text
+    assert '@app.get("/cohorts/{url_id}/results"' in app_text
+    assert "cohorts.write_cohort_definition(" in app_text
+    # The graduation view and its route are removed.
+    assert "/graduation" not in app_text
+    # cohorts is imported from the package (isort may merge the import line).
+    assert re.search(r"from \. import [\w, ]*\bcohorts\b", app_text)
+
+
+def test_search_links_to_cohort_create_not_graduation() -> None:
+    """The search page's cohort affordance is the create-cohort control, and
+    the dead /graduation link is gone."""
+    search_text = (PKG_DIR / "templates" / "search.html").read_text(encoding="utf-8")
+    assert 'id="create-cohort-btn"' in search_text
+    assert "/graduation" not in search_text
+    # The cohorts table links each row into its detail page.
+    cohorts_text = (PKG_DIR / "templates" / "cohorts.html").read_text(encoding="utf-8")
+    assert "/cohorts/{{ c.url_id }}" in cohorts_text

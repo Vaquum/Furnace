@@ -1102,81 +1102,170 @@ def create_app(root: Path) -> FastAPI:
     _cohort_handlers = (cohort_input, cohort_predict)
     del _cohort_handlers
 
-    @app.get("/graduation", response_class=HTMLResponse)
-    def graduation_page(request: Request):
-        # The graduation view: pick an experiment + round from search, select
-        # the winning permutations, name a cohort, and POST it to /cohorts.
-        # One manifest per cohort (Limen's grouping rule).
-        return templates.TemplateResponse(
-            request,
-            "graduation.html",
-            {
-                "experiments": _all_experiments(root),
-                "cohorts": cohorts.list_cohort_definitions(root),
-            },
-        )
-
-    @app.get("/cohorts")
-    def cohorts_list():
-        return JSONResponse({"cohorts": cohorts.list_cohort_definitions(root)})
+    @app.get("/cohorts", response_class=HTMLResponse)
+    def cohorts_page(request: Request):
+        # COHORTS — a JOBS-style table of the graduated cohorts: one row per
+        # cohort with its operator-set type, the derived bar type and training
+        # window, and the decoder count.
+        metas = [cohorts.cohort_display_meta(c) for c in cohorts.list_cohort_definitions(root)]
+        return templates.TemplateResponse(request, "cohorts.html", {"cohorts": metas})
 
     @app.post("/cohorts")
     async def create_cohort(request: Request):
-        # Graduate selected permutations of one round into a named cohort.
-        # The manifest_id (the cohort grouping key) is read from the round's
-        # own metadata.json — never trusted from the client — so a cohort's
-        # identity is anchored to the experiment artefacts.
+        # Create a cohort from the rounds selected in search. The permutations
+        # are computed server-side from the live filter (never trusted from the
+        # client), and every selected round must share one manifest (Limen's
+        # grouping rule) — enforced via the manifest_id read from each round's
+        # own metadata.json.
         raw = await request.json()
         if not isinstance(raw, dict):
             raise HTTPException(400, "request body must be a JSON object")
         body = cast(dict[str, object], raw)
-        experiment_id = body.get("experiment_id")
-        round_id = body.get("round_id")
         name = body.get("name")
-        perms = body.get("permutation_ids")
-        if not isinstance(experiment_id, str) or not isinstance(round_id, str):
-            raise HTTPException(400, "experiment_id and round_id must be strings")
+        cohort_type = body.get("cohort_type")
+        rounds_raw = body.get("rounds")
+        filters_raw = body.get("filters")
         if not isinstance(name, str) or not name.strip():
             raise HTTPException(400, "name is required")
-        if not isinstance(perms, list) or not perms:
-            raise HTTPException(400, "permutation_ids must be a non-empty list")
-        # Validate element types rather than coercing with str(): a raw `[null]`
-        # / `[{}]` would otherwise become the literal ids 'None' / '{...}', making
-        # cohort identity depend on Python stringification instead of the client
-        # contract. Permutation ids are str or int (bool is an int subclass — reject).
-        permutation_ids: list[str] = []
-        for p in cast(list[object], perms):
-            if isinstance(p, bool) or not isinstance(p, (str, int)):
-                raise HTTPException(400, "permutation_ids entries must be strings or integers")
-            entry = str(p)
-            if not entry:
-                raise HTTPException(400, "permutation_ids entries must be non-empty")
-            permutation_ids.append(entry)
-        # Mirror Limen's Cohort uniqueness contract — a duplicate id would hash
-        # to a cohort_id Limen could never produce. Reject (fail loud) rather
-        # than silently dedupe, since /cohorts is a public endpoint.
-        if len(set(permutation_ids)) != len(permutation_ids):
-            raise HTTPException(400, "permutation_ids must be unique")
-        limen_output = _cohort_limen_output(experiment_id, round_id)
+        if not isinstance(cohort_type, str) or cohort_type not in ("direction", "magnitude"):
+            raise HTTPException(400, "cohort_type must be 'direction' or 'magnitude'")
+        if not isinstance(rounds_raw, list) or not rounds_raw:
+            raise HTTPException(400, "rounds must be a non-empty list")
+        wanted: set[tuple[str, str]] = set()
+        for item in cast(list[object], rounds_raw):
+            if not isinstance(item, dict):
+                raise HTTPException(400, "each round must be {experiment_id, round_id}")
+            d = cast(dict[str, object], item)
+            exp_id, round_id = d.get("experiment_id"), d.get("round_id")
+            if not isinstance(exp_id, str) or not isinstance(round_id, str):
+                raise HTTPException(400, "experiment_id and round_id must be strings")
+            wanted.add((exp_id, round_id))
+        filter_params: dict[str, str | None] = (
+            {str(k): str(v) for k, v in cast(dict[object, object], filters_raw).items()}
+            if isinstance(filters_raw, dict) else {}
+        )
+        filters = _parse_filter_params(filter_params)
+        # Every selected round must share one manifest; the first round's dir is
+        # the representative for manifest-derived metadata (bar type / window).
+        manifest_ids: set[str] = set()
+        first_dir: Path | None = None
+        for exp_id, round_id in sorted(wanted):
+            limen_output = _cohort_limen_output(exp_id, round_id)
+            if first_dir is None:
+                first_dir = limen_output
+            try:
+                manifest_ids.add(cohorts.read_manifest_id(limen_output))
+            except (ValueError, FileNotFoundError) as exc:
+                raise HTTPException(400, f"{exp_id}/{round_id}: {exc}") from exc
+        if len(manifest_ids) != 1 or first_dir is None:
+            raise HTTPException(400, "selected rounds must share one manifest")
+        perms_by_round = _matching_permutation_ids(root, filters, wanted)
+        permutation_ids = sorted({p for ps in perms_by_round.values() for p in ps})
+        if not permutation_ids:
+            raise HTTPException(400, "no matching permutations in the selected rounds")
         try:
-            manifest_id = cohorts.read_manifest_id(limen_output)
             cohort_id = cohorts.write_cohort_definition(
                 root,
                 name=name.strip(),
-                experiment_dir=str(limen_output),
-                manifest_id=manifest_id,
+                cohort_type=cohort_type,
+                experiment_dir=str(first_dir),
+                manifest_id=next(iter(manifest_ids)),
                 permutation_ids=permutation_ids,
             )
-        except (ValueError, FileNotFoundError) as exc:
+        except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
-        return JSONResponse({
-            "cohort_id": cohort_id,
-            "name": name.strip(),
-            "permutation_ids": sorted(permutation_ids),
-        })
+        return JSONResponse(
+            {"cohort_id": cohort_id, "name": name.strip(), "decoder_count": len(permutation_ids)}
+        )
 
-    _graduation_handlers = (graduation_page, cohorts_list, create_cohort)
-    del _graduation_handlers
+    @app.delete("/cohorts/{cohort_id:path}")
+    def delete_cohort(cohort_id: str):
+        if not cohorts.delete_cohort_definition(root, cohort_id):
+            raise HTTPException(404, "cohort not found")
+        return JSONResponse({"deleted": cohort_id})
+
+    # ---- Cohort detail — a cohort is a round's permutations (possibly
+    # filtered), so its pages mirror the round/experiment views, computed over
+    # the cohort's own permutation_ids. The URL segment is the ':'-folded id. ----
+    def _cohort_or_404(url_id: str) -> dict[str, object]:
+        definition = cohorts.find_cohort_definition(root, url_id)
+        if definition is None:
+            raise HTTPException(404, "cohort not found")
+        return definition
+
+    def _cohort_round_dir(definition: dict[str, object]) -> Path:
+        # experiment_dir is the round's limen_output dir; its parent is the
+        # round dir that _round_csv_path and the manifest resolve against.
+        experiment_dir = definition.get("experiment_dir")
+        if not isinstance(experiment_dir, str):
+            raise HTTPException(404, "cohort has no experiment_dir")
+        return Path(experiment_dir).parent
+
+    def _cohort_perms(definition: dict[str, object]) -> set[str]:
+        perms = definition.get("permutation_ids")
+        return {str(p) for p in cast(list[object], perms)} if isinstance(perms, list) else set()
+
+    @app.get("/cohorts/{url_id}", response_class=HTMLResponse)
+    def cohort_page(request: Request, url_id: str):
+        definition = _cohort_or_404(url_id)
+        round_dir = _cohort_round_dir(definition)
+        csv_path = _round_csv_path(round_dir)
+        manifest_path = round_dir / "manifest.yml"
+        frozen_manifest = manifest_path.read_text() if manifest_path.exists() else ""
+        return templates.TemplateResponse(
+            request,
+            "cohort.html",
+            {
+                "cohort": cohorts.cohort_display_meta(definition),
+                "cohorts": [cohorts.cohort_display_meta(c)
+                            for c in cohorts.list_cohort_definitions(root)],
+                "stats": (_metric_percentiles(csv_path, _cohort_perms(definition))
+                          if csv_path.exists() else []),
+                "frozen_manifest": frozen_manifest,
+            },
+        )
+
+    @app.get("/cohorts/{url_id}/results", response_class=HTMLResponse)
+    def cohort_results_page(request: Request, url_id: str):
+        definition = _cohort_or_404(url_id)
+        return templates.TemplateResponse(
+            request,
+            "cohort_results.html",
+            {
+                "cohort": cohorts.cohort_display_meta(definition),
+                # `id` is the perm hash — a string identity for a cohort, not the
+                # round view's (nulled) Int64; render it as text.
+                "columns": [{"key": c, "label": _display_label(c),
+                             "is_int": c in _RESULTS_INT_COLS and c != "id"}
+                            for c in _RESULTS_COLUMNS],
+            },
+        )
+
+    @app.get("/cohorts/{url_id}/results.json")
+    def cohort_results_json(
+        url_id: str, offset: int = 0, limit: int = 40,
+        sort: str | None = None, direction: str = "asc",
+    ):
+        definition = _cohort_or_404(url_id)
+        return JSONResponse(_compute_results_page(
+            _cohort_round_dir(definition), offset, limit, sort, direction,
+            perms=_cohort_perms(definition)))
+
+    @app.get("/cohorts/{url_id}/csv")
+    def cohort_csv(url_id: str):
+        definition = _cohort_or_404(url_id)
+        csv_path = _round_csv_path(_cohort_round_dir(definition))
+        headers = {"Content-Disposition": f'attachment; filename="{url_id}.csv"'}
+        if not csv_path.exists():
+            return PlainTextResponse("", media_type="text/csv", headers=headers)
+        df = pl.read_csv(csv_path, infer_schema_length=200)
+        if "id" in df.columns:
+            df = df.filter(pl.col("id").cast(pl.Utf8, strict=False).is_in(list(_cohort_perms(definition))))
+        return PlainTextResponse(df.write_csv(), media_type="text/csv", headers=headers)
+
+    _cohort_view_handlers = (cohorts_page, create_cohort, delete_cohort, cohort_page,
+                             cohort_results_page, cohort_results_json, cohort_csv)
+    del _cohort_view_handlers
 
     @app.get("/search", response_class=HTMLResponse)
     def search_page(request: Request, experiment_name: str | None = None):
@@ -1277,6 +1366,7 @@ def _display_label(col: str) -> str:
 
 def _compute_results_page(
     round_dir: Path, offset: int, limit: int, sort: str | None, direction: str,
+    perms: set[str] | None = None,
 ) -> dict:
     csv_path = _round_csv_path(round_dir)
     if not csv_path.exists():
@@ -1289,10 +1379,16 @@ def _compute_results_page(
         return {"rows": [], "total": 0}
     df = df.select(present)
 
+    # Cohort mode: keep only the cohort's permutation ids, and keep `id` as the
+    # string hash it is (the perm identity, shown in the table). Round mode is
+    # left exactly as before — `id` follows the legacy _RESULTS_INT_COLS cast.
+    if perms is not None and "id" in present:
+        df = df.filter(pl.col("id").cast(pl.Utf8, strict=False).is_in(list(perms)))
+
     casts = []
     for c in present:
         if c in _RESULTS_INT_COLS:
-            if df[c].dtype != pl.Int64:
+            if perms is None and df[c].dtype != pl.Int64:
                 casts.append(pl.col(c).cast(pl.Float64, strict=False).cast(pl.Int64, strict=False))
         else:
             if df[c].dtype not in (pl.Float32, pl.Float64):
@@ -1343,11 +1439,15 @@ _STATS_PERCENTILES: tuple[tuple[str, float], ...] = (
 )
 
 
-def _metric_percentiles(csv_path: Path) -> list[dict]:
+def _metric_percentiles(csv_path: Path, perms: set[str] | None = None) -> list[dict]:
     """Each metric column's cross-permutation p5/p25/p50/p75/p95 from a
-    round's results CSV. Shared by the round page (shown as-is) and the
-    experiment page (averaged across the experiment's rounds)."""
+    round's results CSV. Shared by the round page (shown as-is), the
+    experiment page (averaged across the experiment's rounds), and the cohort
+    page — which passes ``perms`` to restrict the distribution to the cohort's
+    own permutation ids (a cohort is a round's perms, possibly filtered)."""
     df = pl.read_csv(csv_path, infer_schema_length=200)
+    if perms is not None and "id" in df.columns:
+        df = df.filter(pl.col("id").cast(pl.Utf8, strict=False).is_in(list(perms)))
     out: list[dict] = []
     for col in _STATS_METRICS:
         if col not in df.columns:
@@ -1652,14 +1752,51 @@ def _matching_rounds(root: Path, filters: _FilterMap, experiment_names: list[str
     if not paths:
         return []
     lf = pl.scan_parquet([str(p) for p in paths])
+    # Per matching round: the count, the manifest sha (constant per round — the
+    # same-manifest key the cohort UI dims against), and each landing-table
+    # ledger metric as the cross-permutation p50 *over the matching perms*
+    # (mirroring _round_analytics, but filter-aware). NaN -> null first so the
+    # quantile ignores it, matching the round viewer's drop_nans, and
+    # quantile(0.50, "nearest") — NOT .median() (linear) — so a round's p50 here
+    # equals the same round's p50 on the landing page / round viewer.
+    aggs: list[pl.Expr] = [
+        pl.len().alias("match_count"),
+        pl.first("code_sha256").alias("code_sha256"),
+    ]
+    for key, col in _ANALYTIC_COLUMNS.items():
+        aggs.append(pl.col(col).fill_nan(None).quantile(0.50, interpolation="nearest").alias(key))
     df = (
         _apply_search_filters(lf, filters)
         .group_by(["experiment_id", "round_id"])
-        .agg(pl.len().alias("match_count"))
+        .agg(aggs)
         .sort(["match_count", "experiment_id", "round_id"], descending=[True, False, True])
         .collect()
     )
     return df.to_dicts()
+
+
+def _matching_permutation_ids(
+    root: Path, filters: _FilterMap, wanted: set[tuple[str, str]]
+) -> dict[tuple[str, str], list[str]]:
+    """The matching permutation_ids of each (experiment_id, round_id) in
+    ``wanted``, under the current filters — the perms that go into a cohort
+    built from those rounds."""
+    exps = sorted({e for e, _ in wanted})
+    paths = _ensure_indices(root, exps)
+    if not paths:
+        return {}
+    lf = pl.scan_parquet([str(p) for p in paths])
+    df = (
+        _apply_search_filters(lf, filters)
+        .select(["experiment_id", "round_id", "permutation_id"])
+        .collect()
+    )
+    out: dict[tuple[str, str], list[str]] = {}
+    for row in df.iter_rows(named=True):
+        key = (str(row["experiment_id"]), str(row["round_id"]))
+        if key in wanted:
+            out.setdefault(key, []).append(str(row["permutation_id"]))
+    return out
 
 
 def _build_search_bundle(root: Path, filters: _FilterMap, experiment_names: list[str] | None) -> bytes:

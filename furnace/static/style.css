@@ -7,14 +7,6 @@
    and the-lab read as one and the same tool.
 */
 
-/* ---- Cross-document view transitions (Chrome 126+, Safari 18.2+) ---- */
-@view-transition { navigation: auto; }
-::view-transition-old(root),
-::view-transition-new(root) {
-  animation-duration: 220ms;
-  animation-timing-function: cubic-bezier(.2, .6, .2, 1);
-}
-
 :root {
   --font-sans: "IBM Plex Sans", sans-serif;
   --font-mono: "IBM Plex Mono", monospace;
@@ -664,6 +656,11 @@ button, .btn {
   cursor: pointer;
   transition: color var(--motion), border-color var(--motion), background var(--motion), opacity var(--motion);
 }
+/* The `display` above is an author rule, so it beats the UA `[hidden]`
+   rule (author origin wins over UA) and a `<button hidden>` would stay
+   visible — restore the hide for every button/.btn that carries `hidden`
+   (e.g. the results-header `clear` button before any round is selected). */
+button[hidden], .btn[hidden] { display: none; }
 button:hover, .btn:hover {
   color: var(--accent);
   border-color: var(--accent);
@@ -1560,8 +1557,7 @@ table.results-table tbody tr.row-enter {
   margin-top: 0;
 }
 .range-slider input[type="range"]:focus-visible::-webkit-slider-thumb {
-  outline: 1px solid var(--accent);
-  outline-offset: 2px;
+  box-shadow: 0 0 0 2px var(--paper), 0 0 0 4px var(--accent);
 }
 .range-slider input[type="range"]::-moz-range-thumb {
   pointer-events: all;
@@ -1583,8 +1579,7 @@ table.results-table tbody tr.row-enter {
   background: var(--accent);
 }
 .range-slider input[type="range"]:focus-visible::-moz-range-thumb {
-  outline: 1px solid var(--accent);
-  outline-offset: 2px;
+  box-shadow: 0 0 0 2px var(--paper), 0 0 0 4px var(--accent);
 }
 
 table.search-results-table { width: 100%; border-collapse: collapse; }
@@ -1624,8 +1619,8 @@ p.empty {
   align-items: flex-start;
 }
 .search-filters {
-  flex: 0 0 256px;
-  width: 256px;
+  flex: 0 0 300px;
+  width: 300px;
   position: sticky;
   /* Clear the 61px sticky top control bar (same offset idiom as .modal) so the
      rail never slides under it while the results scroll. */
@@ -1636,6 +1631,9 @@ p.empty {
      reachable (a sticky rail otherwise pins and clips its own bottom). */
   max-height: calc(100vh - 61px - 2 * var(--gap-l));
   overflow-y: auto;
+  /* Reserve the scrollbar's width so the slider bounds never sit under it. */
+  scrollbar-gutter: stable;
+  padding-right: var(--gap-s);
   display: flex;
   flex-direction: column;
   gap: var(--gap-m);
@@ -1669,21 +1667,25 @@ p.empty {
 
 .filter-block { display: flex; flex-direction: column; gap: 5px; }
 .filter-top {
-  display: flex; align-items: baseline; justify-content: space-between; gap: var(--gap-s);
+  display: flex; align-items: flex-start; justify-content: space-between; gap: var(--gap-s);
 }
-/* The label may wrap (long ledger names like edge_per_signal_bps_p50 in a
-   tight rail) so the distinguishing percentile suffix never gets clipped;
-   the readout holds its line on the right. */
+/* A long ledger name (edge_per_signal_bps_p50) only wraps when its metric is
+   actively narrowed and the selected-range readout shares the row. The label
+   carries a <wbr> after every underscore, so any wrap lands on an underscore
+   boundary (the percentile suffix stays whole) — never mid-token. */
 .filter-top .filter-label {
   letter-spacing: 0;
   min-width: 0;
   white-space: normal;
   overflow: visible;
   text-overflow: clip;
-  overflow-wrap: anywhere;
+  overflow-wrap: normal;
+  word-break: normal;
   line-height: 1.25;
 }
-.filter-top .filter-readout { white-space: nowrap; font-size: var(--t-small); flex: 0 0 auto; }
+.filter-top .filter-readout {
+  white-space: nowrap; font-size: var(--t-small); flex: 0 0 auto; line-height: 1.25;
+}
 .filter-bottom { display: flex; align-items: center; gap: var(--gap-s); }
 .filter-bottom .range-slider { flex: 1 1 auto; min-width: 0; }
 .filter-bottom .bound {
@@ -1708,6 +1710,116 @@ table.experiments-table.search-table th.col-matches,
 table.experiments-table.search-table td.col-matches {
   width: 110px; text-align: right;
   font-variant-numeric: tabular-nums slashed-zero;
+}
+/* Round-selection column + the locked-out (different-manifest) dimming. */
+table.experiments-table.search-table th.col-select,
+table.experiments-table.search-table td.col-select {
+  width: 34px; padding-left: 0; padding-right: 0; text-align: center;
+}
+table.experiments-table.search-table tr.dimmed { opacity: 0.34; }
+table.experiments-table.search-table tr.dimmed td.col-id a { pointer-events: none; }
+.round-check {
+  appearance: none; -webkit-appearance: none;
+  width: 14px; height: 14px; margin: 0; vertical-align: middle;
+  border: 1px solid var(--ink-mute); border-radius: 2px;
+  background: transparent; cursor: pointer; position: relative;
+}
+.round-check:checked { background: var(--accent); border-color: var(--accent); }
+.round-check:checked::after {
+  content: ""; position: absolute; left: 4px; top: 1px;
+  width: 4px; height: 8px; border: solid var(--paper);
+  border-width: 0 2px 2px 0; transform: rotate(45deg);
+}
+.round-check:disabled { cursor: not-allowed; opacity: 0.5; }
+.selection-meta { color: var(--accent); }
+
+/* ---- Create-cohort dialog ---- */
+/* Centre the cohort dialog as a compact card (the bundle/api modal stays a
+   full-bleed panel). The id raises specificity over the base .modal-panel,
+   which otherwise wins on source order and stretches the panel full-width. */
+#cohort-modal.open { justify-content: center; align-items: center; }
+#cohort-modal .modal-panel {
+  flex: 0 0 auto;
+  width: 520px;
+  max-width: 92vw;
+  margin: 0;
+}
+.cohort-form { padding: var(--gap-l); display: flex; flex-direction: column; gap: var(--gap-m); }
+.form-field { display: flex; flex-direction: column; gap: var(--gap-s); }
+.form-label {
+  font-family: var(--font-mono); font-size: var(--t-micro); letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--ink-mute); font-weight: 500;
+}
+/* The name field takes the shared input[type=text] chrome — no override. The
+   type chooser reuses the create-modal .target-option radio idiom, laid out as
+   a horizontal pair (a fixed binary, unlike the create modal's variable list). */
+.type-choice { display: flex; gap: var(--gap-l); }
+.form-note { font-family: var(--font-sans); font-size: var(--t-small); color: var(--ink-mute); margin: 0; line-height: 1.45; }
+.form-footer {
+  display: flex; align-items: center; gap: var(--gap-m); flex-wrap: wrap;
+  margin-top: var(--gap-s); padding-top: var(--gap-m); border-top: 1px solid var(--rule);
+}
+.form-footer #cohort-submit { flex: 0 0 auto; }
+/* A long create error (e.g. a non-graduatable round) wraps onto its own full
+   line under the button and breaks long tokens — never overflowing the card. */
+#cohort-status { flex: 1 1 100%; min-width: 0; overflow-wrap: anywhere; }
+
+/* ---- COHORTS table ---- */
+table.experiments-table.cohorts-table th.col-cohort-type,
+table.experiments-table.cohorts-table td.col-cohort-type { width: 128px; }
+table.experiments-table.cohorts-table th.col-bar,
+table.experiments-table.cohorts-table td.col-bar { width: 150px; }
+table.experiments-table.cohorts-table th.col-window,
+table.experiments-table.cohorts-table td.col-window { width: 232px; }
+table.experiments-table.cohorts-table th.col-decoders,
+table.experiments-table.cohorts-table td.col-decoders {
+  width: 104px; text-align: right; font-variant-numeric: tabular-nums slashed-zero;
+}
+/* Cohort type — a categorical label in the app's .state idiom (plain mono, no
+   pill); neutral colour, since neither type is privileged over the other. */
+.cohort-type {
+  font-family: var(--font-mono); font-size: var(--t-small); font-weight: 500;
+  letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-soft);
+}
+.cohorts-table td.col-bar .mono,
+.cohorts-table td.col-window .mono { font-family: var(--font-mono); font-size: var(--t-code); color: var(--ink-soft); }
+.cohorts-table .null { color: var(--ink-mute); }
+table.experiments-table.cohorts-table th.col-arrow,
+table.experiments-table.cohorts-table td.col-arrow { width: 340px; white-space: nowrap; }
+.arrow-path {
+  font-family: var(--font-mono); font-size: var(--t-code); color: var(--ink-soft);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 290px; display: inline-block; vertical-align: middle;
+}
+.copy-arrow {
+  width: 22px; height: 22px; padding: 0; margin-left: var(--gap-s);
+  border: 0; background: transparent; color: var(--ink-mute);
+  font-family: var(--font-mono); font-size: 14px; line-height: 1; cursor: pointer;
+  vertical-align: middle; transition: color var(--motion);
+}
+.copy-arrow:hover { color: var(--accent); }
+.copy-arrow.copied { color: var(--positive); }
+
+/* Cohort perm-by-perm drilldown: the `id` column is the perm hash, not the
+   round view's narrow Int64 — widen it, left-align it, mono, and ellipsise the
+   64-char hash (the full value rides in the cell's title on hover). */
+table.results-table thead th.col-perm-id,
+table.results-table tbody td.col-perm-id {
+  width: 128px;
+  text-align: left;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Fixed-width data tables overflow a narrow viewport. On the operator's wide
+   screen the wrapper stays inert, so the table keeps its viewport-sticky header
+   and fills the width; only once the viewport is too narrow for the table does
+   the wrapper take over with a horizontal scrollbar — so the page itself never
+   scrolls sideways (sticky is traded for the scroll there, the lesser evil). */
+@media (max-width: 1320px) {
+  .table-scroll { overflow-x: auto; }
 }
 
 /* ---- Modal — the-lab QC-modal idiom: opaque takeover + raised panel ---- */
