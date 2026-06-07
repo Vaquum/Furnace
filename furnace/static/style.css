@@ -1627,7 +1627,10 @@ p.empty {
   flex: 0 0 256px;
   width: 256px;
   position: sticky;
-  top: var(--gap-l);
+  /* Clear the 61px sticky top control bar (same offset idiom as .modal) so the
+     rail never slides under it while the results scroll. */
+  top: calc(61px + var(--gap-l));
+  align-self: flex-start;
   display: flex;
   flex-direction: column;
   gap: var(--gap-m);
@@ -1764,14 +1767,6 @@ table.experiments-table.search-table td.col-matches {
   flex: 1 1 auto;
   overflow: hidden;
   padding: 0;
-}
-/* Search modal — /search embedded nav-less, the iframe fills the body. */
-.search-frame {
-  display: block;
-  width: 100%;
-  height: 100%;
-  border: 0;
-  background: var(--paper);
 }
 
 /* ---- Creation modal — target chooser (left) + round args (right) ---- */

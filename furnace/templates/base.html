@@ -23,8 +23,8 @@
      readout, then the persistent search and create (+) icons. JOBS, search,
      and create are global control — present on every view — so the operator
      never loses home / search / create by switching view. ?embed=1 drops the
-     bar and the modals so a page can be shown inside an in-app modal iframe
-     (the search modal) without them. #}
+     bar and the create modal so a page can be embedded chrome-less (e.g. inside
+     a sister-app iframe) without them. #}
   {% if not request.query_params.get('embed') %}
   <header class="topbar">
     <div class="topbar-left">
@@ -67,9 +67,10 @@
   {% block content %}{% endblock %}
   </main>
 
-  {# Global create + search modals — opened by the persistent control-bar
-     icons, so creating an experiment / round or searching works from every
-     view, not just the jobs page. Dropped in ?embed=1 (no control bar). #}
+  {# Global create modal — opened by the persistent control-bar (+) icon, so
+     creating an experiment / round works from every view, not just the jobs
+     page. (Search is a full page, reached by the search icon link above.)
+     Dropped in ?embed=1 (no control bar). #}
   {% if not request.query_params.get('embed') %}
   <div class="modal" id="create-modal" aria-hidden="true">
     <div class="modal-panel" role="dialog" aria-label="Create a round">
