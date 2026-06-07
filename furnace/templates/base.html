@@ -38,12 +38,12 @@
          search and + never move. #}
       <div class="bar-icons">
         {% block bar_icons %}{% endblock %}
-        <button type="button" id="open-search" class="bar-icon" title="Search permutations" aria-label="Search permutations">
+        <a href="/search" id="open-search" class="bar-icon" title="Search permutations" aria-label="Search permutations">
           <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
             <circle cx="7" cy="7" r="4.25"></circle>
             <line x1="10.2" y1="10.2" x2="13.75" y2="13.75"></line>
           </svg>
-        </button>
+        </a>
         <button type="button" id="open-create" class="bar-icon" title="New experiment or round" aria-label="New experiment or round">+</button>
       </div>
       {% block meta %}{% endblock %}
@@ -118,44 +118,9 @@
     </div>
   </div>
 
-  <div class="modal" id="search-modal" aria-hidden="true">
-    <div class="modal-panel" role="dialog" aria-label="Search permutations">
-      <div class="modal-head">
-        <span>Search</span>
-        <button type="button" class="icon-close" id="search-close" aria-label="Close">✕</button>
-      </div>
-      <div class="modal-body">
-        {# /search rendered nav-less inside the modal; loaded lazily on first open. #}
-        <iframe class="search-frame" id="search-frame" title="Search permutations" data-src="/search?embed=1"></iframe>
-      </div>
-    </div>
-  </div>
-
   <script>window.STARTER_MANIFEST = {{ starter_manifest | tojson }};</script>
   <script src="/static/manifest_editor.js?v={{ asset_version }}"></script>
   <script src="/static/create_modal.js?v={{ asset_version }}"></script>
-  <script>
-  // Search modal — /search in an iframe, loaded lazily on first open.
-  (function () {
-    const searchModal = document.getElementById('search-modal');
-    const searchFrame = document.getElementById('search-frame');
-    function openSearch() {
-      if (!searchFrame.src) searchFrame.src = searchFrame.dataset.src;
-      searchModal.classList.add('open');
-      searchModal.setAttribute('aria-hidden', 'false');
-    }
-    function closeSearch() {
-      searchModal.classList.remove('open');
-      searchModal.setAttribute('aria-hidden', 'true');
-    }
-    document.getElementById('open-search').addEventListener('click', openSearch);
-    document.getElementById('search-close').addEventListener('click', closeSearch);
-    searchModal.addEventListener('click', (e) => { if (e.target === searchModal) closeSearch(); });
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && searchModal.classList.contains('open')) closeSearch();
-    });
-  })();
-  </script>
   {% endif %}
 </body>
 </html>

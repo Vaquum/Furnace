@@ -158,15 +158,15 @@ def test_round_viewer_has_experiment_and_round_selectors() -> None:
     assert '"experiments": _all_experiments(root)' in app
 
 
-def test_search_modal_is_global_in_base() -> None:
-    """The search icon and the modal it opens — an iframe of /search?embed=1,
-    which drops its own nav chrome — are part of the shared layout, so
-    search is reachable from every view, not just the jobs page."""
+def test_search_is_a_global_link_in_base() -> None:
+    """The search icon is a global link to the full /search page (the old
+    nav-less modal/iframe is gone), part of the shared layout so search is
+    reachable from every view, not just the jobs page."""
     base = (TEMPLATES / "base.html").read_text(encoding="utf-8")
-    assert 'id="search-modal"' in base
-    assert 'id="open-search"' in base
-    assert "/search?embed=1" in base
-    assert 'id="search-modal"' not in (TEMPLATES / "jobs.html").read_text(encoding="utf-8")
+    assert '<a href="/search" id="open-search"' in base
+    assert 'id="search-modal"' not in base
+    assert "/search?embed=1" not in base
+    assert 'id="open-search"' not in (TEMPLATES / "jobs.html").read_text(encoding="utf-8")
 
 
 def test_search_index_build_uses_unique_temp() -> None:
