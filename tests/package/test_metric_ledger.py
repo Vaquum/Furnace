@@ -173,34 +173,32 @@ def test_search_required_cols_demand_every_metric_plus_id() -> None:
 
 
 def test_ensure_round_index_invalidates_stale_schema_parquets() -> None:
-    """The metric set changed in S14 (the `*_per_bar` derived columns from
-    the prior search index are gone). Any `.index.parquet` written by the
-    old code carries that old schema; the new `_compute_search_bounds`
-    selecting `pl.col("precision")` would crash with `ColumnNotFoundError`
-    on a stale cache hit. Validate the cached parquet's schema against
-    the current `_SEARCH_REQUIRED_COLS` before trusting the mtime — if
-    the schema doesn't carry every required metric, fall through and
-    rebuild from the CSV."""
+    """A cached `.index.parquet` is trusted only when its schema is *exactly*
+    the current `_INDEX_SCHEMA`. Exact match (not a subset) rebuilds on any
+    column-set or dtype drift — a retired metric, or the old Int64
+    `permutation_id` — so a stale parquet never feeds the cross-round
+    `scan_parquet`. The prior subset check tested `_SEARCH_REQUIRED_COLS`,
+    which carries `id`, against an index that renames `id` to `permutation_id`,
+    so it never held and every search rebuilt every round."""
     text = (PKG_DIR / "app.py").read_text(encoding="utf-8")
-    # The schema check must guard the cache-hit return so an mtime-fresh
-    # but stale-schema parquet is rejected.
-    assert "pl.read_parquet_schema(idx_path)" in text
-    assert "_SEARCH_REQUIRED_COLS.issubset(pl.read_parquet_schema" in text
+    # The cache-hit return is guarded by an exact schema-equality check.
+    assert "pl.read_parquet_schema(idx_path)) == _INDEX_SCHEMA" in text
+    # _INDEX_SCHEMA pins permutation_id as String (Limen round_ids are hex).
+    assert '"permutation_id": pl.String()' in text
 
 
 def test_ensure_round_index_excludes_no_signal_permutations() -> None:
-    """The prior code's `.filter(pl.col("_bt") > 0)` did double duty:
-    (a) guard per-bar divisions from div-by-zero; (b) exclude permutations
-    whose backtest never ran (zero-signal / errored). The ledger refactor
-    obsoletes (a) but (b) still applies — Limen >= 3.2.1 writes NaN ledger
-    columns for permutations the backtest skipped, and NaN rows in
-    `.index.parquet` would have to be coped with by the search UI's range
-    sliders. Use `edge_per_signal_bps_p50` as the canary: a permutation
-    with no tradable signals leaves every ledger percentile NaN."""
+    """No-signal permutations are excluded by an `is_not_null & is_not_nan`
+    guard on the `backtest_edge_per_signal_bps_p50` canary (a permutation with
+    no tradable signals leaves every ledger percentile NaN). The canary is cast
+    to Float64 *first*: a round where every permutation is no-signal writes the
+    whole column as the text "nan", which `read_csv` infers as a str column, and
+    `is_not_nan` is undefined on str — the cast is what stops that 500ing
+    /search."""
     text = (PKG_DIR / "app.py").read_text(encoding="utf-8")
-    # The explicit non-null / non-NaN guard replaces the dropped `_bt > 0` filter.
-    assert 'pl.col("backtest_edge_per_signal_bps_p50").is_not_null()' in text
-    assert 'pl.col("backtest_edge_per_signal_bps_p50").is_not_nan()' in text
+    # Canary cast to Float64 before the null/NaN guard (dtype-robust).
+    assert 'pl.col("backtest_edge_per_signal_bps_p50").cast(pl.Float64, strict=False)' in text
+    assert "edge.is_not_null() & edge.is_not_nan()" in text
 
 
 def test_ensure_round_index_no_longer_normalizes_by_bars_total() -> None:
@@ -230,21 +228,21 @@ def test_ensure_round_index_no_longer_normalizes_by_bars_total() -> None:
     assert "for m in _SEARCH_METRICS" in text
 
 
-def test_pyproject_version_is_0_27_0() -> None:
-    """The Conduit prediction-cache + scheduler + BLAS-cap slice bumps the
-    version to 0.27.0. This assertion is the repo's single pin on the current
-    version — whichever slice bumps the version updates it here."""
+def test_pyproject_version_is_0_27_1() -> None:
+    """The search-index str/hex-id fix bumps the version to 0.27.1. This
+    assertion is the repo's single pin on the current version — whichever slice
+    bumps the version updates it here."""
     data = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    assert data["project"]["version"] == "0.27.0"
+    assert data["project"]["version"] == "0.27.1"
 
 
-def test_changelog_has_v0_27_0_entry() -> None:
+def test_changelog_has_v0_27_1_entry() -> None:
     """A CHANGELOG header for the new version must exist with at least
     one content line so the version-gate is satisfied."""
     text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     lines = text.splitlines()
-    header_idx = next((i for i, ln in enumerate(lines) if ln.strip() == "# v0.27.0"), -1)
-    assert header_idx != -1, "missing '# v0.27.0' header in CHANGELOG.md"
+    header_idx = next((i for i, ln in enumerate(lines) if ln.strip() == "# v0.27.1"), -1)
+    assert header_idx != -1, "missing '# v0.27.1' header in CHANGELOG.md"
     next_header_idx = next(
         (i for i in range(header_idx + 1, len(lines)) if lines[i].startswith("# v")),
         len(lines),

@@ -1469,6 +1469,21 @@ _SEARCH_METRICS: tuple[str, ...] = (
 # index until they are re-run on a Limen that emits the new ledger.
 _SEARCH_REQUIRED_COLS: frozenset[str] = frozenset({"id", *_SEARCH_METRICS})
 
+# The index parquet's own output schema (column name -> dtype). A cached
+# `.index.parquet` is reused only when it matches this exactly; any column-set
+# or dtype drift forces a rebuild. This is what the prior cache check got wrong:
+# it tested `_SEARCH_REQUIRED_COLS` (which carries `id`) against an index that
+# renames `id` to `permutation_id`, so the subset never held and every search
+# rebuilt every round — and an index written with the old Int64 `permutation_id`
+# would otherwise be fed, dtype-mismatched, into the cross-round `scan_parquet`.
+_INDEX_SCHEMA: dict[str, pl.DataType] = {
+    "permutation_id": pl.String(),
+    "experiment_id": pl.String(),
+    "round_id": pl.String(),
+    "code_sha256": pl.String(),
+    **{m: pl.Float64() for m in _SEARCH_METRICS},
+}
+
 
 def _ensure_round_index(round_dir: Path) -> Path | None:
     state = read_status(round_dir).get("state")
@@ -1482,21 +1497,19 @@ def _ensure_round_index(round_dir: Path) -> Path | None:
         return None
 
     idx_path = round_dir / ".index.parquet"
-    # Cache validity = mtime fresh AND schema matches the current
-    # _SEARCH_METRICS contract. The schema check is essential because
-    # the metric set itself changed (PR #520 ledger retired the
-    # `*_per_bar` derived metrics in favour of pre-scaled ledger
-    # columns); any `.index.parquet` written by the prior code carries
-    # the old schema and would crash `_compute_search_bounds` with
-    # `ColumnNotFoundError` on `pl.col("precision")`. Falling through
-    # rebuilds the parquet from the CSV — if the CSV still has only
-    # old columns the `_SEARCH_REQUIRED_COLS.issubset(df.columns)`
-    # check below skips the round; if it has the new ledger we get a
-    # fresh parquet on the new schema.
+    # Cache validity = mtime fresh AND the parquet's schema is exactly the
+    # current `_INDEX_SCHEMA`. Exact match (not a subset) is what makes the
+    # cache both usable and safe: a metric-set change (PR #520 retired the
+    # `*_per_bar` metrics) or a dtype change (the old Int64 `permutation_id`)
+    # fails the match and rebuilds, rather than feeding a schema-mismatched
+    # parquet into the cross-round `scan_parquet`. The prior check tested
+    # `_SEARCH_REQUIRED_COLS` — which carries `id`, a column the index renames
+    # to `permutation_id` — so it never held and every search rebuilt every
+    # round (and then crashed on the first no-signal / hash-id round).
     if (
         idx_path.exists()
         and idx_path.stat().st_mtime >= csv_path.stat().st_mtime
-        and _SEARCH_REQUIRED_COLS.issubset(pl.read_parquet_schema(idx_path))
+        and dict(pl.read_parquet_schema(idx_path)) == _INDEX_SCHEMA
     ):
         return idx_path
 
@@ -1521,14 +1534,20 @@ def _ensure_round_index(round_dir: Path) -> Path | None:
     # symmetric with it). Use `edge_per_signal_bps_p50` as the canary: if
     # a permutation produced no tradable signals, every ledger percentile
     # is NaN; if it produced even one, p50 is finite.
+    # The canary can arrive as a String column: a round with no tradable
+    # signals has every ledger percentile as the text "nan", which `read_csv`
+    # infers as `str` (no numeric value to anchor Float64), and `is_not_nan`
+    # is only defined on a numeric dtype. Cast to Float64 first so the
+    # no-signal exclusion works whatever dtype the CSV inferred.
+    edge = pl.col("backtest_edge_per_signal_bps_p50").cast(pl.Float64, strict=False)
     out = (
         df.lazy()
-        .filter(
-            pl.col("backtest_edge_per_signal_bps_p50").is_not_null()
-            & pl.col("backtest_edge_per_signal_bps_p50").is_not_nan()
-        )
+        .filter(edge.is_not_null() & edge.is_not_nan())
         .select([
-            pl.col("id").cast(pl.Int64).alias("permutation_id"),
+            # Limen round_ids are SHA-256 hex strings (see
+            # _parse_cohort_permutation_ids), not ints — carry `id` as a String
+            # so a hash-id round indexes instead of crashing the Int64 cast.
+            pl.col("id").cast(pl.String).alias("permutation_id"),
             pl.lit(round_dir.parent.parent.name).alias("experiment_id"),
             pl.lit(round_dir.name).alias("round_id"),
             pl.lit(sha).alias("code_sha256"),
@@ -1651,7 +1670,7 @@ def _build_search_bundle(root: Path, filters: _FilterMap, experiment_names: list
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         if matches.height > 0:
-            groups: dict[tuple[str, str], dict[str, list[int]]] = {}
+            groups: dict[tuple[str, str], dict[str, list[str]]] = {}
             for row in matches.iter_rows(named=True):
                 key = (row["experiment_id"], row["code_sha256"])
                 groups.setdefault(key, {}).setdefault(row["round_id"], []).append(row["permutation_id"])
