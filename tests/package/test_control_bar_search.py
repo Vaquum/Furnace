@@ -117,6 +117,9 @@ def test_filter_rail_is_narrow_and_table_takes_the_rest() -> None:
     rail = css[css.index(".search-filters {") :]
     rail = rail[: rail.index("}")]
     assert "flex: 0 0" in rail
+    # the rail scrolls independently once it overflows so its lower filters
+    # stay reachable (it is sticky and taller than the viewport)
+    assert "overflow-y: auto;" in rail and "max-height:" in rail
     results = css[css.index(".search-results {") :]
     results = results[: results.index("}")]
     assert "flex: 1 1 auto;" in results

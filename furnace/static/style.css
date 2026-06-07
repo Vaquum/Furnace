@@ -1631,6 +1631,11 @@ p.empty {
      rail never slides under it while the results scroll. */
   top: calc(61px + var(--gap-l));
   align-self: flex-start;
+  /* The rail lists every search metric (~two dozen blocks) — once it is taller
+     than the viewport, scroll it independently so the lower filters stay
+     reachable (a sticky rail otherwise pins and clips its own bottom). */
+  max-height: calc(100vh - 61px - 2 * var(--gap-l));
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: var(--gap-m);
