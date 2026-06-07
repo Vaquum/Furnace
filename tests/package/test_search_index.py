@@ -99,23 +99,27 @@ def test_round_without_status_json_is_skipped(tmp_path: Path) -> None:
     assert _ensure_round_index(rd) is None
 
 
-def test_search_bundle_filters_int_id_round(tmp_path: Path) -> None:
-    """The `/search` download bundle re-reads each round CSV and filters it by
-    the String `permutation_id`s from the index. For an int-id round the CSV
-    `id` is Int64, so the filter must cast it to String first — an
-    `is_in(List(String))` against an Int64 column raises, the same dtype
-    mismatch the indexer fixes. Regression test for that sibling consumer."""
+def test_selection_bundle_filters_int_id_round(tmp_path: Path) -> None:
+    """The selection bundle re-reads the round CSV and filters it by the String
+    `permutation_id`s from the index. For an int-id round the CSV `id` is Int64,
+    so the filter must cast it to String first — an `is_in(List(String))` against
+    an Int64 column raises, the same dtype mismatch the indexer fixes. The bundle
+    carries the runnable manifest and is named for its one experiment + round(s)."""
     import io
     import zipfile
 
-    from furnace.app import _build_search_bundle
+    from furnace.app import _build_selection_bundle, _selection_bundle_base
 
     root = tmp_path
     _make_round(root / "experiments" / "intexp" / "rounds" / "0001", ids=["7", "8"], edge=["3.0", "4.0"])
-    data = _build_search_bundle(root, {}, ["intexp"])
+    data = _build_selection_bundle(root, "intexp", ["0001"], {})
 
     z = zipfile.ZipFile(io.BytesIO(data))
-    csvs = [n for n in z.namelist() if n.endswith(".csv")]
+    base = _selection_bundle_base("intexp", ["0001"])
+    assert base == "intexp__r0001__bundle"
+    names = z.namelist()
+    assert f"{base}/manifest.yml" in names, names
+    csvs = [n for n in names if n.endswith(".csv")]
     assert csvs, "bundle should carry a CSV for the matched int-id round"
     rows = [ln for ln in z.read(csvs[0]).decode().splitlines() if ln.strip()]
     assert len(rows) == 3  # header + the two matched int-id permutations

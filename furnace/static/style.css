@@ -665,12 +665,15 @@ button:hover, .btn:hover {
   color: var(--accent);
   border-color: var(--accent);
 }
-button:disabled, .btn:disabled {
+button:disabled, .btn:disabled, .btn.disabled {
   opacity: 0.4;
   cursor: not-allowed;
   color: var(--ink-mute);
   border-color: var(--rule);
 }
+/* `.disabled` is a class (the `:disabled` pseudo only matches form controls),
+   so a disabled <a class="btn"> also needs its clicks/navigation suppressed. */
+a.btn.disabled { pointer-events: none; }
 button.primary, .btn.primary {
   border-color: var(--accent);
   color: var(--accent);
@@ -1744,7 +1747,9 @@ table.experiments-table.search-table tr.dimmed td.col-id a { pointer-events: non
   max-width: 92vw;
   margin: 0;
 }
-.cohort-form { padding: var(--gap-l); display: flex; flex-direction: column; gap: var(--gap-m); }
+/* The double class beats the base `.modal-body { padding: 0 }` (same specificity,
+   later in source) — without it the form content kisses the panel edge. */
+.modal-body.cohort-form { padding: var(--gap-l); display: flex; flex-direction: column; gap: var(--gap-m); }
 .form-field { display: flex; flex-direction: column; gap: var(--gap-s); }
 .form-label {
   font-family: var(--font-mono); font-size: var(--t-micro); letter-spacing: 0.08em;
