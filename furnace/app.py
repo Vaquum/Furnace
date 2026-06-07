@@ -1486,6 +1486,12 @@ _INDEX_SCHEMA: dict[str, pl.DataType] = {
 
 
 def _ensure_round_index(round_dir: Path) -> Path | None:
+    # A round with no status.json is incomplete (a hand-made or interrupted
+    # round dir) — skip it like the manifest / CSV guards below rather than
+    # letting read_status raise FileNotFoundError and 500 the whole /search
+    # page, which scans every round in one pass.
+    if not (round_dir / "status.json").exists():
+        return None
     state = read_status(round_dir).get("state")
     if state in ACTIVE_STATES:
         return None

@@ -90,6 +90,15 @@ def test_stale_int64_index_is_rebuilt(tmp_path: Path) -> None:
     assert pl.read_parquet(idx).schema["permutation_id"] == pl.String
 
 
+def test_round_without_status_json_is_skipped(tmp_path: Path) -> None:
+    """A round dir with no status.json is incomplete — `_ensure_round_index`
+    returns None instead of letting `read_status` raise FileNotFoundError, which
+    would 500 the whole /search page (it scans every round in one pass)."""
+    rd = _make_round(tmp_path / "exp" / "rounds" / "0004", ids=["1"], edge=["2.0"])
+    (rd / "status.json").unlink()
+    assert _ensure_round_index(rd) is None
+
+
 def test_search_bundle_filters_int_id_round(tmp_path: Path) -> None:
     """The `/search` download bundle re-reads each round CSV and filters it by
     the String `permutation_id`s from the index. For an int-id round the CSV
