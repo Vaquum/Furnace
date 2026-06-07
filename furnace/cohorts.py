@@ -133,14 +133,22 @@ def write_cohort_definition(
 
 
 def delete_cohort_definition(root: Path, cohort_id: str) -> bool:
-    """Delete the cohort definition file for ``cohort_id``. Returns True if a
-    file was removed, False if none existed. A served prediction cache (if any)
-    is a separate store and is left untouched."""
-    path = _cohorts_dir(root) / f"{_filename_for(cohort_id)}.json"
-    if not path.is_file():
+    """Delete the cohort definition for ``cohort_id``. Returns True if one was
+    removed, False if no such cohort exists. The target is resolved by matching
+    the enumerated ``*.json`` files in the cohorts dir — never by building a path
+    from ``cohort_id`` — so a crafted id (e.g. ``../foo``) cannot unlink a file
+    outside ``<root>/cohorts/`` (the same enumerate-don't-build rule as
+    ``find_cohort_definition``). A served prediction cache, if any, is a separate
+    store and is left untouched."""
+    cohorts_dir = _cohorts_dir(root)
+    if not cohorts_dir.is_dir():
         return False
-    path.unlink()
-    return True
+    wanted = _filename_for(cohort_id)
+    for path in cohorts_dir.glob("*.json"):
+        if path.stem == wanted:
+            path.unlink()
+            return True
+    return False
 
 
 def _filename_for(cohort_id: str) -> str:

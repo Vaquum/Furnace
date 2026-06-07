@@ -144,6 +144,20 @@ def test_delete_cohort_definition(tmp_path: Path) -> None:
     assert cohorts.delete_cohort_definition(tmp_path, cid) is False
 
 
+def test_delete_cohort_rejects_path_traversal(tmp_path: Path) -> None:
+    """A crafted cohort_id cannot unlink a .json file outside <root>/cohorts/:
+    the deletion resolves by enumerating the cohorts dir, never by building a
+    path from the id, so `../victim` matches nothing and the victim survives."""
+    victim = tmp_path / "victim.json"          # a reachable file outside cohorts/
+    victim.write_text("{}")
+    cohorts.write_cohort_definition(
+        tmp_path, name="a", cohort_type="direction", experiment_dir="/x",
+        manifest_id=_MANIFEST_ID, permutation_ids=["p1"],
+    )
+    assert cohorts.delete_cohort_definition(tmp_path, "../victim") is False
+    assert victim.exists()
+
+
 def test_find_cohort_definition_by_url_id(tmp_path: Path) -> None:
     """`find_cohort_definition` resolves a cohort by its URL id (the folded
     cohort_id) without building a path from the input; an unknown id is None."""
