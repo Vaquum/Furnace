@@ -1699,7 +1699,12 @@ def _build_search_bundle(root: Path, filters: _FilterMap, experiment_names: list
                     if not csv_path.exists():
                         continue
                     df = pl.read_csv(csv_path, infer_schema_length=200)
-                    df = df.filter(pl.col("id").is_in(by_round[rid]))
+                    # `by_round[rid]` are String permutation_ids (the index
+                    # normalizes `id` to String); the freshly-read CSV infers
+                    # `id` as Int64 for an int-id round, so cast both sides to
+                    # String — an `is_in(List(String))` against an Int64 column
+                    # raises, the same dtype mismatch the indexer fixes.
+                    df = df.filter(pl.col("id").cast(pl.String).is_in(by_round[rid]))
                     df = df.select([
                         pl.lit(exp_id).alias("experiment_id"),
                         pl.lit(rid).alias("round_id"),

@@ -88,3 +88,25 @@ def test_stale_int64_index_is_rebuilt(tmp_path: Path) -> None:
     assert idx is not None
     assert dict(pl.read_parquet_schema(idx)) == _INDEX_SCHEMA
     assert pl.read_parquet(idx).schema["permutation_id"] == pl.String
+
+
+def test_search_bundle_filters_int_id_round(tmp_path: Path) -> None:
+    """The `/search` download bundle re-reads each round CSV and filters it by
+    the String `permutation_id`s from the index. For an int-id round the CSV
+    `id` is Int64, so the filter must cast it to String first — an
+    `is_in(List(String))` against an Int64 column raises, the same dtype
+    mismatch the indexer fixes. Regression test for that sibling consumer."""
+    import io
+    import zipfile
+
+    from furnace.app import _build_search_bundle
+
+    root = tmp_path
+    _make_round(root / "experiments" / "intexp" / "rounds" / "0001", ids=["7", "8"], edge=["3.0", "4.0"])
+    data = _build_search_bundle(root, {}, ["intexp"])
+
+    z = zipfile.ZipFile(io.BytesIO(data))
+    csvs = [n for n in z.namelist() if n.endswith(".csv")]
+    assert csvs, "bundle should carry a CSV for the matched int-id round"
+    rows = [ln for ln in z.read(csvs[0]).decode().splitlines() if ln.strip()]
+    assert len(rows) == 3  # header + the two matched int-id permutations
