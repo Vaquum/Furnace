@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}Cohorts · Furnace{% endblock %}
+{% block meta %}<span>{{ cohorts | length }} cohort{{ '' if cohorts | length == 1 else 's' }}</span>{% endblock %}
+{% block content %}
+
+<div class="table-scroll">
+<table class="experiments-table cohorts-table">
+  <thead>
+    <tr>
+      <th class="col-id">Cohort</th>
+      <th class="col-cohort-type">Type</th>
+      <th class="col-bar">Bar type</th>
+      <th class="col-arrow">Predictions (conduit arrow)</th>
+      <th class="col-window">Trained on</th>
+      <th class="num col-decoders">Decoders</th>
+      <th class="col-actions"></th>
+    </tr>
+  </thead>
+  <tbody id="cohorts-rows">
+    {% for c in cohorts %}
+    <tr class="exp-row" data-cohort="{{ c.cohort_id }}">
+      <td class="col-id"><a class="cohort-name" href="/cohorts/{{ c.url_id }}">{{ c.name }}</a></td>
+      <td class="col-cohort-type">
+        {% if c.cohort_type %}<span class="cohort-type">{{ c.cohort_type }}</span>{% else %}<span class="null">—</span>{% endif %}
+      </td>
+      <td class="col-bar">{% if c.bar_type %}<span class="mono">{{ c.bar_type }}</span>{% else %}<span class="null">—</span>{% endif %}</td>
+      <td class="col-arrow">
+        {% if c.arrow_path %}
+        <span class="arrow-path mono" title="{{ c.arrow_path }}">{{ c.arrow_path }}</span>
+        <button type="button" class="copy-arrow" data-path="{{ c.arrow_path }}" data-name="{{ c.name }}"
+                title="Copy the polars read for this cohort's predictions" aria-label="Copy polars read">⧉</button>
+        {% else %}<span class="null">— no served arrow</span>{% endif %}
+      </td>
+      <td class="col-window">
+        {% if c.train_start and c.train_end %}<span class="mono">{{ c.train_start }} → {{ c.train_end }}</span>{% else %}<span class="null">—</span>{% endif %}
+      </td>
+      <td class="num col-decoders">{{ c.decoder_count }}</td>
+      <td class="col-actions">
+        <button type="button" class="delete-exp" data-cohort="{{ c.cohort_id }}" aria-label="Delete cohort" title="Delete cohort">×</button>
+      </td>
+    </tr>
+    {% endfor %}
+    {% if not cohorts %}
+    <tr><td colspan="7" class="empty-cell">No cohorts yet. Select rounds in search and create one.</td></tr>
+    {% endif %}
+  </tbody>
+</table>
+</div>
+
+<script>
+// Delete a cohort — removes its definition file (the served prediction cache,
+// if any, is a separate store).
+document.getElementById('cohorts-rows').addEventListener('click', async (e) => {
+  // Copy the exact polars zero-copy read for this cohort's served predictions.
+  const copy = e.target.closest('.copy-arrow');
+  if (copy) {
+    const snippet =
+      'import polars as pl\n' +
+      `# predictions for cohort "${copy.dataset.name}" — conduit volume mounted at /opt/conduit\n` +
+      `df = pl.read_ipc("${copy.dataset.path}", memory_map=True)`;
+    const ok = await window.copyText(snippet);
+    copy.textContent = ok ? '✓' : '✕';
+    copy.classList.toggle('copied', ok);
+    setTimeout(() => { copy.textContent = '⧉'; copy.classList.remove('copied'); }, 1200);
+    return;
+  }
+  const del = e.target.closest('.delete-exp');
+  if (!del) return;
+  const row = del.closest('tr');
+  const name = row.querySelector('.cohort-name').textContent;
+  if (!confirm(`Delete cohort "${name}"? This removes its definition and cannot be undone.`)) return;
+  const r = await fetch(`/cohorts/${encodeURIComponent(del.dataset.cohort)}`, { method: 'DELETE' });
+  if (r.ok) {
+    // Reload so the empty-state row and the topbar "N cohorts" count re-render
+    // server-side (matches the jobs view's delete behaviour).
+    location.reload();
+  } else {
+    let msg = 'Delete failed';
+    try { msg = (await r.json()).detail || msg; } catch (_) {}
+    alert(`${r.status}: ${msg}`);
+  }
+});
+</script>
+
+{% endblock %}

@@ -78,5 +78,5 @@ def test_results_table_has_landing_metric_columns() -> None:
     assert "METRIC_KEYS" in text and "metricCell" in text and "meanMetric" in text
     # the backend supplies the per-round medians (filter-aware) + the manifest sha
     app = (REPO_ROOT / "furnace" / "app.py").read_text(encoding="utf-8")
-    assert "pl.col(col).fill_nan(None).median().alias(key)" in app
+    assert 'pl.col(col).fill_nan(None).quantile(0.50, interpolation="nearest").alias(key)' in app
     assert 'pl.first("code_sha256").alias("code_sha256")' in app
