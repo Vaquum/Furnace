@@ -1,5 +1,5 @@
 """Tests for the control-bar / search-page slice: a build-commit control
-bar, a 50/50 search page, working manifest copy buttons, and flash-free
+bar, the search page, working manifest copy buttons, and flash-free
 page loads.
 
 Source-level checks against the templates, static assets, and style.css —
@@ -9,8 +9,8 @@ package dev-extras, so the tests assert on source text).
 Four capabilities:
   A. The top control bar shows the commit the build runs and links it to
      GitHub; its icons form one tight group, consistent on every view.
-  B. The search page splits 50/50 (filters | results) in modal-style
-     panels, with the slider knobs centred on the track at rest.
+  B. The search page is a narrow filter rail beside a wide results table,
+     with the slider knobs centred on the track at rest.
   C. Every manifest surface has a copy button that works over plain HTTP.
   D. A page load never flashes white."""
 
@@ -97,25 +97,32 @@ def test_base_paints_the_dark_canvas_before_the_stylesheet() -> None:
 # ---- B. Search page -------------------------------------------------------
 
 
-def test_search_page_is_a_5050_split() -> None:
-    """The search page's filters and results sit side by side — two
-    .search-panel sections inside a .search-split, not stacked."""
+def test_search_page_is_filter_rail_plus_table() -> None:
+    """The search page is a narrow filter rail beside a wide results table — a
+    .search-filters aside and a .search-results section inside .search-layout,
+    not two equal stacked panels."""
     html = (TEMPLATES / "search.html").read_text(encoding="utf-8")
-    assert 'class="search-split"' in html
-    assert html.count('class="section search-panel"') == 2
+    assert 'class="search-layout"' in html
+    assert 'class="search-filters"' in html
+    assert 'class="search-results"' in html
     css = (STATIC / "style.css").read_text(encoding="utf-8")
-    body = css[css.index(".search-split {") :][:140]
-    assert "grid-template-columns: 1fr 1fr;" in body
+    body = css[css.index(".search-layout {") :][:160]
+    assert "display: flex;" in body
 
 
-def test_search_panels_use_the_modal_coloring() -> None:
-    """The search panels are raised --paper-2 panels with a --rule border —
-    the same coloring as the modal panel."""
+def test_filter_rail_is_narrow_and_table_takes_the_rest() -> None:
+    """The filter rail is a fixed narrow column; the results pane flexes to fill
+    the rest of the width — the table gets the room."""
     css = (STATIC / "style.css").read_text(encoding="utf-8")
-    body = css[css.index(".search-panel {") :]
-    body = body[: body.index("}")]
-    assert "background: var(--paper-2);" in body
-    assert "border: 1px solid var(--rule);" in body
+    rail = css[css.index(".search-filters {") :]
+    rail = rail[: rail.index("}")]
+    assert "flex: 0 0" in rail
+    # the rail scrolls independently once it overflows so its lower filters
+    # stay reachable (it is sticky and taller than the viewport)
+    assert "overflow-y: auto;" in rail and "max-height:" in rail
+    results = css[css.index(".search-results {") :]
+    results = results[: results.index("}")]
+    assert "flex: 1 1 auto;" in results
 
 
 def test_slider_thumb_is_centred_on_the_track_at_rest() -> None:

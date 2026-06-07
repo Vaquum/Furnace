@@ -1614,32 +1614,101 @@ p.empty {
   margin: var(--gap-m) 0;
 }
 
-/* ---- Search page layout — filters and results side by side, each a
-   raised panel in the modal idiom (--paper-2 panels on the --paper
-   canvas, the same coloring as .modal / .modal-panel). ---- */
-.search-split {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--gap-l);
-  align-items: start;
+/* ---- Search page — a narrow filter rail and a wide results table.
+   The rail is deliberately tight; each metric is a two-row block (row 1:
+   label ↔ current range; row 2: min ↔ slider ↔ max). The table gets the
+   rest of the width and reuses the landing-page .experiments-table. ---- */
+.search-layout {
+  display: flex;
+  gap: var(--gap-xl, var(--gap-l));
+  align-items: flex-start;
 }
-.search-panel {
-  margin: 0;
-  background: var(--paper-2);
-  border: 1px solid var(--rule);
-  border-radius: 2px;
-  padding: var(--gap-l);
+.search-filters {
+  flex: 0 0 256px;
+  width: 256px;
+  position: sticky;
+  /* Clear the 61px sticky top control bar (same offset idiom as .modal) so the
+     rail never slides under it while the results scroll. */
+  top: calc(61px + var(--gap-l));
+  align-self: flex-start;
+  /* The rail lists every search metric (~two dozen blocks) — once it is taller
+     than the viewport, scroll it independently so the lower filters stay
+     reachable (a sticky rail otherwise pins and clips its own bottom). */
+  max-height: calc(100vh - 61px - 2 * var(--gap-l));
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-m);
 }
-/* The filter grid's fixed columns are sized for a full-width page; in a
-   half-width panel the label / readout columns tighten so the slider
-   keeps room. The label ellipsizes, so a narrow label column is safe;
-   the readout column is fixed-width (not auto) so it does not jitter the
-   slider as the readout text changes width while dragging. */
-.search-panel .filter-grid {
-  grid-template-columns: minmax(0, 13ch) minmax(0, 1fr) 20ch;
-  column-gap: var(--gap-m);
+.search-results { flex: 1 1 auto; min-width: 0; }
+
+.filters-head,
+.results-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--gap-s);
 }
-.filter-readout { white-space: nowrap; }
+.filters-head { border-bottom: 1px solid var(--rule); padding-bottom: var(--gap-s); }
+.results-head { margin-bottom: var(--gap-s); }
+.filters-title,
+.results-title {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+  font-weight: 500;
+}
+.link-btn {
+  background: transparent; border: 0; padding: 0;
+  font-family: var(--font-mono); font-size: var(--t-small);
+  color: var(--ink-mute); cursor: pointer; letter-spacing: 0; text-transform: none;
+}
+.link-btn:hover { color: var(--accent); }
+
+.filter-block { display: flex; flex-direction: column; gap: 5px; }
+.filter-top {
+  display: flex; align-items: baseline; justify-content: space-between; gap: var(--gap-s);
+}
+/* The label may wrap (long ledger names like edge_per_signal_bps_p50 in a
+   tight rail) so the distinguishing percentile suffix never gets clipped;
+   the readout holds its line on the right. */
+.filter-top .filter-label {
+  letter-spacing: 0;
+  min-width: 0;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+  line-height: 1.25;
+}
+.filter-top .filter-readout { white-space: nowrap; font-size: var(--t-small); flex: 0 0 auto; }
+.filter-bottom { display: flex; align-items: center; gap: var(--gap-s); }
+.filter-bottom .range-slider { flex: 1 1 auto; min-width: 0; }
+.filter-bottom .bound {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  color: var(--ink-mute);
+  font-variant-numeric: tabular-nums slashed-zero;
+  white-space: nowrap;
+}
+.filter-bottom .bound-min { text-align: right; }
+.filter-bottom .bound-max { text-align: left; }
+
+.results-head-left { display: flex; align-items: baseline; gap: var(--gap-m); flex-wrap: wrap; }
+.results-actions { display: flex; align-items: center; gap: var(--gap-s); flex-wrap: wrap; }
+.results-actions .btn { font-size: var(--t-small); }
+
+/* Results table = .experiments-table with only Experiment + Matches. */
+table.experiments-table.search-table th.col-id,
+table.experiments-table.search-table td.col-id { width: auto; }
+table.experiments-table.search-table th.col-matches,
+table.experiments-table.search-table td.col-matches {
+  width: 110px; text-align: right;
+  font-variant-numeric: tabular-nums slashed-zero;
+}
 
 /* ---- Modal — the-lab QC-modal idiom: opaque takeover + raised panel ---- */
 
@@ -1703,14 +1772,6 @@ p.empty {
   flex: 1 1 auto;
   overflow: hidden;
   padding: 0;
-}
-/* Search modal — /search embedded nav-less, the iframe fills the body. */
-.search-frame {
-  display: block;
-  width: 100%;
-  height: 100%;
-  border: 0;
-  background: var(--paper);
 }
 
 /* ---- Creation modal — target chooser (left) + round args (right) ---- */
