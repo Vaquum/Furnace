@@ -64,12 +64,12 @@ def test_jobs_table_surfaces_trade_pnl_and_drawdown_columns() -> None:
     CSV's backtest ledger percentile columns."""
     app = (PKG_DIR / "app.py").read_text(encoding="utf-8")
     for key, col in (
-        ("tp_p5", "backtest_trade_pnl_net_bps_p5"),
-        ("tp_p50", "backtest_trade_pnl_net_bps_p50"),
-        ("tp_p95", "backtest_trade_pnl_net_bps_p95"),
-        ("dd_p5", "backtest_drawdown_depth_bps_p5"),
-        ("dd_p50", "backtest_drawdown_depth_bps_p50"),
-        ("dd_p95", "backtest_drawdown_depth_bps_p95"),
+        ("tp_p5", "backtest_pnl_bps_p5"),
+        ("tp_p50", "backtest_pnl_bps_p50"),
+        ("tp_p95", "backtest_pnl_bps_p95"),
+        ("dd_p5", "backtest_drawdown_bps_p5"),
+        ("dd_p50", "backtest_drawdown_bps_p50"),
+        ("dd_p95", "backtest_drawdown_bps_p95"),
     ):
         assert f'"{key}": "{col}"' in app, f"_ANALYTIC_COLUMNS missing {key}"
     jobs = (TEMPLATES / "jobs.html").read_text(encoding="utf-8")
