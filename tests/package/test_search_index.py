@@ -45,6 +45,15 @@ def _make_round(round_dir: Path, *, ids: list[str], edge: list[str]) -> Path:
         row["id"] = rid
         lines.append(",".join(str(row[c]) for c in cols))
     (lo / "results.csv").write_text("\n".join(lines) + "\n")
+    # round_data.jsonl mirrors Limen's output: one line per permutation, keyed
+    # by `round_id` == the CSV `id` (the permutation_id) — the key the bundle's
+    # jsonl filter selects on. Pinning it here is what proves that filter keeps
+    # the right lines (and does not silently empty the jsonl on real data).
+    rd = [
+        json.dumps({"round_id": rid, "_round_index": i, "round_params": {}, "preds": [], "alignment": []})
+        for i, rid in enumerate(ids)
+    ]
+    (lo / "round_data.jsonl").write_text("\n".join(rd) + "\n")
     return round_dir
 
 
@@ -123,6 +132,36 @@ def test_selection_bundle_filters_int_id_round(tmp_path: Path) -> None:
     assert csvs, "bundle should carry a CSV for the matched int-id round"
     rows = [ln for ln in z.read(csvs[0]).decode().splitlines() if ln.strip()]
     assert len(rows) == 3  # header + the two matched int-id permutations
+    # With no filter both perms are kept, and the round_data.jsonl carries both
+    # sensor lines — keyed by `round_id`, which equals the CSV `id` per perm.
+    jsonls = [n for n in names if n.endswith("round_data.jsonl")]
+    assert jsonls, "bundle should carry the round's round_data.jsonl"
+    kept = [json.loads(ln) for ln in z.read(jsonls[0]).decode().splitlines() if ln.strip()]
+    assert sorted(r["round_id"] for r in kept) == ["7", "8"]
+
+
+def test_selection_bundle_filters_round_data_jsonl_by_perm_id(tmp_path: Path) -> None:
+    """The bundle's round_data.jsonl is filtered to the matched perms by its
+    `round_id` field — which Limen writes equal to the CSV `id` (the
+    permutation_id). A filter that keeps one of two perms keeps exactly that
+    perm's sensor line, proving both that the filter runs *and* that
+    `round_id` == permutation_id is the right key: a wrong key would drop every
+    line and this assertion would fail on an empty jsonl."""
+    import io
+    import zipfile
+
+    from furnace.app import _build_selection_bundle, _parse_filter_params
+
+    _make_round(tmp_path / "experiments" / "exp" / "rounds" / "0001", ids=["7", "8"], edge=["3.0", "4.0"])
+    # edge >= 3.5 keeps only perm "8" (edge 4.0); perm "7" (3.0) is filtered out.
+    filters = _parse_filter_params({"backtest_edge_per_signal_bps_p50_min": "3.5"})
+    data = _build_selection_bundle(tmp_path, "exp", ["0001"], filters)
+
+    z = zipfile.ZipFile(io.BytesIO(data))
+    jsonls = [n for n in z.namelist() if n.endswith("round_data.jsonl")]
+    assert jsonls, "bundle should carry the round's round_data.jsonl"
+    kept = [json.loads(ln) for ln in z.read(jsonls[0]).decode().splitlines() if ln.strip()]
+    assert [r["round_id"] for r in kept] == ["8"]  # only the matched perm's sensor line
 
 
 def test_selection_bundle_rejects_path_traversal(tmp_path: Path) -> None:
@@ -159,6 +198,11 @@ def test_selection_bundle_empty_filter_match_is_empty(tmp_path: Path) -> None:
     assert csvs
     rows = [ln for ln in z.read(csvs[0]).decode().splitlines() if ln.strip()]
     assert len(rows) == 1  # header only — zero perms matched the filter
+    # The round_data.jsonl is filtered by the same perm set, so it is empty too —
+    # never a silent fall-back to the full round's sensor lines.
+    jsonls = [n for n in z.namelist() if n.endswith("round_data.jsonl")]
+    assert jsonls
+    assert [ln for ln in z.read(jsonls[0]).decode().splitlines() if ln.strip()] == []
 
 
 def test_selection_bundle_rejects_cross_manifest(tmp_path: Path) -> None:
