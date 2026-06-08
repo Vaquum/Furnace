@@ -6,6 +6,7 @@ import difflib
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import secrets
@@ -446,7 +447,7 @@ def _round_csv_path(round_dir: Path) -> Path:
 
 
 def _round_analytics(round_dir: Path) -> dict[str, float | None]:
-    """Per-round trade-pnl / drawdown-depth at p5/p50/p95 — each the
+    """Per-round per-bar net PnL / drawdown at p5/p50/p95 — each the
     cross-permutation median of that ledger column, mirroring the round
     viewer's p50. None when the column is absent (pre-ledger rounds) or the
     round has no results CSV yet."""
@@ -1572,9 +1573,9 @@ _SEARCH_METRICS: tuple[str, ...] = (
 )
 
 # A round is indexable only when its CSV carries every search metric — any
-# missing column means a pre-Limen-3.2.1 round (old backtest scalar surface
-# that PR #520 retired) or a partial run. Those rounds are skipped from the
-# index until they are re-run on a Limen that emits the new ledger.
+# missing column means a pre-Limen-3.20.0 round (the prior backtest ledger
+# surface that #582 retired) or a partial run. Those rounds are skipped from
+# the index until they are re-run on a Limen that emits the new ledger.
 _SEARCH_REQUIRED_COLS: frozenset[str] = frozenset({"id", *_SEARCH_METRICS})
 
 # The index parquet's own output schema (column name -> dtype). A cached
@@ -1613,8 +1614,9 @@ def _ensure_round_index(round_dir: Path) -> Path | None:
     idx_path = round_dir / ".index.parquet"
     # Cache validity = mtime fresh AND the parquet's schema is exactly the
     # current `_INDEX_SCHEMA`. Exact match (not a subset) is what makes the
-    # cache both usable and safe: a metric-set change (PR #520 retired the
-    # `*_per_bar` metrics) or a dtype change (the old Int64 `permutation_id`)
+    # cache both usable and safe: a metric-set change (Limen #582 reshaped the
+    # ledger to the 20 bar-based columns) or a dtype change (the old Int64
+    # `permutation_id`)
     # fails the match and rebuilds, rather than feeding a schema-mismatched
     # parquet into the cross-round `scan_parquet`. The prior check tested
     # `_SEARCH_REQUIRED_COLS` — which carries `id`, a column the index renames
@@ -1752,7 +1754,14 @@ def _compute_search_bounds(
         else:
             row = df.row(0, named=True)
             out[m] = {"min": row["lo"], "max": row["hi"]}
-    return out
+    # min/max ignore NaN for a mixed column but return NaN when a metric is
+    # uniformly NaN across the index (e.g. cvar_95_pnl_bps with every indexed
+    # row < 20 bars); coalesce those bounds to None — NaN is not valid JSON
+    # for /search/bounds.json.
+    return {
+        m: {k: (None if v is not None and math.isnan(v) else v) for k, v in b.items()}
+        for m, b in out.items()
+    }
 
 
 def _matching_rounds(root: Path, filters: _FilterMap, experiment_names: list[str] | None) -> list[dict]:

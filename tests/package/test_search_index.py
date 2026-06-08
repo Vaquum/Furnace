@@ -27,12 +27,13 @@ from furnace.app import _INDEX_SCHEMA, _SEARCH_METRICS, _ensure_round_index
 _HEX_ID = "a7c6c19b4e9f80eedfc2da3020dcf3d39433eed86c96ac0143099356b3e81547"
 
 
-def _make_round(round_dir: Path, *, ids: list[str], edge: list[str]) -> Path:
+def _make_round(round_dir: Path, *, ids: list[str], edge: list[str], nan_metric: str | None = None) -> Path:
     """A minimal completed round: status.json + manifest.yml +
     limen_output/results.csv carrying ``id`` + every search metric. ``edge`` is
     written verbatim into ``backtest_edge_bps_p50`` (the index canary) so a test
     can force the all-``"nan"`` (str-inferred) column a never-ran backtest
-    leaves behind."""
+    leaves behind. ``nan_metric``, when set, writes ``"nan"`` into that one
+    column for every row — an indexed-but-NaN metric (e.g. cvar below 20 bars)."""
     round_dir.mkdir(parents=True)
     (round_dir / "status.json").write_text(json.dumps({"state": "completed"}))
     (round_dir / "manifest.yml").write_text("schema_version: '1.0'\n")
@@ -43,6 +44,8 @@ def _make_round(round_dir: Path, *, ids: list[str], edge: list[str]) -> Path:
     for i, rid in enumerate(ids):
         row = {c: "0.5" for c in _SEARCH_METRICS}
         row["backtest_edge_bps_p50"] = edge[i]
+        if nan_metric is not None:
+            row[nan_metric] = "nan"
         row["id"] = rid
         lines.append(",".join(str(row[c]) for c in cols))
     (lo / "results.csv").write_text("\n".join(lines) + "\n")
@@ -67,6 +70,43 @@ def test_no_backtest_ledger_round_indexes_empty_without_crashing(tmp_path: Path)
     assert idx is not None
     assert pl.read_parquet(idx).height == 0
     assert dict(pl.read_parquet_schema(idx)) == _INDEX_SCHEMA
+
+
+def test_no_signal_flat_zero_permutation_is_indexed(tmp_path: Path) -> None:
+    """The headline behavior change: under the all-bars ledger a no-signal
+    permutation is a real all-zero row (``backtest_edge_bps_p50 == 0.0``), not
+    NaN, so it is KEPT in the index — where the old per-signal ledger left it
+    NaN and dropped it. A ``0.0`` canary survives; only the never-ran ``"nan"``
+    row is dropped."""
+    rd = _make_round(
+        tmp_path / "exp" / "rounds" / "0003",
+        ids=[_HEX_ID, _HEX_ID[::-1]],
+        edge=["0.0", "nan"],
+    )
+    idx = _ensure_round_index(rd)
+    assert idx is not None
+    df = pl.read_parquet(idx)
+    assert df.height == 1  # the flat 0.0 perm kept; the never-ran NaN perm dropped
+    assert df.get_column("permutation_id")[0] == _HEX_ID
+
+
+def test_search_bounds_coalesce_all_nan_metric_to_null(tmp_path: Path) -> None:
+    """A metric uniformly NaN across the index — e.g. ``backtest_cvar_95_pnl_bps``
+    when every indexed permutation has < 20 bars — must yield ``null`` bounds,
+    not NaN. NaN is not valid JSON and would break ``/search/bounds.json``; the
+    all-bars ledger makes this reachable because no-signal / short rows are now
+    indexed rather than dropped."""
+    from furnace.app import _compute_search_bounds
+
+    _make_round(
+        tmp_path / "experiments" / "exp" / "rounds" / "0001",
+        ids=[_HEX_ID, _HEX_ID[::-1]],
+        edge=["1.0", "2.0"],
+        nan_metric="backtest_cvar_95_pnl_bps",
+    )
+    bounds = _compute_search_bounds(tmp_path, {}, None)
+    assert bounds["backtest_cvar_95_pnl_bps"] == {"min": None, "max": None}
+    assert bounds["backtest_edge_bps_p50"]["min"] is not None
 
 
 def test_hex_id_round_indexes_with_string_permutation_id(tmp_path: Path) -> None:
