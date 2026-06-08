@@ -30,8 +30,9 @@ _HEX_ID = "a7c6c19b4e9f80eedfc2da3020dcf3d39433eed86c96ac0143099356b3e81547"
 def _make_round(round_dir: Path, *, ids: list[str], edge: list[str]) -> Path:
     """A minimal completed round: status.json + manifest.yml +
     limen_output/results.csv carrying ``id`` + every search metric. ``edge`` is
-    written verbatim into ``backtest_edge_per_signal_bps_p50`` (the no-signal
-    canary) so a test can force the all-``"nan"`` (str-inferred) column."""
+    written verbatim into ``backtest_edge_bps_p50`` (the index canary) so a test
+    can force the all-``"nan"`` (str-inferred) column a never-ran backtest
+    leaves behind."""
     round_dir.mkdir(parents=True)
     (round_dir / "status.json").write_text(json.dumps({"state": "completed"}))
     (round_dir / "manifest.yml").write_text("schema_version: '1.0'\n")
@@ -41,7 +42,7 @@ def _make_round(round_dir: Path, *, ids: list[str], edge: list[str]) -> Path:
     lines = [",".join(cols)]
     for i, rid in enumerate(ids):
         row = {c: "0.5" for c in _SEARCH_METRICS}
-        row["backtest_edge_per_signal_bps_p50"] = edge[i]
+        row["backtest_edge_bps_p50"] = edge[i]
         row["id"] = rid
         lines.append(",".join(str(row[c]) for c in cols))
     (lo / "results.csv").write_text("\n".join(lines) + "\n")
@@ -57,9 +58,10 @@ def _make_round(round_dir: Path, *, ids: list[str], edge: list[str]) -> Path:
     return round_dir
 
 
-def test_no_signal_round_indexes_empty_without_crashing(tmp_path: Path) -> None:
-    """An all-``"nan"`` (str-inferred) backtest column yields an empty index
-    with the canonical schema — not an ``is_not_nan`` InvalidOperationError."""
+def test_no_backtest_ledger_round_indexes_empty_without_crashing(tmp_path: Path) -> None:
+    """An all-``"nan"`` (str-inferred) backtest column — a round whose every
+    permutation lacks a backtest ledger — yields an empty index with the
+    canonical schema, not an ``is_not_nan`` InvalidOperationError."""
     rd = _make_round(tmp_path / "exp" / "rounds" / "0001", ids=[_HEX_ID, _HEX_ID[::-1]], edge=["nan", "nan"])
     idx = _ensure_round_index(rd)
     assert idx is not None
@@ -154,7 +156,7 @@ def test_selection_bundle_filters_round_data_jsonl_by_perm_id(tmp_path: Path) ->
 
     _make_round(tmp_path / "experiments" / "exp" / "rounds" / "0001", ids=["7", "8"], edge=["3.0", "4.0"])
     # edge >= 3.5 keeps only perm "8" (edge 4.0); perm "7" (3.0) is filtered out.
-    filters = _parse_filter_params({"backtest_edge_per_signal_bps_p50_min": "3.5"})
+    filters = _parse_filter_params({"backtest_edge_bps_p50_min": "3.5"})
     data = _build_selection_bundle(tmp_path, "exp", ["0001"], filters)
 
     z = zipfile.ZipFile(io.BytesIO(data))
@@ -190,7 +192,7 @@ def test_selection_bundle_empty_filter_match_is_empty(tmp_path: Path) -> None:
     from furnace.app import _build_selection_bundle, _parse_filter_params
 
     _make_round(tmp_path / "experiments" / "exp" / "rounds" / "0001", ids=["7", "8"], edge=["3.0", "4.0"])
-    filters = _parse_filter_params({"backtest_edge_per_signal_bps_p50_min": "100"})
+    filters = _parse_filter_params({"backtest_edge_bps_p50_min": "100"})
     data = _build_selection_bundle(tmp_path, "exp", ["0001"], filters)
 
     z = zipfile.ZipFile(io.BytesIO(data))

@@ -421,17 +421,17 @@ def _experiment_rounds(experiment_dir: Path) -> list[dict]:
     return out
 
 
-# Jobs-table analytics: trade-pnl and drawdown-depth, each at p5/p50/p95.
+# Jobs-table analytics: per-bar net PnL and drawdown, each at p5/p50/p95.
 # Source columns are the per-permutation ledger percentiles; a round's value
 # is their cross-permutation median (the p50 the round viewer reports) and an
 # experiment's value is the mean of that across its rounds.
 _ANALYTIC_COLUMNS = {
-    "tp_p5": "backtest_trade_pnl_net_bps_p5",
-    "tp_p50": "backtest_trade_pnl_net_bps_p50",
-    "tp_p95": "backtest_trade_pnl_net_bps_p95",
-    "dd_p5": "backtest_drawdown_depth_bps_p5",
-    "dd_p50": "backtest_drawdown_depth_bps_p50",
-    "dd_p95": "backtest_drawdown_depth_bps_p95",
+    "tp_p5": "backtest_pnl_bps_p5",
+    "tp_p50": "backtest_pnl_bps_p50",
+    "tp_p95": "backtest_pnl_bps_p95",
+    "dd_p5": "backtest_drawdown_bps_p5",
+    "dd_p50": "backtest_drawdown_bps_p50",
+    "dd_p95": "backtest_drawdown_bps_p95",
 }
 _ANALYTIC_KEYS = tuple(_ANALYTIC_COLUMNS)
 
@@ -1325,31 +1325,30 @@ def create_app(root: Path) -> FastAPI:
 
 
 _BACKTEST_LEDGER_COLUMNS: tuple[str, ...] = (
-    # 22-column decoder-level metric ledger from Limen PR #520 (>= 3.2.1).
-    # 7 distribution metrics x p5/p50/p95 + 1 scalar cvar_95.
-    # All ship into the CSV with the `backtest_` prefix.
-    "backtest_edge_per_signal_bps_p5",
-    "backtest_edge_per_signal_bps_p50",
-    "backtest_edge_per_signal_bps_p95",
-    "backtest_trade_pnl_net_bps_p5",
-    "backtest_trade_pnl_net_bps_p50",
-    "backtest_trade_pnl_net_bps_p95",
-    "backtest_cost_drag_bps_p5",
-    "backtest_cost_drag_bps_p50",
-    "backtest_cost_drag_bps_p95",
-    "backtest_rolling_return_net_bps_p5",
-    "backtest_rolling_return_net_bps_p50",
-    "backtest_rolling_return_net_bps_p95",
-    "backtest_return_on_exposure_p5",
-    "backtest_return_on_exposure_p50",
-    "backtest_return_on_exposure_p95",
-    "backtest_drawdown_depth_bps_p5",
-    "backtest_drawdown_depth_bps_p50",
-    "backtest_drawdown_depth_bps_p95",
-    "backtest_drawdown_duration_days_p5",
-    "backtest_drawdown_duration_days_p50",
-    "backtest_drawdown_duration_days_p95",
-    "backtest_cvar_95_return_bps",
+    # 20-column bar-based metric ledger from Limen #582 (>= 3.20.0): every
+    # column is computed per bar over all bars in the window (run-length-
+    # invariant), no calendar. 4 distributions x p5/p50/p95 + 8 intensive
+    # scalars. All ship into the CSV with the `backtest_` prefix.
+    "backtest_edge_bps_p5",
+    "backtest_edge_bps_p50",
+    "backtest_edge_bps_p95",
+    "backtest_pnl_bps_p5",
+    "backtest_pnl_bps_p50",
+    "backtest_pnl_bps_p95",
+    "backtest_cost_bps_p5",
+    "backtest_cost_bps_p50",
+    "backtest_cost_bps_p95",
+    "backtest_drawdown_bps_p5",
+    "backtest_drawdown_bps_p50",
+    "backtest_drawdown_bps_p95",
+    "backtest_wins_per_bar",
+    "backtest_pnl_per_bar_bps",
+    "backtest_avg_win_bps",
+    "backtest_avg_loss_bps",
+    "backtest_cvar_95_pnl_bps",
+    "backtest_trades_per_bar",
+    "backtest_inventory_per_bar",
+    "backtest_cost_per_bar_bps",
 )
 
 _RESULTS_COLUMNS: tuple[str, ...] = (
@@ -1562,7 +1561,7 @@ def _experiment_stats(experiment_dir: Path) -> list[dict]:
 
 # Search-filter metrics mirror the results table / round-status set so all
 # three surfaces stay in sync. The four confusion / precision columns plus
-# the 22 backtest ledger columns are all individually filterable via range
+# the 20 backtest ledger columns are all individually filterable via range
 # sliders on search.html.
 _SEARCH_METRICS: tuple[str, ...] = (
     "precision",
@@ -1634,27 +1633,27 @@ def _ensure_round_index(round_dir: Path) -> Path | None:
 
     sha = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
 
-    # No more per-bar normalization — the new backtest ledger emits metrics
-    # already scaled to per-signal / per-trade / per-day / fraction units,
-    # so the indexer just reads each metric column straight from the CSV.
+    # No per-bar normalization — the bar-based ledger emits metrics already
+    # scaled to per-bar / fraction units, so the indexer reads each metric
+    # column straight from the CSV.
     #
-    # The prior code's `.filter(pl.col("_bt") > 0)` was doing two jobs:
-    # (a) guard the per-bar divisions from div-by-zero — gone with the
-    # ledger refactor; (b) exclude permutations whose backtest never ran
-    # (zero-signal / errored runs). Job (b) still applies — Limen ≥3.2.1
-    # writes NaN ledger columns for permutations the backtest skipped, and
-    # we don't want NaN rows polluting `.index.parquet` (search range
-    # sliders would have to cope with nulls, and the round-status panel
-    # just above already drops NaN via `drop_nulls().drop_nans()` — staying
-    # symmetric with it). Use `edge_per_signal_bps_p50` as the canary: if
-    # a permutation produced no tradable signals, every ledger percentile
-    # is NaN; if it produced even one, p50 is finite.
-    # The canary can arrive as a String column: a round with no tradable
-    # signals has every ledger percentile as the text "nan", which `read_csv`
-    # infers as `str` (no numeric value to anchor Float64), and `is_not_nan`
-    # is only defined on a numeric dtype. Cast to Float64 first so the
-    # no-signal exclusion works whatever dtype the CSV inferred.
-    edge = pl.col("backtest_edge_per_signal_bps_p50").cast(pl.Float64, strict=False)
+    # The guard below excludes only permutations whose backtest produced no
+    # ledger row at all (skipped / errored runs) — Limen writes NaN across the
+    # ledger for those, and we don't want NaN rows polluting `.index.parquet`
+    # (search range sliders would have to cope with nulls, and the round-status
+    # panel just above already drops NaN via `drop_nulls().drop_nans()` —
+    # staying symmetric with it). Use `edge_bps_p50` as the canary: a backtest
+    # that ran writes a finite gross-return percentile, so it is kept — note a
+    # no-signal permutation is now a real all-zero row under the all-bars ledger
+    # (its p50 is 0.0, not NaN), so it is indexed, unlike the old per-signal
+    # ledger that left it NaN; a backtest that never ran leaves the whole ledger
+    # NaN and is dropped.
+    # The canary can arrive as a String column: a permutation with no ledger has
+    # every percentile as the text "nan", which `read_csv` infers as `str` (no
+    # numeric value to anchor Float64), and `is_not_nan` is only defined on a
+    # numeric dtype. Cast to Float64 first so the guard works whatever dtype the
+    # CSV inferred.
+    edge = pl.col("backtest_edge_bps_p50").cast(pl.Float64, strict=False)
     out = (
         df.lazy()
         .filter(edge.is_not_null() & edge.is_not_nan())

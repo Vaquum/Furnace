@@ -1,14 +1,14 @@
-"""Tests for slice S14: adapt furnace UI to Limen's new
-22-column decoder-level backtest metric ledger from `vaquum_limen` PR #520
-(>= 3.2.1). Source-level checks against app.py — the constant
+"""Tests for the bar-based backtest-ledger adapter: Furnace's UI follows
+Limen's 20-column bar-based metric ledger (`vaquum_limen` >= 3.20.0,
+Vaquum/Limen#582). Source-level checks against app.py — the constant
 `_BACKTEST_LEDGER_COLUMNS` is the single source of truth and the three
 downstream surfaces (results table, round-status stats, search index)
 must all splat it in so they stay in sync.
 
-Without this adapter every post-3.2.1 round renders the results table
+Without this adapter every post-3.20.0 round renders the results table
 as id + confusion only, the stats panel as confusion only, and the
-search index as empty — the old `backtest_*` scalar columns the UI
-was looking for were retired in Limen PR #520 and the new ledger
+search index as empty — the old `backtest_*` ledger columns the UI
+was looking for were renamed / dropped in Limen #582 and the new ledger
 columns weren't yet wired."""
 
 from __future__ import annotations
@@ -20,31 +20,29 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PKG_DIR = REPO_ROOT / "furnace"
 
-# The 22 columns Limen PR #520 ships, in declaration order. The CSV
+# The 20 columns Limen #582 ships, in declaration order. The CSV
 # carries each one prefixed with `backtest_`.
 _LEDGER_BARE: tuple[str, ...] = (
-    "edge_per_signal_bps_p5",
-    "edge_per_signal_bps_p50",
-    "edge_per_signal_bps_p95",
-    "trade_pnl_net_bps_p5",
-    "trade_pnl_net_bps_p50",
-    "trade_pnl_net_bps_p95",
-    "cost_drag_bps_p5",
-    "cost_drag_bps_p50",
-    "cost_drag_bps_p95",
-    "rolling_return_net_bps_p5",
-    "rolling_return_net_bps_p50",
-    "rolling_return_net_bps_p95",
-    "return_on_exposure_p5",
-    "return_on_exposure_p50",
-    "return_on_exposure_p95",
-    "drawdown_depth_bps_p5",
-    "drawdown_depth_bps_p50",
-    "drawdown_depth_bps_p95",
-    "drawdown_duration_days_p5",
-    "drawdown_duration_days_p50",
-    "drawdown_duration_days_p95",
-    "cvar_95_return_bps",
+    "edge_bps_p5",
+    "edge_bps_p50",
+    "edge_bps_p95",
+    "pnl_bps_p5",
+    "pnl_bps_p50",
+    "pnl_bps_p95",
+    "cost_bps_p5",
+    "cost_bps_p50",
+    "cost_bps_p95",
+    "drawdown_bps_p5",
+    "drawdown_bps_p50",
+    "drawdown_bps_p95",
+    "wins_per_bar",
+    "pnl_per_bar_bps",
+    "avg_win_bps",
+    "avg_loss_bps",
+    "cvar_95_pnl_bps",
+    "trades_per_bar",
+    "inventory_per_bar",
+    "cost_per_bar_bps",
 )
 
 
@@ -92,17 +90,17 @@ def _module_const(text: str, name: str) -> tuple:
     raise AssertionError(f"{name} not defined at module scope in app.py")
 
 
-def test_backtest_ledger_columns_match_limen_pr_520_exactly() -> None:
-    """The canonical constant `_BACKTEST_LEDGER_COLUMNS` carries all 22
-    columns Limen PR #520 ships, each prefixed `backtest_`, in declaration
+def test_backtest_ledger_columns_match_limen_582_exactly() -> None:
+    """The canonical constant `_BACKTEST_LEDGER_COLUMNS` carries all 20
+    columns Limen #582 ships, each prefixed `backtest_`, in declaration
     order. This list is what the round CSV will hold for any round run
-    against Limen >= 3.2.1; adding / removing / reordering items here
+    against Limen >= 3.20.0; adding / removing / reordering items here
     must be deliberate (it changes which columns the entire UI surfaces)."""
     text = (PKG_DIR / "app.py").read_text(encoding="utf-8")
     cols = _module_const(text, "_BACKTEST_LEDGER_COLUMNS")
     expected = tuple(f"backtest_{c}" for c in _LEDGER_BARE)
     assert cols == expected, (
-        f"_BACKTEST_LEDGER_COLUMNS drifted from Limen PR #520 ledger.\n"
+        f"_BACKTEST_LEDGER_COLUMNS drifted from Limen #582 ledger.\n"
         f"expected ({len(expected)}): {expected}\n"
         f"actual   ({len(cols)}): {cols}"
     )
@@ -110,7 +108,7 @@ def test_backtest_ledger_columns_match_limen_pr_520_exactly() -> None:
 
 def test_results_table_includes_full_ledger_and_confusion_metrics() -> None:
     """The results table renders `id`, four confusion / precision columns,
-    then the 22-column ledger splatted in via `*_BACKTEST_LEDGER_COLUMNS`.
+    then the 20-column ledger splatted in via `*_BACKTEST_LEDGER_COLUMNS`.
     Splatting (rather than re-listing) is the wire that keeps the three
     surfaces in sync — a ledger edit at the top of the module flows
     through to the table without a parallel edit."""
@@ -161,8 +159,8 @@ def test_search_metrics_mirror_results_table() -> None:
 
 def test_search_required_cols_demand_every_metric_plus_id() -> None:
     """A round is indexable only when its CSV carries every search
-    metric. Any missing column means a pre-3.2.1 round (old backtest
-    scalar surface) or a partial run — skip from the index until
+    metric. Any missing column means a pre-3.20.0 round (old backtest
+    ledger surface) or a partial run — skip from the index until
     re-run. The required set is `id` plus every `_SEARCH_METRICS`
     entry, expressed in source as `{"id", *_SEARCH_METRICS}`."""
     text = (PKG_DIR / "app.py").read_text(encoding="utf-8")
@@ -187,27 +185,28 @@ def test_ensure_round_index_invalidates_stale_schema_parquets() -> None:
     assert '"permutation_id": pl.String()' in text
 
 
-def test_ensure_round_index_excludes_no_signal_permutations() -> None:
-    """No-signal permutations are excluded by an `is_not_null & is_not_nan`
-    guard on the `backtest_edge_per_signal_bps_p50` canary (a permutation with
-    no tradable signals leaves every ledger percentile NaN). The canary is cast
-    to Float64 *first*: a round where every permutation is no-signal writes the
-    whole column as the text "nan", which `read_csv` infers as a str column, and
-    `is_not_nan` is undefined on str — the cast is what stops that 500ing
-    /search."""
+def test_ensure_round_index_excludes_permutations_without_a_backtest_ledger() -> None:
+    """A permutation whose backtest never ran (Limen writes NaN across the
+    whole ledger) is excluded by an `is_not_null & is_not_nan` guard on the
+    `backtest_edge_bps_p50` canary. Under the bar-based ledger a no-signal
+    permutation is a real all-zero row (p50 0.0, not NaN), so it is kept — the
+    guard drops only the never-ran rows. The canary is cast to Float64 *first*:
+    a round where every permutation lacks a ledger writes the whole column as
+    the text "nan", which `read_csv` infers as a str column, and `is_not_nan`
+    is undefined on str — the cast is what stops that 500ing /search."""
     text = (PKG_DIR / "app.py").read_text(encoding="utf-8")
     # Canary cast to Float64 before the null/NaN guard (dtype-robust).
-    assert 'pl.col("backtest_edge_per_signal_bps_p50").cast(pl.Float64, strict=False)' in text
+    assert 'pl.col("backtest_edge_bps_p50").cast(pl.Float64, strict=False)' in text
     assert "edge.is_not_null() & edge.is_not_nan()" in text
 
 
 def test_ensure_round_index_no_longer_normalizes_by_bars_total() -> None:
     """The old indexer divided several metrics by `backtest_bars_total`
-    to derive `*_per_bar` proxies for cross-round comparison. The new
-    ledger ships per-signal / per-trade / per-day / fraction units so
-    no normalization is needed — the indexer reads each metric column
-    straight. Assert the old division-by-bars-total references are gone
-    and the new straight-read shape is in place."""
+    to derive `*_per_bar` proxies for cross-round comparison. The
+    bar-based ledger ships per-bar / fraction units so no normalization
+    is needed — the indexer reads each metric column straight. Assert the
+    old division-by-bars-total references are gone and the new
+    straight-read shape is in place."""
     text = (PKG_DIR / "app.py").read_text(encoding="utf-8")
     # Old-shape references must be gone.
     for stale in (
@@ -228,24 +227,24 @@ def test_ensure_round_index_no_longer_normalizes_by_bars_total() -> None:
     assert "for m in _SEARCH_METRICS" in text
 
 
-def test_pyproject_version_is_0_30_0() -> None:
-    """The selection-bundle / no-auth API-call slice bumps the version to 0.30.0.
+def test_pyproject_version_is_0_31_0() -> None:
+    """The bar-based backtest-ledger adapter bumps the version to 0.31.0.
     This assertion is the repo's single pin on the current version — whichever
     slice bumps the version updates it here."""
     data = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    assert data["project"]["version"] == "0.30.0"
+    assert data["project"]["version"] == "0.31.0"
 
 
-def test_changelog_has_v0_30_0_entry() -> None:
+def test_changelog_has_v0_31_0_entry() -> None:
     """A CHANGELOG header for the new version must exist with at least
     one content line so the version-gate is satisfied."""
     text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     lines = text.splitlines()
-    header_idx = next((i for i, ln in enumerate(lines) if ln.strip() == "# v0.30.0"), -1)
-    assert header_idx != -1, "missing '# v0.30.0' header in CHANGELOG.md"
+    header_idx = next((i for i, ln in enumerate(lines) if ln.strip() == "# v0.31.0"), -1)
+    assert header_idx != -1, "missing '# v0.31.0' header in CHANGELOG.md"
     next_header_idx = next(
         (i for i in range(header_idx + 1, len(lines)) if lines[i].startswith("# v")),
         len(lines),
     )
     content = [ln for ln in lines[header_idx + 1 : next_header_idx] if ln.strip()]
-    assert content, "v0.27.0 CHANGELOG entry is empty"
+    assert content, "v0.31.0 CHANGELOG entry is empty"
