@@ -1,3 +1,9 @@
+# v0.30.0
+
+- The search-view bundle now follows the **selection**, not the filter. `GET /search/bundle?experiment=<exp>&rounds=<r1,r2>&<filters>` zips exactly the selected rounds of **one** experiment (never cross-experiment), each round's `limen_output` filtered to the permutations the filters match — the same perms a cohort from that selection holds — plus the runnable `manifest.yml` (`limen run <base>/manifest.yml`, with the arrow data source mounted). It is named `<experiment>__r<rounds>__bundle.zip`. The **Download bundle** and **Get API call** buttons are disabled until a round is selected and a round-tick now locks the selection to one experiment as well as one manifest.
+- **Get API call** no longer fails on an http origin: it copies via `window.copyText` (the `execCommand` fallback), so the "copy failed" over plain http is gone. The bundle endpoint is exempt from auth so the copied `curl -OJ '…/search/bundle?…'` returns the exact bundle from the same host with no credentials — keep the port off the public internet to keep the bundle private.
+- Fix the create-cohort dialog padding: `.modal-body.cohort-form` now beats the base `.modal-body { padding: 0 }`, so the form content no longer kisses the panel edge.
+
 # v0.29.0
 
 - Widen the search filter rail (256 → 300px) with a stable scrollbar gutter so a metric's label, current range, and slider bounds never clip under the scrollbar. Add the landing-page ledger columns to the search results table — Trade PnL and Drawdown at p5/p50/p95 — beside the per-round Matches count, on the experiment → rounds hierarchy. Each round's value is the cross-permutation median over its *matching* perms (filter-aware, mirroring `_round_analytics`); each experiment's is the mean of its rounds; both render with the same magnitude-adaptive formatter and coral negatives as the jobs table.

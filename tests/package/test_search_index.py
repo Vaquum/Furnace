@@ -45,6 +45,15 @@ def _make_round(round_dir: Path, *, ids: list[str], edge: list[str]) -> Path:
         row["id"] = rid
         lines.append(",".join(str(row[c]) for c in cols))
     (lo / "results.csv").write_text("\n".join(lines) + "\n")
+    # round_data.jsonl mirrors Limen's output: one line per permutation, keyed
+    # by `round_id` == the CSV `id` (the permutation_id) — the key the bundle's
+    # jsonl filter selects on. Pinning it here is what proves that filter keeps
+    # the right lines (and does not silently empty the jsonl on real data).
+    rd = [
+        json.dumps({"round_id": rid, "_round_index": i, "round_params": {}, "preds": [], "alignment": []})
+        for i, rid in enumerate(ids)
+    ]
+    (lo / "round_data.jsonl").write_text("\n".join(rd) + "\n")
     return round_dir
 
 
@@ -99,23 +108,116 @@ def test_round_without_status_json_is_skipped(tmp_path: Path) -> None:
     assert _ensure_round_index(rd) is None
 
 
-def test_search_bundle_filters_int_id_round(tmp_path: Path) -> None:
-    """The `/search` download bundle re-reads each round CSV and filters it by
-    the String `permutation_id`s from the index. For an int-id round the CSV
-    `id` is Int64, so the filter must cast it to String first — an
-    `is_in(List(String))` against an Int64 column raises, the same dtype
-    mismatch the indexer fixes. Regression test for that sibling consumer."""
+def test_selection_bundle_filters_int_id_round(tmp_path: Path) -> None:
+    """The selection bundle re-reads the round CSV and filters it by the String
+    `permutation_id`s from the index. For an int-id round the CSV `id` is Int64,
+    so the filter must cast it to String first — an `is_in(List(String))` against
+    an Int64 column raises, the same dtype mismatch the indexer fixes. The bundle
+    carries the runnable manifest and is named for its one experiment + round(s)."""
     import io
     import zipfile
 
-    from furnace.app import _build_search_bundle
+    from furnace.app import _build_selection_bundle, _selection_bundle_base
 
     root = tmp_path
     _make_round(root / "experiments" / "intexp" / "rounds" / "0001", ids=["7", "8"], edge=["3.0", "4.0"])
-    data = _build_search_bundle(root, {}, ["intexp"])
+    data = _build_selection_bundle(root, "intexp", ["0001"], {})
 
     z = zipfile.ZipFile(io.BytesIO(data))
-    csvs = [n for n in z.namelist() if n.endswith(".csv")]
+    base = _selection_bundle_base("intexp", ["0001"])
+    assert base == "intexp__r0001__bundle"
+    names = z.namelist()
+    assert f"{base}/manifest.yml" in names, names
+    csvs = [n for n in names if n.endswith(".csv")]
     assert csvs, "bundle should carry a CSV for the matched int-id round"
     rows = [ln for ln in z.read(csvs[0]).decode().splitlines() if ln.strip()]
     assert len(rows) == 3  # header + the two matched int-id permutations
+    # With no filter both perms are kept, and the round_data.jsonl carries both
+    # sensor lines — keyed by `round_id`, which equals the CSV `id` per perm.
+    jsonls = [n for n in names if n.endswith("round_data.jsonl")]
+    assert jsonls, "bundle should carry the round's round_data.jsonl"
+    kept = [json.loads(ln) for ln in z.read(jsonls[0]).decode().splitlines() if ln.strip()]
+    assert sorted(r["round_id"] for r in kept) == ["7", "8"]
+
+
+def test_selection_bundle_filters_round_data_jsonl_by_perm_id(tmp_path: Path) -> None:
+    """The bundle's round_data.jsonl is filtered to the matched perms by its
+    `round_id` field — which Limen writes equal to the CSV `id` (the
+    permutation_id). A filter that keeps one of two perms keeps exactly that
+    perm's sensor line, proving both that the filter runs *and* that
+    `round_id` == permutation_id is the right key: a wrong key would drop every
+    line and this assertion would fail on an empty jsonl."""
+    import io
+    import zipfile
+
+    from furnace.app import _build_selection_bundle, _parse_filter_params
+
+    _make_round(tmp_path / "experiments" / "exp" / "rounds" / "0001", ids=["7", "8"], edge=["3.0", "4.0"])
+    # edge >= 3.5 keeps only perm "8" (edge 4.0); perm "7" (3.0) is filtered out.
+    filters = _parse_filter_params({"backtest_edge_per_signal_bps_p50_min": "3.5"})
+    data = _build_selection_bundle(tmp_path, "exp", ["0001"], filters)
+
+    z = zipfile.ZipFile(io.BytesIO(data))
+    jsonls = [n for n in z.namelist() if n.endswith("round_data.jsonl")]
+    assert jsonls, "bundle should carry the round's round_data.jsonl"
+    kept = [json.loads(ln) for ln in z.read(jsonls[0]).decode().splitlines() if ln.strip()]
+    assert [r["round_id"] for r in kept] == ["8"]  # only the matched perm's sensor line
+
+
+def test_selection_bundle_rejects_path_traversal(tmp_path: Path) -> None:
+    """A crafted experiment / round id resolves through _safe_child_dir, so it is
+    a 404 — never a path-traversing filesystem read or an unsanitized filename."""
+    from fastapi import HTTPException
+
+    from furnace.app import _build_selection_bundle
+
+    _make_round(tmp_path / "experiments" / "exp" / "rounds" / "0001", ids=["1"], edge=["1.0"])
+    for exp, rounds in [("../exp", ["0001"]), ("exp", ["../0001"]), ("exp", ["0001/x"])]:
+        try:
+            _build_selection_bundle(tmp_path, exp, rounds, {})
+        except HTTPException as exc:
+            assert exc.status_code == 404
+        else:
+            raise AssertionError(f"expected 404 for experiment={exp!r} rounds={rounds!r}")
+
+
+def test_selection_bundle_empty_filter_match_is_empty(tmp_path: Path) -> None:
+    """A filter matching zero perms yields a header-only results.csv — never a
+    silent fall-back to the full round."""
+    import io
+    import zipfile
+
+    from furnace.app import _build_selection_bundle, _parse_filter_params
+
+    _make_round(tmp_path / "experiments" / "exp" / "rounds" / "0001", ids=["7", "8"], edge=["3.0", "4.0"])
+    filters = _parse_filter_params({"backtest_edge_per_signal_bps_p50_min": "100"})
+    data = _build_selection_bundle(tmp_path, "exp", ["0001"], filters)
+
+    z = zipfile.ZipFile(io.BytesIO(data))
+    csvs = [n for n in z.namelist() if n.endswith(".csv")]
+    assert csvs
+    rows = [ln for ln in z.read(csvs[0]).decode().splitlines() if ln.strip()]
+    assert len(rows) == 1  # header only — zero perms matched the filter
+    # The round_data.jsonl is filtered by the same perm set, so it is empty too —
+    # never a silent fall-back to the full round's sensor lines.
+    jsonls = [n for n in z.namelist() if n.endswith("round_data.jsonl")]
+    assert jsonls
+    assert [ln for ln in z.read(jsonls[0]).decode().splitlines() if ln.strip()] == []
+
+
+def test_selection_bundle_rejects_cross_manifest(tmp_path: Path) -> None:
+    """Selecting rounds with different manifests is a 400 — a bundle is one
+    manifest (the shared manifest at the root must describe every round)."""
+    from fastapi import HTTPException
+
+    from furnace.app import _build_selection_bundle
+
+    _make_round(tmp_path / "experiments" / "exp" / "rounds" / "0001", ids=["1"], edge=["1.0"])
+    r2 = _make_round(tmp_path / "experiments" / "exp" / "rounds" / "0002", ids=["2"], edge=["2.0"])
+    (r2 / "manifest.yml").write_text("schema_version: '2.0'\n")  # a different manifest
+    try:
+        _build_selection_bundle(tmp_path, "exp", ["0001", "0002"], {})
+    except HTTPException as exc:
+        assert exc.status_code == 400
+    else:
+        raise AssertionError("expected 400 for a cross-manifest selection")
