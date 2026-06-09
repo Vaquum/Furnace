@@ -101,7 +101,8 @@ def test_refresh_once_skips_inactive_cohort(tmp_path: Path, monkeypatch) -> None
 
 def test_active_route_flips_flag(tmp_path: Path, monkeypatch) -> None:
     """POST /cohorts/{url_id}/active flips and persists the stored flag, echoes
-    the new state, and 404s for a cohort that does not exist."""
+    the new state, 400s a non-boolean `active`, and 404s a cohort that does not
+    exist."""
     _auth_env(monkeypatch)
     cid = cohorts.write_cohort_definition(
         tmp_path, name="a", cohort_type="direction", experiment_dir="/x",
@@ -114,6 +115,11 @@ def test_active_route_flips_flag(tmp_path: Path, monkeypatch) -> None:
     assert r.status_code == 200
     assert r.json() == {"url_id": url_id, "active": True}
     assert json.loads(next((tmp_path / "cohorts").glob("*.json")).read_text())["active"] is True
+
+    # A non-boolean `active` (e.g. the string "false", which bool() would coerce
+    # to True) is rejected rather than silently flipping the cohort on.
+    bad = client.post(f"/cohorts/{url_id}/active", json={"active": "false"}, auth=("u", "p"))
+    assert bad.status_code == 400
 
     missing = client.post("/cohorts/sha256_nope/active", json={"active": True}, auth=("u", "p"))
     assert missing.status_code == 404

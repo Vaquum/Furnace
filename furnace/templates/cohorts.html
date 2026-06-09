@@ -38,6 +38,7 @@
       <td class="col-actions">
         <button type="button" class="cohort-active" role="switch"
                 aria-checked="{{ 'true' if c.active else 'false' }}"
+                aria-label="Serve {{ c.name }} for its bar type"
                 data-cohort-url="{{ c.url_id }}"
                 title="Serve this cohort for its bar type">{{ 'on' if c.active else 'off' }}</button>
         <button type="button" class="delete-exp" data-cohort="{{ c.cohort_id }}" aria-label="Delete cohort" title="Delete cohort">×</button>

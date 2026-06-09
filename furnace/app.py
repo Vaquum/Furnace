@@ -1192,12 +1192,18 @@ def create_app(root: Path) -> FastAPI:
     @app.post("/cohorts/{url_id}/active")
     async def set_cohort_active_route(url_id: str, request: Request):
         """Flip a cohort's active flag. JSON body {"active": bool}. Returns
-        {"url_id": str, "active": bool}. 404 if the cohort does not exist."""
-        if cohorts.find_cohort_definition(root, url_id) is None:
-            raise HTTPException(404, "cohort not found")
-        body = await request.json()
-        active = bool(body["active"])
-        cohorts.set_cohort_active(root, url_id, active)
+        {"url_id": str, "active": bool}. 400 if the body is not a JSON object
+        with a boolean `active`; 404 if the cohort does not exist."""
+        raw = await request.json()
+        if not isinstance(raw, dict):
+            raise HTTPException(400, "request body must be a JSON object")
+        active = cast(dict[str, object], raw).get("active")
+        if not isinstance(active, bool):
+            raise HTTPException(400, "`active` must be a boolean")
+        try:
+            cohorts.set_cohort_active(root, url_id, active)
+        except FileNotFoundError as exc:
+            raise HTTPException(404, "cohort not found") from exc
         return {"url_id": url_id, "active": active}
 
     # ---- Cohort detail — a cohort is a round's permutations (possibly
