@@ -29,7 +29,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import cohorts, inference
+from . import cache_scheduler, cohorts, inference, prediction_cache
 from .state import (
     ACTIVE_STATES,
     StateMachine,
@@ -1191,19 +1191,32 @@ def create_app(root: Path) -> FastAPI:
 
     @app.post("/cohorts/{url_id}/active")
     async def set_cohort_active_route(url_id: str, request: Request):
-        """Flip a cohort's active flag. JSON body {"active": bool}. Returns
-        {"url_id": str, "active": bool}. 400 if the body is not a JSON object
-        with a boolean `active`; 404 if the cohort does not exist."""
+        """Turn a cohort on or off. JSON body {"active": bool}. Turning it on
+        makes it the sole active cohort for its bar type (same-series peers flip
+        off) and backfills that bar type's served file so it reflects this
+        cohort. Returns {"url_id": str, "active": bool}. 400 if the body is not a
+        JSON object with a boolean `active`; 404 if the cohort does not exist."""
         raw = await request.json()
         if not isinstance(raw, dict):
             raise HTTPException(400, "request body must be a JSON object")
         active = cast(dict[str, object], raw).get("active")
         if not isinstance(active, bool):
             raise HTTPException(400, "`active` must be a boolean")
+        # Only the cohort-resolution write maps a FileNotFoundError to "cohort
+        # not found"; prediction_cache.backfill stays OUT of this guard so a
+        # missing arrow source surfaces as a real error, not a misleading 404.
         try:
-            cohorts.set_cohort_active(root, url_id, active)
+            if active:
+                definition = cohorts.activate_cohort(root, url_id)  # same-series peers -> off
+            else:
+                cohorts.set_cohort_active(root, url_id, False)
+                definition = None
         except FileNotFoundError as exc:
             raise HTTPException(404, "cohort not found") from exc
+        if definition is not None:
+            series = cache_scheduler.series_for_cohort(definition)
+            if series is not None:
+                prediction_cache.backfill(definition, series)  # series file becomes this cohort's
         return {"url_id": url_id, "active": active}
 
     # ---- Cohort detail — a cohort is a round's permutations (possibly
