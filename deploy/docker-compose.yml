@@ -47,6 +47,25 @@ services:
       start_period: 20s
     restart: unless-stopped
 
+  furnace-scheduler:
+    image: ${FURNACE_IMAGE:?FURNACE_IMAGE must be set}
+    init: true
+    command: ["python", "-m", "furnace", "--root", "/data/experiments", "--scheduler"]
+    volumes:
+      - type: bind
+        source: ${FURNACE_HOST_DATA_ROOT:-/data/experiments}
+        target: /data/experiments
+        read_only: false
+      - type: volume
+        source: arrow
+        target: /opt/arrow
+        read_only: true
+      - type: volume
+        source: conduit
+        target: /opt/conduit
+        read_only: false
+    restart: unless-stopped
+
 volumes:
   # External: the Arrow bar store volume is created and written by the
   # tdw-control-plane stack on the same host; Furnace only references it.

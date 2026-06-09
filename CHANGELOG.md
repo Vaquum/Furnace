@@ -1,3 +1,7 @@
+# v0.34.0
+
+- Run the prediction-refresh scheduler as its own deploy service. `deploy/docker-compose.yml` now starts `furnace-scheduler` from the same image with `python -m furnace --root /data/experiments --scheduler`, the serving mounts required by the top-up loop (`/data/experiments` rw, `/opt/arrow` ro, `/opt/conduit` rw), and `restart: unless-stopped`; the deploy-contract workflow and package tests now assert that service, its mounts, its restart policy, and that the web service does not carry `--scheduler`.
+
 # v0.33.0
 
 - Enforce one active cohort per bar type, with an activation backfill. `furnace/cohorts.py` gains `activate_cohort(root, url_id)`: it sets the named cohort's `active` true and flips off every OTHER cohort sharing its `arrow_series` (peers found by enumerating `<root>/cohorts/*.json`, never by building a path from `url_id`), returning the activated definition. `POST /cohorts/{url_id}/active` now routes a turn-on through `activate_cohort` (so same-series peers go off) and then triggers `prediction_cache.backfill` for that cohort's series, so the bar type's served `/opt/conduit/<series>/latest.arrow` immediately becomes the newly-active cohort's predictions; turning a cohort off is the plain flag clear. With S77 merged this backfill reuses persisted sensors and is cheap; either way it is a single operator action, not a per-tick cost. The operator can now leave many cohorts defined and switch which one is live per bar type at will, with no lag and no silent races.
