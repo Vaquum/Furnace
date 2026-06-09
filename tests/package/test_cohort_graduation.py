@@ -42,7 +42,7 @@ def test_cohort_definition_has_required_keys(tmp_path: Path) -> None:
     """The written definition carries exactly the keys a cohort consumer
     needs: cohort_id, name, cohort_type, experiment_dir, manifest_id,
     permutation_ids (the ids stored sorted, matching the cohort_id
-    derivation)."""
+    derivation), and active (off at creation — an operator turns it on)."""
     cohorts.write_cohort_definition(
         tmp_path, name="alpha", cohort_type="magnitude",
         experiment_dir="/data/x/rounds/0001/limen_output",
@@ -51,12 +51,13 @@ def test_cohort_definition_has_required_keys(tmp_path: Path) -> None:
     definition = json.loads(next((tmp_path / "cohorts").glob("*.json")).read_text())
     assert set(definition) == {
         "cohort_id", "name", "cohort_type", "experiment_dir",
-        "manifest_id", "permutation_ids",
+        "manifest_id", "permutation_ids", "active",
     }
     assert definition["name"] == "alpha"
     assert definition["cohort_type"] == "magnitude"
     assert definition["manifest_id"] == _MANIFEST_ID
     assert definition["permutation_ids"] == sorted(_PIDS)
+    assert definition["active"] is False
 
 
 def test_cohort_type_must_be_direction_or_magnitude(tmp_path: Path) -> None:

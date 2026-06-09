@@ -60,10 +60,15 @@ def _arrow_cohort(round_dir: Path, dest: Path, series: str) -> Path:
 
 
 def _register(root: Path, name: str, experiment_dir: Path, rids: list[str]) -> None:
+    # active=True: the scheduler now refreshes only active cohorts (slice S78),
+    # so a cohort registered for a top-up test must be on to be served.
     cohorts_dir = root / "cohorts"
     cohorts_dir.mkdir(parents=True, exist_ok=True)
     (cohorts_dir / f"{name}.json").write_text(
-        json.dumps({"name": name, "experiment_dir": str(experiment_dir), "permutation_ids": rids}),
+        json.dumps({
+            "name": name, "experiment_dir": str(experiment_dir),
+            "permutation_ids": rids, "active": True,
+        }),
         encoding="utf-8",
     )
 

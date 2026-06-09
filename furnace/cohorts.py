@@ -122,6 +122,7 @@ def write_cohort_definition(
         "experiment_dir": experiment_dir,
         "manifest_id": manifest_id,
         "permutation_ids": sorted(permutation_ids),
+        "active": False,  # off until an operator turns it on (slice S79 enforces one-per-series)
     }
     path = cohorts_dir / f"{_filename_for(cohort_id)}.json"
     # Atomic write (temp + os.replace), mirroring the repo's other flatfile
@@ -179,6 +180,26 @@ def find_cohort_definition(root: Path, url_id: str) -> dict[str, object] | None:
         if isinstance(cohort_id, str) and _filename_for(cohort_id) == url_id:
             return definition
     return None
+
+
+def set_cohort_active(root: Path, url_id: str, active: bool) -> bool:
+    """Set the cohort's ``active`` flag and return the new value. The scheduler
+    refreshes only active cohorts. The target file is resolved by enumerating
+    ``<root>/cohorts/*.json`` (never by building a path from ``url_id``),
+    mirroring ``find_cohort_definition``; the write is atomic (temp +
+    ``os.replace``). Raises ``FileNotFoundError`` when no cohort matches."""
+    cohorts_dir = _cohorts_dir(root)
+    if cohorts_dir.is_dir():
+        for path in sorted(cohorts_dir.glob("*.json")):
+            definition = _as_object_dict(json.loads(path.read_text(encoding="utf-8")), str(path))
+            cohort_id = definition.get("cohort_id")
+            if isinstance(cohort_id, str) and _filename_for(cohort_id) == url_id:
+                definition["active"] = active
+                tmp = path.with_name(path.name + ".tmp")
+                tmp.write_text(json.dumps(definition, indent=2), encoding="utf-8")
+                os.replace(tmp, path)
+                return active
+    raise FileNotFoundError(f"no cohort with url_id {url_id!r} under {cohorts_dir}")
 
 
 def _walk(node: object, keys: tuple[str, ...]) -> object:
@@ -283,4 +304,5 @@ def cohort_display_meta(cohort_def: dict[str, object]) -> dict[str, object]:
         "train_start": train_start if isinstance(train_start, str) else None,
         "train_end": train_end if isinstance(train_end, str) else None,
         "decoder_count": decoder_count,
+        "active": bool(cohort_def.get("active", False)),
     }

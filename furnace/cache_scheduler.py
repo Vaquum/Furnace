@@ -66,6 +66,8 @@ def refresh_once(
     error level), not swallowed."""
     out: dict[str, int] = {}
     for cohort_def in cohorts.list_cohort_definitions(root):
+        if not cohort_def.get("active", False):
+            continue  # only an operator-activated cohort is served
         series = series_for_cohort(cohort_def)
         if series is None:
             continue

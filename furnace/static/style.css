@@ -1804,6 +1804,19 @@ table.experiments-table.cohorts-table td.col-arrow { width: 340px; white-space: 
 }
 .copy-arrow:hover { color: var(--accent); }
 .copy-arrow.copied { color: var(--positive); }
+/* Per-cohort serve switch — text on/off in the .state idiom, hairline pill.
+   role="switch"+aria-checked carries the state; "on" reads in the positive
+   accent (this cohort is the one served for its bar type), "off" stays soft. */
+.cohort-active {
+  min-width: 34px; height: 20px; padding: 0 var(--gap-s); margin-right: var(--gap-s);
+  border: 1px solid var(--rule); border-radius: 2px;
+  background: transparent; color: var(--ink-soft); cursor: pointer;
+  font-family: var(--font-mono); font-size: var(--t-small); font-weight: 500;
+  letter-spacing: 0.08em; text-transform: uppercase; line-height: 1;
+  vertical-align: middle; transition: color var(--motion), border-color var(--motion);
+}
+.cohort-active:hover { color: var(--accent); border-color: var(--accent); }
+.cohort-active[aria-checked="true"] { color: var(--positive); border-color: var(--positive); }
 
 /* Cohort perm-by-perm drilldown: the `id` column is the perm hash, not the
    round view's narrow Int64 — widen it, left-align it, mono, and ellipsise the

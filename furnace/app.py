@@ -1189,6 +1189,23 @@ def create_app(root: Path) -> FastAPI:
             raise HTTPException(404, "cohort not found")
         return JSONResponse({"deleted": cohort_id})
 
+    @app.post("/cohorts/{url_id}/active")
+    async def set_cohort_active_route(url_id: str, request: Request):
+        """Flip a cohort's active flag. JSON body {"active": bool}. Returns
+        {"url_id": str, "active": bool}. 400 if the body is not a JSON object
+        with a boolean `active`; 404 if the cohort does not exist."""
+        raw = await request.json()
+        if not isinstance(raw, dict):
+            raise HTTPException(400, "request body must be a JSON object")
+        active = cast(dict[str, object], raw).get("active")
+        if not isinstance(active, bool):
+            raise HTTPException(400, "`active` must be a boolean")
+        try:
+            cohorts.set_cohort_active(root, url_id, active)
+        except FileNotFoundError as exc:
+            raise HTTPException(404, "cohort not found") from exc
+        return {"url_id": url_id, "active": active}
+
     # ---- Cohort detail — a cohort is a round's permutations (possibly
     # filtered), so its pages mirror the round/experiment views, computed over
     # the cohort's own permutation_ids. The URL segment is the ':'-folded id. ----
@@ -1268,7 +1285,8 @@ def create_app(root: Path) -> FastAPI:
             df = df.filter(pl.col("id").cast(pl.Utf8, strict=False).is_in(list(_cohort_perms(definition))))
         return PlainTextResponse(df.write_csv(), media_type="text/csv", headers=headers)
 
-    _cohort_view_handlers = (cohorts_page, create_cohort, delete_cohort, cohort_page,
+    _cohort_view_handlers = (cohorts_page, create_cohort, delete_cohort,
+                             set_cohort_active_route, cohort_page,
                              cohort_results_page, cohort_results_json, cohort_csv)
     del _cohort_view_handlers
 

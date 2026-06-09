@@ -36,6 +36,11 @@
       </td>
       <td class="num col-decoders">{{ c.decoder_count }}</td>
       <td class="col-actions">
+        <button type="button" class="cohort-active" role="switch"
+                aria-checked="{{ 'true' if c.active else 'false' }}"
+                aria-label="Serve {{ c.name }} for its bar type"
+                data-cohort-url="{{ c.url_id }}"
+                title="Serve this cohort for its bar type">{{ 'on' if c.active else 'off' }}</button>
         <button type="button" class="delete-exp" data-cohort="{{ c.cohort_id }}" aria-label="Delete cohort" title="Delete cohort">×</button>
       </td>
     </tr>
@@ -62,6 +67,26 @@ document.getElementById('cohorts-rows').addEventListener('click', async (e) => {
     copy.textContent = ok ? '✓' : '✕';
     copy.classList.toggle('copied', ok);
     setTimeout(() => { copy.textContent = '⧉'; copy.classList.remove('copied'); }, 1200);
+    return;
+  }
+  // Toggle whether this cohort is served (active) for its bar type. The scheduler
+  // tops up only active cohorts; turning one on (S79) makes it the sole active
+  // cohort for its bar type, so reload to re-render the whole table server-side.
+  const toggle = e.target.closest('.cohort-active');
+  if (toggle) {
+    const next = toggle.getAttribute('aria-checked') !== 'true';
+    const r = await fetch(`/cohorts/${encodeURIComponent(toggle.dataset.cohortUrl)}/active`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ active: next }),
+    });
+    if (r.ok) {
+      location.reload();
+    } else {
+      let msg = 'Toggle failed';
+      try { msg = (await r.json()).detail || msg; } catch (_) {}
+      alert(`${r.status}: ${msg}`);
+    }
     return;
   }
   const del = e.target.closest('.delete-exp');
