@@ -1193,9 +1193,9 @@ def create_app(root: Path) -> FastAPI:
     async def set_cohort_active_route(url_id: str, request: Request):
         """Turn a cohort on or off. JSON body {"active": bool}. Turning it on
         makes it the sole active cohort for its bar type (same-series peers flip
-        off) and backfills that bar type's served file so it reflects this
-        cohort. Returns {"url_id": str, "active": bool}. 400 if the body is not a
-        JSON object with a boolean `active`; 404 if the cohort does not exist."""
+        off); the scheduler service performs prediction refresh out-of-band.
+        Returns {"url_id": str, "active": bool}. 400 if the body is not a JSON
+        object with a boolean `active`; 404 if the cohort does not exist."""
         raw = await request.json()
         if not isinstance(raw, dict):
             raise HTTPException(400, "request body must be a JSON object")
