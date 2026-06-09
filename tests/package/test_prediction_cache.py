@@ -15,6 +15,7 @@ being mislabelled.
 
 from __future__ import annotations
 
+import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -25,6 +26,17 @@ from limen.data import historical_data
 from furnace import prediction_cache
 
 _SERIES = "time_test"
+
+
+def _isolated_round(round_dir: Path, dest: Path) -> Path:
+    """Copy the session round to a per-test dir and strip any persisted sensor
+    store, so the warm-up/persistence assertions start from a cold store
+    regardless of which other test populated the shared ``cohort_round`` first."""
+    shutil.copytree(round_dir, dest)
+    sensors = dest / "sensors"
+    if sensors.exists():
+        shutil.rmtree(sensors)
+    return dest
 
 
 def _serve_arrow(monkeypatch, klines: pl.DataFrame, *, arrow_root: Path, series: str) -> None:
@@ -149,3 +161,167 @@ def test_unmapped_reason_fails_loud() -> None:
     when = datetime(2024, 5, 1, 12, 0, 0, tzinfo=UTC)
     with pytest.raises(KeyError):
         prediction_cache._to_frame([_Bar(when, 1, 0.5, "a-reason-limen-does-not-have-yet")])
+
+
+def test_backfill_persists_sensors(
+    cohort_round: tuple[Path, list[str], str],
+    fake_spot_klines: None,
+    frozen_klines: pl.DataFrame,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """The first backfill trains each member once and persists it to the
+    per-experiment store (``<experiment_dir>/sensors/<pid>.pkl`` + ``.json``),
+    so a later tick can reload it instead of re-training."""
+    round_dir, rids, _at = cohort_round
+    exp = _isolated_round(round_dir, tmp_path / "round")
+    arrow = tmp_path / "arrow"
+    _serve_arrow(monkeypatch, frozen_klines, arrow_root=arrow, series=_SERIES)
+    cohort_def = {"experiment_dir": str(exp), "permutation_ids": list(rids)}
+
+    prediction_cache.backfill(cohort_def, _SERIES, conduit_root=tmp_path / "conduit", arrow_root=arrow)
+
+    store = exp / "sensors"
+    for pid in rids:
+        assert (store / f"{pid}.pkl").is_file()
+        assert (store / f"{pid}.json").is_file()
+
+
+def test_topup_reuses_persisted_sensors_without_retrain(
+    cohort_round: tuple[Path, list[str], str],
+    fake_spot_klines: None,
+    frozen_klines: pl.DataFrame,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """A warm top_up reloads the persisted sensors and never calls
+    ``Trainer.train`` — the per-tick re-train that made the refresh O(history)
+    is gone once the store is warm."""
+    round_dir, rids, _at = cohort_round
+    exp = _isolated_round(round_dir, tmp_path / "round")
+    cohort_def = {"experiment_dir": str(exp), "permutation_ids": list(rids)}
+    conduit, arrow = tmp_path / "conduit", tmp_path / "arrow"
+
+    calls: list[list[str]] = []
+    real_train = prediction_cache.Trainer.train
+
+    def spy_train(self, permutation_ids, *a, **k):
+        calls.append(list(permutation_ids))
+        return real_train(self, permutation_ids, *a, **k)
+
+    monkeypatch.setattr(prediction_cache.Trainer, "train", spy_train)
+
+    head = frozen_klines.head(int(frozen_klines.height * 0.8))
+    _serve_arrow(monkeypatch, head, arrow_root=arrow, series=_SERIES)
+    prediction_cache.backfill(cohort_def, _SERIES, conduit, arrow)
+    assert calls, "a cold backfill must train the members at least once"
+    calls.clear()
+
+    _serve_arrow(monkeypatch, frozen_klines, arrow_root=arrow, series=_SERIES)
+    appended = prediction_cache.top_up(cohort_def, _SERIES, conduit, arrow)
+    assert appended > 0
+    assert calls == [], "a warm top_up must reuse persisted sensors, never re-train"
+
+
+def test_topup_scores_bounded_window_not_full_history(
+    cohort_round: tuple[Path, list[str], str],
+    fake_spot_klines: None,
+    frozen_klines: pl.DataFrame,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """top_up scores a bounded tail (``WARMUP_BARS + n_new`` bars), not the
+    whole history — proven by capturing the frame handed to ``predict_all`` with
+    a small WARMUP_BARS so the window is a strict subset of the series."""
+    round_dir, rids, _at = cohort_round
+    exp = _isolated_round(round_dir, tmp_path / "round")
+    cohort_def = {"experiment_dir": str(exp), "permutation_ids": list(rids)}
+    conduit, arrow = tmp_path / "conduit", tmp_path / "arrow"
+
+    monkeypatch.setattr(prediction_cache, "WARMUP_BARS", 100)
+
+    heights: list[int] = []
+    real_predict_all = prediction_cache.Cohort.predict_all
+
+    def spy_predict_all(self, frame, *a, **k):
+        heights.append(frame.height)
+        return real_predict_all(self, frame, *a, **k)
+
+    monkeypatch.setattr(prediction_cache.Cohort, "predict_all", spy_predict_all)
+
+    head = frozen_klines.head(int(frozen_klines.height * 0.8))
+    _serve_arrow(monkeypatch, head, arrow_root=arrow, series=_SERIES)
+    prediction_cache.backfill(cohort_def, _SERIES, conduit, arrow)
+
+    _serve_arrow(monkeypatch, frozen_klines, arrow_root=arrow, series=_SERIES)
+    n_new = frozen_klines.height - head.height
+    prediction_cache.top_up(cohort_def, _SERIES, conduit, arrow)
+
+    assert heights[-1] == 100 + n_new
+    assert heights[-1] < frozen_klines.height  # a bounded window, not the full history
+
+
+def test_windowed_topup_matches_full_backfill(
+    cohort_round: tuple[Path, list[str], str],
+    fake_spot_klines: None,
+    frozen_klines: pl.DataFrame,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """The rows a windowed top_up appends are byte-identical to a full
+    backfill's for the same bars — the warm-up-safe window reproduces the
+    full-history prediction exactly. WARMUP_BARS (2000) exceeds the fixture, so
+    the window is the whole history and any too-short window would diverge."""
+    round_dir, rids, _at = cohort_round
+    exp = _isolated_round(round_dir, tmp_path / "round")
+    cohort_def = {"experiment_dir": str(exp), "permutation_ids": list(rids)}
+    arrow = tmp_path / "arrow"
+    conduit_topup, conduit_full = tmp_path / "conduit_topup", tmp_path / "conduit_full"
+
+    # Reference: one full backfill over the entire real history.
+    _serve_arrow(monkeypatch, frozen_klines, arrow_root=arrow, series=_SERIES)
+    prediction_cache.backfill(cohort_def, _SERIES, conduit_full, arrow)
+    full = pl.read_ipc(prediction_cache.cache_path(_SERIES, conduit_full), memory_map=True)
+
+    # Incremental: backfill a head, then top up the withheld real tail.
+    head = frozen_klines.head(int(frozen_klines.height * 0.8))
+    _serve_arrow(monkeypatch, head, arrow_root=arrow, series=_SERIES)
+    prediction_cache.backfill(cohort_def, _SERIES, conduit_topup, arrow)
+    last_ts = pl.read_ipc(
+        prediction_cache.cache_path(_SERIES, conduit_topup), memory_map=True
+    ).get_column("ts").max()
+    _serve_arrow(monkeypatch, frozen_klines, arrow_root=arrow, series=_SERIES)
+    prediction_cache.top_up(cohort_def, _SERIES, conduit_topup, arrow)
+    topped = pl.read_ipc(prediction_cache.cache_path(_SERIES, conduit_topup), memory_map=True)
+
+    new_from_topup = topped.filter(pl.col("ts") > last_ts).sort("ts")
+    new_from_full = full.filter(pl.col("ts") > last_ts).sort("ts")
+    assert new_from_topup.height > 0
+    assert new_from_topup.equals(new_from_full)
+
+
+def test_topup_no_new_bar_skips_bind_and_predict(
+    cohort_round: tuple[Path, list[str], str],
+    fake_spot_klines: None,
+    frozen_klines: pl.DataFrame,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """When no bar has closed since the last tick, top_up returns 0 without
+    binding a cohort (and so without predicting) — an idle tick is a cheap ts
+    comparison, not a re-score."""
+    round_dir, rids, _at = cohort_round
+    exp = _isolated_round(round_dir, tmp_path / "round")
+    cohort_def = {"experiment_dir": str(exp), "permutation_ids": list(rids)}
+    conduit, arrow = tmp_path / "conduit", tmp_path / "arrow"
+
+    _serve_arrow(monkeypatch, frozen_klines, arrow_root=arrow, series=_SERIES)
+    prediction_cache.backfill(cohort_def, _SERIES, conduit, arrow)
+
+    def boom(*_a, **_k):
+        raise AssertionError("top_up bound a cohort despite no new bar")
+
+    monkeypatch.setattr(prediction_cache, "_bound_cohort", boom)
+
+    # The series carries no bar newer than the cache's last ts.
+    assert prediction_cache.top_up(cohort_def, _SERIES, conduit, arrow) == 0
