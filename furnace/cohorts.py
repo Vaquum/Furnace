@@ -212,6 +212,15 @@ def activate_cohort(root: Path, url_id: str) -> dict[str, object]:
     target = find_cohort_definition(root, url_id)
     if target is None:
         raise FileNotFoundError(f"no cohort with url_id {url_id!r} under {_cohorts_dir(root)}")
+    # Peer-grouping keys off cohort_display_meta()['arrow_series'] (the
+    # method-aware /opt/arrow resolver). The served-file key the route backfills
+    # and cache_scheduler.refresh_once tops up is cache_scheduler.series_for_cohort
+    # (file_path-only). For a real Limen arrow round (data_source.method ==
+    # get_arrow_file) both reduce to Path(file_path).parent.name and agree, which
+    # is what makes one-active-per-served-file hold. These two resolvers MUST
+    # stay in agreement; cohorts cannot import cache_scheduler (the dependency
+    # runs the other way), so this is the pin until one canonical resolver lives
+    # here and cache_scheduler delegates to it.
     series = cohort_display_meta(target).get("arrow_series")
     for definition in list_cohort_definitions(root):
         cohort_id = definition.get("cohort_id")
