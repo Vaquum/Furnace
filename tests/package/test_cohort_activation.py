@@ -1,14 +1,9 @@
-"""Tests for one-active-cohort-per-bar-type with activation backfill
-(slice S79 / #101).
+"""Tests for one-active-cohort-per-bar-type activation.
 
-Turning a cohort on makes it the sole active cohort for its arrow series and
-backfills that series' served file. ``furnace/cohorts.py::activate_cohort`` (the
-single-active rule) is pure and tested directly; the ``POST /cohorts/{url_id}/active``
-route is exercised through a real app via ``TestClient``. The route's
-``prediction_cache.backfill`` writes to the production ``/opt/conduit`` (its roots
-are not injectable), so the route tests spy it to assert the activation wiring —
-that the right cohort + series reach the backfill — rather than writing to /opt;
-the file-writing itself is ``prediction_cache``'s own (separately tested) contract.
+Turning a cohort on makes it the sole active cohort for its arrow series. The
+``POST /cohorts/{url_id}/active`` route is exercised through a real app via
+``TestClient`` and must not run prediction backfill in the web request; the
+separate scheduler process owns prediction refresh work.
 """
 
 from __future__ import annotations
@@ -96,41 +91,34 @@ def test_activate_leaves_other_series_untouched(tmp_path: Path) -> None:
     assert cohorts.find_cohort_definition(root, other)["active"] is True
 
 
-def test_activate_backfills_series_file(tmp_path: Path, monkeypatch) -> None:
-    """Turning a cohort on through the route backfills its bar type's served
-    file — the activated cohort's definition and its series reach backfill."""
+def test_active_route_does_not_backfill_in_web_request(tmp_path: Path, monkeypatch) -> None:
+    """Turning a cohort on through the route persists active state only. It
+    must not run prediction backfill in the web request, because sensor binding
+    can be CPU-heavy and failure-prone; the scheduler process owns refresh."""
     _auth_env(monkeypatch)
     root = tmp_path / "data"
     url_id = _make_cohort(root, tmp_path, "solo", "time_a", ["p1"])
 
-    calls: list[tuple[dict[str, object], str]] = []
+    def fail_backfill(definition, series):
+        raise AssertionError("active route must not backfill")
 
-    def spy_backfill(definition, series):
-        calls.append((definition, series))
-
-    monkeypatch.setattr(prediction_cache, "backfill", spy_backfill)
+    monkeypatch.setattr(prediction_cache, "backfill", fail_backfill)
     client = TestClient(create_app(root))
 
     r = client.post(f"/cohorts/{url_id}/active", json={"active": True}, auth=("u", "p"))
 
     assert r.status_code == 200
-    assert len(calls) == 1
-    definition, series = calls[0]
-    assert series == "time_a"
-    assert definition["active"] is True
-    assert definition["permutation_ids"] == ["p1"]
+    assert cohorts.find_cohort_definition(root, url_id)["active"] is True
 
 
 def test_active_route_on_enforces_single_active(tmp_path: Path, monkeypatch) -> None:
     """End to end: POSTing active=true for cohort B on a series deactivates the
-    prior active cohort A on that series, leaves B on, and backfills the series."""
+    prior active cohort A on that series and leaves B on."""
     _auth_env(monkeypatch)
     root = tmp_path / "data"
     a = _make_cohort(root, tmp_path, "a", "time_x", ["p1"])
     b = _make_cohort(root, tmp_path, "b", "time_x", ["p2"])
 
-    backfilled: list[str] = []
-    monkeypatch.setattr(prediction_cache, "backfill", lambda definition, series: backfilled.append(series))
     client = TestClient(create_app(root))
 
     client.post(f"/cohorts/{a}/active", json={"active": True}, auth=("u", "p"))
@@ -141,4 +129,3 @@ def test_active_route_on_enforces_single_active(tmp_path: Path, monkeypatch) -> 
     assert r.status_code == 200
     assert cohorts.find_cohort_definition(root, b)["active"] is True
     assert cohorts.find_cohort_definition(root, a)["active"] is False
-    assert backfilled[-1] == "time_x"
