@@ -268,10 +268,14 @@ def test_windowed_topup_matches_full_backfill(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    """The rows a windowed top_up appends are byte-identical to a full
-    backfill's for the same bars — the warm-up-safe window reproduces the
-    full-history prediction exactly. WARMUP_BARS (2000) exceeds the fixture, so
-    the window is the whole history and any too-short window would diverge."""
+    """A genuinely *truncated* top_up window reproduces a full backfill's rows
+    byte-for-byte. WARMUP_BARS is lowered to 1100 so the window is
+    ``tail(1100 + n_new)`` = 1417 of the 1585-bar fixture — a strict subset that
+    still covers the feature warm-up — yet the appended rows are byte-identical
+    to a full backfill's. A window too short to cover the warm-up drifts (the
+    causal rolling scaler's stats change with the leading context), so this is
+    the guard the WARMUP_BARS margin rests on; pinning the test at the full 2000
+    would only compare the whole history to itself."""
     round_dir, rids, _at = cohort_round
     exp = _isolated_round(round_dir, tmp_path / "round")
     cohort_def = {"experiment_dir": str(exp), "permutation_ids": list(rids)}
@@ -290,14 +294,29 @@ def test_windowed_topup_matches_full_backfill(
     last_ts = pl.read_ipc(
         prediction_cache.cache_path(_SERIES, conduit_topup), memory_map=True
     ).get_column("ts").max()
+
+    # Bound the top-up to a strict subset and capture the scored frame's height
+    # to prove it really truncated (1100 + n_new < the full history).
+    monkeypatch.setattr(prediction_cache, "WARMUP_BARS", 1100)
+    scored_heights: list[int] = []
+    real_predict_all = prediction_cache.Cohort.predict_all
+
+    def spy_predict_all(self, frame, *a, **k):
+        scored_heights.append(frame.height)
+        return real_predict_all(self, frame, *a, **k)
+
+    monkeypatch.setattr(prediction_cache.Cohort, "predict_all", spy_predict_all)
     _serve_arrow(monkeypatch, frozen_klines, arrow_root=arrow, series=_SERIES)
     prediction_cache.top_up(cohort_def, _SERIES, conduit_topup, arrow)
     topped = pl.read_ipc(prediction_cache.cache_path(_SERIES, conduit_topup), memory_map=True)
 
+    n_new = frozen_klines.height - head.height
+    assert scored_heights == [1100 + n_new]           # the top-up scored a bounded tail...
+    assert 1100 + n_new < frozen_klines.height         # ...that is a strict subset of the history
     new_from_topup = topped.filter(pl.col("ts") > last_ts).sort("ts")
     new_from_full = full.filter(pl.col("ts") > last_ts).sort("ts")
     assert new_from_topup.height > 0
-    assert new_from_topup.equals(new_from_full)
+    assert new_from_topup.equals(new_from_full)         # byte-identical despite the truncation
 
 
 def test_topup_no_new_bar_skips_bind_and_predict(

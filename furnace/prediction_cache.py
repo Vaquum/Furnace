@@ -32,9 +32,12 @@ from furnace.inference import Cohort, HistoricalData, Trainer
 CONDUIT_ROOT = Path("/opt/conduit")
 ARROW_ROOT = Path("/opt/arrow")
 
-WARMUP_BARS = 2000  # >= the longest feature warm-up (the causal rolling scaler's
-# 1000-bar window dominates). test_windowed_topup_matches_full_backfill fails the
-# PR if this is too small, so it cannot silently regress to a degraded window.
+WARMUP_BARS = 2000  # margin over the longest feature warm-up (the causal rolling
+# scaler's ~1000-bar window dominates). test_windowed_topup_matches_full_backfill
+# pins the windowing itself — a bounded tail reproduces a full backfill byte-for-
+# byte, and a window short of the warm-up diverges — but on a ~1000-bar-warm-up
+# fixture it cannot prove 2000 specifically: that is a deliberate margin, so a
+# feature needing more would not be caught here. Raise this, never narrow it.
 
 _REASON_CODE: dict[str | None, int] = {
     None: 0,
