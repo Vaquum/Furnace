@@ -255,6 +255,37 @@ jobs:
               sys.exit(1)
           PY
 
+      - name: Compose scheduler service runs the top-up loop with the serving mounts
+        run: |
+          set -euo pipefail
+          python <<'PY'
+          import sys, yaml
+
+          d = yaml.safe_load(open('deploy/docker-compose.yml'))
+          svcs = d.get('services') or {}
+          sched = [s for s in svcs.values() if '--scheduler' in str(s.get('command'))]
+          if len(sched) != 1:
+              print('::error::exactly one service must run `python -m furnace --scheduler`')
+              sys.exit(1)
+
+          s = sched[0]
+          t = {m.get('target'): m for m in (s.get('volumes') or []) if isinstance(m, dict)}
+          errs = []
+          if t.get('/data/experiments', {}).get('read_only') is not False:
+              errs.append('/data/experiments must be rw bind')
+          if t.get('/opt/arrow', {}).get('read_only') is not True:
+              errs.append('/opt/arrow must be ro')
+          if t.get('/opt/conduit', {}).get('read_only') is not False:
+              errs.append('/opt/conduit must be rw')
+          if s.get('restart') != 'unless-stopped':
+              errs.append('restart must be unless-stopped')
+          if errs:
+              print('::error::scheduler service contract:')
+              for err in errs:
+                  print(' ', err)
+              sys.exit(1)
+          PY
+
       - name: Compose top-level volumes are all external
         run: |
           set -euo pipefail
