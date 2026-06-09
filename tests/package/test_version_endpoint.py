@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 import furnace.app as app_mod
+from furnace import api_reference
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 APP_SOURCE = (REPO_ROOT / "furnace" / "app.py").read_text(encoding="utf-8")
@@ -37,8 +38,9 @@ def test_version_route_registers_version_info() -> None:
 
 def test_version_requires_auth_like_crucible_and_mill() -> None:
     """/version carries private-repo build provenance, so it stays behind the
-    API token like every route except /health and /static — Smithy reads it with
-    the token, matching Crucible and Mill. It must NOT be in the auth exemption."""
-    exemption = re.search(r'if path == "/health".*?:', APP_SOURCE)
-    assert exemption is not None
-    assert "/version" not in exemption.group(0)
+    API token like every route except the public allowlist — Smithy reads it
+    with the token, matching Crucible and Mill. It must NOT be public, while
+    the healthcheck is — both asserted against api_reference.is_public, the
+    single source of truth the auth middleware routes through."""
+    assert api_reference.is_public("GET", "/health")
+    assert not api_reference.is_public("GET", "/version")

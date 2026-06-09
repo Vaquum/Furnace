@@ -1,3 +1,7 @@
+# v0.35.0
+
+- Add a public `GET /api-reference` endpoint: a machine-readable catalogue of the HTTP API derived from the live FastAPI route table — every `APIRoute`'s methods, path, name, and whether it requires auth — so a consumer can discover the surface programmatically without credentials. `furnace/api_reference.py` owns `is_public(method, path)`, now the single source of truth the auth middleware and the reference both read, so a documented `auth` flag can never disagree with what the server enforces; and `build_reference(app)`, which the new route serves. The endpoint joins `/health` on the middleware's public allowlist. The richer FastAPI `/openapi.json` and `/docs` stay auth-gated and are linked from the reference.
+
 # v0.34.2
 
 - Make scheduler-side cold sensor builds deterministic and resumable. The `furnace-scheduler` deploy service now runs with the same BLAS/OpenMP caps as round execution (`OMP_NUM_THREADS=OPENBLAS_NUM_THREADS=MKL_NUM_THREADS=NUMEXPR_NUM_THREADS=1`), so serving replay uses the same numeric-thread contract as the original Limen round instead of fanning one sklearn fit across the host. `prediction_cache._load_or_build_sensors` now reconstructs and persists one missing permutation at a time; if a later permutation fails reconstruction, earlier validated sensors stay on disk and the next tick resumes at the first remaining miss instead of starting from zero.

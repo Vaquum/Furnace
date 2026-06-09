@@ -29,7 +29,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import cohorts, inference
+from . import api_reference, cohorts, inference
 from .state import (
     ACTIVE_STATES,
     StateMachine,
@@ -538,20 +538,17 @@ def create_app(root: Path) -> FastAPI:
 
     @app.middleware("http")
     async def _auth_middleware(request: Request, call_next):
-        # Exempt the healthcheck path, the static-file mount, and the
-        # already-public HEAD / smoke-check (per slice S02). /version is
-        # auth-required like every other route — Smithy reads it with the
-        # bearer, matching Crucible and Mill.
-        # Every other request must carry either HTTP Basic with
-        # APP_USERNAME/APP_PASSWORD or `Authorization: Bearer <API_SECRET>`.
+        # Public paths carry no credentials: the healthcheck, the
+        # machine-readable /api-reference, the static mount, the HEAD / smoke
+        # check, and /search/bundle — a co-located consumer curls the bundle
+        # from the same host without credentials, so keep the port off the
+        # public internet to keep it private. api_reference.is_public is the
+        # single source of truth, shared with the reference document so its
+        # `auth` flags match what is enforced here. /version stays auth-required.
+        # Every other request must carry HTTP Basic with APP_USERNAME/
+        # APP_PASSWORD or `Authorization: Bearer <API_SECRET>`.
         path = request.url.path
-        # /search/bundle is unauthenticated by design — a co-located consumer
-        # curls it from the same host without credentials (the "Get API call"
-        # command). It serves read-only experiment artefacts, so keep the port
-        # off the public internet to keep the bundle private.
-        if path == "/health" or path == "/static" or path.startswith("/static/") or path == "/search/bundle":
-            return await call_next(request)
-        if request.method == "HEAD" and path == "/":
+        if api_reference.is_public(request.method, path):
             return await call_next(request)
         auth = request.headers.get("authorization", "")
         # RFC 7235 says auth scheme names are case-insensitive; split on the
@@ -587,6 +584,10 @@ def create_app(root: Path) -> FastAPI:
         return {"status": "ok"}
 
     app.add_api_route("/version", _version_info, methods=["GET"])
+
+    @app.get("/api-reference")
+    def api_reference_route() -> JSONResponse:
+        return JSONResponse(api_reference.build_reference(app, app_name="Furnace"))
 
     @app.on_event("shutdown")
     def _on_shutdown() -> None:
