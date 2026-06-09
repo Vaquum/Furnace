@@ -229,8 +229,8 @@ def activate_cohort(root: Path, url_id: str) -> dict[str, object]:
         peer_url_id = _filename_for(cohort_id)
         # A bar type is one arrow series; only a peer on the *same* served series
         # contends for its conduit file, so leave other-series cohorts untouched.
-        if peer_url_id != url_id and series is not None and \
-                cohort_display_meta(definition).get("arrow_series") == series:
+        if (peer_url_id != url_id and series is not None
+                and cohort_display_meta(definition).get("arrow_series") == series):
             set_cohort_active(root, peer_url_id, False)
     set_cohort_active(root, url_id, True)
     target["active"] = True
