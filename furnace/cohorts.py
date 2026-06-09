@@ -202,6 +202,32 @@ def set_cohort_active(root: Path, url_id: str, active: bool) -> bool:
     raise FileNotFoundError(f"no cohort with url_id {url_id!r} under {cohorts_dir}")
 
 
+def activate_cohort(root: Path, url_id: str) -> dict[str, object]:
+    """Make this cohort the sole active one for its bar type: set its own
+    ``active`` true, and set every OTHER cohort sharing its arrow series
+    (``cohort_display_meta()['arrow_series']``) to false. Returns the activated
+    definition so the caller can backfill its series file. Peers are found by
+    enumerating ``<root>/cohorts/*.json``, never by building a path from
+    ``url_id``. Raises ``FileNotFoundError`` when no cohort matches ``url_id``."""
+    target = find_cohort_definition(root, url_id)
+    if target is None:
+        raise FileNotFoundError(f"no cohort with url_id {url_id!r} under {_cohorts_dir(root)}")
+    series = cohort_display_meta(target).get("arrow_series")
+    for definition in list_cohort_definitions(root):
+        cohort_id = definition.get("cohort_id")
+        if not isinstance(cohort_id, str):
+            continue
+        peer_url_id = _filename_for(cohort_id)
+        # A bar type is one arrow series; only a peer on the *same* served series
+        # contends for its conduit file, so leave other-series cohorts untouched.
+        if peer_url_id != url_id and series is not None and \
+                cohort_display_meta(definition).get("arrow_series") == series:
+            set_cohort_active(root, peer_url_id, False)
+    set_cohort_active(root, url_id, True)
+    target["active"] = True
+    return target
+
+
 def _walk(node: object, keys: tuple[str, ...]) -> object:
     """Follow a chain of dict keys, returning None on any non-dict / missing."""
     for key in keys:
