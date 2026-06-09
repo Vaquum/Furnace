@@ -1194,18 +1194,24 @@ def create_app(root: Path) -> FastAPI:
         """Turn a cohort on or off. JSON body {"active": bool}. Turning it on
         makes it the sole active cohort for its bar type (same-series peers flip
         off) and backfills that bar type's served file so it reflects this
-        cohort. Returns {"url_id": str, "active": bool}. 404 if absent."""
-        if cohorts.find_cohort_definition(root, url_id) is None:
-            raise HTTPException(404, "cohort not found")
-        body = await request.json()
-        active = bool(body["active"])
-        if active:
-            definition = cohorts.activate_cohort(root, url_id)  # same-series peers -> off
-            series = cache_scheduler.series_for_cohort(definition)
-            if series is not None:
-                prediction_cache.backfill(definition, series)  # series file becomes this cohort's
-        else:
-            cohorts.set_cohort_active(root, url_id, False)
+        cohort. Returns {"url_id": str, "active": bool}. 400 if the body is not a
+        JSON object with a boolean `active`; 404 if the cohort does not exist."""
+        raw = await request.json()
+        if not isinstance(raw, dict):
+            raise HTTPException(400, "request body must be a JSON object")
+        active = cast(dict[str, object], raw).get("active")
+        if not isinstance(active, bool):
+            raise HTTPException(400, "`active` must be a boolean")
+        try:
+            if active:
+                definition = cohorts.activate_cohort(root, url_id)  # same-series peers -> off
+                series = cache_scheduler.series_for_cohort(definition)
+                if series is not None:
+                    prediction_cache.backfill(definition, series)  # series file becomes this cohort's
+            else:
+                cohorts.set_cohort_active(root, url_id, False)
+        except FileNotFoundError as exc:
+            raise HTTPException(404, "cohort not found") from exc
         return {"url_id": url_id, "active": active}
 
     # ---- Cohort detail — a cohort is a round's permutations (possibly
