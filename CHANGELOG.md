@@ -1,3 +1,7 @@
+# v0.34.1
+
+- Stop cohort activation from running prediction backfill inside the web request. `POST /cohorts/{url_id}/active` now flips the active state and returns immediately; the separate scheduler service is the only process that performs prediction refresh work, so clicking an inactive cohort no longer blocks the web app on sensor binding or reconstruction failures.
+
 # v0.34.0
 
 - Run the prediction-refresh scheduler as its own deploy service. `deploy/docker-compose.yml` now starts `furnace-scheduler` from the same image with `python -m furnace --root /data/experiments --scheduler`, the serving mounts required by the top-up loop (`/data/experiments` rw, `/opt/arrow` ro, `/opt/conduit` rw), and `restart: unless-stopped`; the deploy-contract workflow and package tests now assert that service, its mounts, its restart policy, and that the web service does not carry `--scheduler`.
