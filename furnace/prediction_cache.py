@@ -26,10 +26,18 @@ from typing import cast
 
 import polars as pl
 
+from furnace import sensor_registry
 from furnace.inference import Cohort, HistoricalData, Trainer
 
 CONDUIT_ROOT = Path("/opt/conduit")
 ARROW_ROOT = Path("/opt/arrow")
+
+WARMUP_BARS = 2000  # margin over the longest feature warm-up (the causal rolling
+# scaler's ~1000-bar window dominates). test_windowed_topup_matches_full_backfill
+# pins the windowing itself — a bounded tail reproduces a full backfill byte-for-
+# byte, and a window short of the warm-up diverges — but on a ~1000-bar-warm-up
+# fixture it cannot prove 2000 specifically: that is a deliberate margin, so a
+# feature needing more would not be caught here. Raise this, never narrow it.
 
 _REASON_CODE: dict[str | None, int] = {
     None: 0,
@@ -63,13 +71,41 @@ def _permutation_ids(cohort_def: dict[str, object]) -> list[str]:
     return ids
 
 
+def _load_or_build_sensors(
+    experiment_dir: str, permutation_ids: list[str]
+) -> list[sensor_registry.Sensor]:
+    """Reload each sensor from the per-experiment store (``<experiment_dir>/sensors/``)
+    when its ``sensor_registry`` version sidecar matches the running env; reconstruct
+    the misses via ``Trainer.train`` and ``persist_sensor`` them. Members are returned
+    in ``permutation_ids`` order. A warm store skips ``Trainer.train`` entirely."""
+    store = Path(experiment_dir) / "sensors"
+    loaded: dict[str, sensor_registry.Sensor] = {}
+    misses: list[str] = []
+    for permutation_id in permutation_ids:
+        sensor = sensor_registry.load_sensor(store, permutation_id)
+        if sensor is None:
+            misses.append(permutation_id)
+        else:
+            loaded[permutation_id] = sensor
+    if misses:
+        trained: list[sensor_registry.Sensor] = Trainer(experiment_dir).train(misses)
+        # Trainer.train returns the sensors in the requested order (Limen's
+        # inference contract, the same alignment Cohort.set_members relies on),
+        # so zip the misses to their sensors rather than reading permutation_id
+        # back off each Sensor.
+        for permutation_id, sensor in zip(misses, trained, strict=True):
+            sensor_registry.persist_sensor(sensor, store)
+            loaded[permutation_id] = sensor
+    return [loaded[permutation_id] for permutation_id in permutation_ids]
+
+
 def _bound_cohort(cohort_def: dict[str, object]) -> Cohort:
-    """Trainer.train materializes the member sensors; bind them into a Cohort.
-    Persistence (sensor_registry) is an optimization layered later, not needed
-    to produce the cache."""
+    """Bind the cohort's member sensors into a Cohort, reusing persisted sensors
+    where the store is warm (``_load_or_build_sensors``) instead of re-training
+    every member on every call."""
     experiment_dir = _experiment_dir(cohort_def)
     permutation_ids = _permutation_ids(cohort_def)
-    sensors = Trainer(experiment_dir).train(permutation_ids)
+    sensors = _load_or_build_sensors(experiment_dir, permutation_ids)
     cohort = Cohort(experiment_log_path=experiment_dir, permutation_ids=list(permutation_ids))
     cohort.set_members(sensors)
     return cohort
@@ -163,9 +199,20 @@ def top_up(
         return pl.read_ipc(path, memory_map=True).height
     existing = pl.read_ipc(path, memory_map=True)
     last_ts = existing.get_column("ts").max() if existing.height else None
-
+    klines = _series_klines(series, arrow_root)
+    # The canonical bars carry ``datetime`` (not the cache's epoch-ns ``ts``);
+    # derive ts the same way ``_to_frame`` does so the comparison is exact.
+    bar_ts = pl.col("datetime").dt.epoch("ns")
+    newest = klines.select(bar_ts.max()).item() if klines.height else None
+    if last_ts is not None and (newest is None or newest <= last_ts):
+        return 0  # no bar has closed since the last tick — no bind, no predict
+    n_new = klines.filter(bar_ts > last_ts).height if last_ts is not None else klines.height
     cohort = _bound_cohort(cohort_def)
-    fresh = _to_frame(list(cohort.predict_all(_series_klines(series, arrow_root))))
+    # Score only a warm-up-safe tail (the new bars plus WARMUP_BARS of preceding
+    # context) instead of the whole history — same appended rows, a fraction of
+    # the work. test_windowed_topup_matches_full_backfill pins the equivalence.
+    scored = klines.tail(WARMUP_BARS + n_new) if last_ts is not None else klines
+    fresh = _to_frame(list(cohort.predict_all(scored)))
     new_rows = fresh.filter(pl.col("ts") > last_ts) if last_ts is not None else fresh
     if not new_rows.height:
         return 0
