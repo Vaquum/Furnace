@@ -187,6 +187,45 @@ def test_backfill_persists_sensors(
         assert (store / f"{pid}.json").is_file()
 
 
+def test_cold_sensor_build_persists_each_success_before_next_train(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """A failed cold build must not discard earlier validated sensors. The
+    production failure mode was: train several misses, fail on a later one,
+    persist none, then retry from zero on the next scheduler tick."""
+    sensors = {"p1": object(), "p2": object()}
+    train_calls: list[list[str]] = []
+    persisted: list[object] = []
+
+    class FakeTrainer:
+        def __init__(self, experiment_dir: str) -> None:
+            assert experiment_dir == "round-dir"
+
+        def train(self, permutation_ids: list[str]) -> list[object]:
+            train_calls.append(list(permutation_ids))
+            if permutation_ids == ["p2"]:
+                raise RuntimeError("p2 failed")
+            return [sensors[permutation_ids[0]]]
+
+    def fake_load_sensor(_directory: Path, _permutation_id: str) -> object | None:
+        return None
+
+    def fake_persist_sensor(sensor: object, _directory: Path) -> str:
+        persisted.append(sensor)
+        return "p1"
+
+    monkeypatch.setattr(prediction_cache, "Trainer", FakeTrainer)
+    monkeypatch.setattr(prediction_cache.sensor_registry, "load_sensor", fake_load_sensor)
+    monkeypatch.setattr(prediction_cache.sensor_registry, "persist_sensor", fake_persist_sensor)
+
+    with pytest.raises(RuntimeError, match="p2 failed"):
+        prediction_cache._load_or_build_sensors("round-dir", ["p1", "p2"])
+
+    assert train_calls == [["p1"], ["p2"]]
+    assert persisted == [sensors["p1"]]
+
+
 def test_topup_reuses_persisted_sensors_without_retrain(
     cohort_round: tuple[Path, list[str], str],
     fake_spot_klines: None,

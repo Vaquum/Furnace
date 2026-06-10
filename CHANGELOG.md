@@ -1,3 +1,7 @@
+# v0.34.2
+
+- Make scheduler-side cold sensor builds deterministic and resumable. The `furnace-scheduler` deploy service now runs with the same BLAS/OpenMP caps as round execution (`OMP_NUM_THREADS=OPENBLAS_NUM_THREADS=MKL_NUM_THREADS=NUMEXPR_NUM_THREADS=1`), so serving replay uses the same numeric-thread contract as the original Limen round instead of fanning one sklearn fit across the host. `prediction_cache._load_or_build_sensors` now reconstructs and persists one missing permutation at a time; if a later permutation fails reconstruction, earlier validated sensors stay on disk and the next tick resumes at the first remaining miss instead of starting from zero.
+
 # v0.34.1
 
 - Stop cohort activation from running prediction backfill inside the web request. `POST /cohorts/{url_id}/active` now flips the active state and returns immediately; the separate scheduler service is the only process that performs prediction refresh work, so clicking an inactive cohort no longer blocks the web app on sensor binding or reconstruction failures.
