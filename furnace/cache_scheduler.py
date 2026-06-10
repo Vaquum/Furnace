@@ -19,8 +19,11 @@ from __future__ import annotations
 import json
 import logging
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
+
+import polars as pl
 
 from furnace import cohorts, prediction_cache
 
@@ -53,6 +56,41 @@ def series_for_cohort(cohort_def: dict[str, object]) -> str | None:
     return Path(node).parent.name
 
 
+def _manifest_entry(
+    cohort_def: dict[str, object], name: str, series: str, conduit_root: Path
+) -> dict[str, object]:
+    """One serving-manifest entry, read back from the payload ``top_up`` just
+    wrote (an mmap read, not a recompute) so the manifest can never describe
+    rows the file does not hold."""
+    payload = pl.read_ipc(prediction_cache.cache_path(series, conduit_root), memory_map=True)
+    max_ts = payload.get_column("ts").max() if payload.height else None
+    return {
+        "cohort_id": str(cohort_def.get("cohort_id", "")),
+        "name": name,
+        "path": f"{series}/latest.arrow",
+        "rows": payload.height,
+        "max_ts": cast(int | None, max_ts),
+    }
+
+
+def _write_serving_manifest(series_entries: dict[str, dict[str, object]], conduit_root: Path) -> None:
+    """Atomically (re)write ``serving_manifest.json`` — the consumer-facing
+    liveness authority. Fail-closed: only this tick's successful active
+    refreshes are listed, so an inactive cohort's retained file, a failed
+    refresh, or a cohort turned off simply does not appear, whatever is on
+    disk."""
+    manifest: dict[str, object] = {
+        "version": 1,
+        "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "series": series_entries,
+    }
+    path = prediction_cache.serving_manifest_path(conduit_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    tmp.replace(path)
+
+
 def refresh_once(
     root: Path = DATA_ROOT,
     conduit_root: Path = prediction_cache.CONDUIT_ROOT,
@@ -63,8 +101,10 @@ def refresh_once(
     single cohort raising (a round caught mid-write, a corrupt sensor, a full
     disk) is logged with its traceback and skipped — it must not starve every
     other cohort of its refresh this tick. The failure is loud (``logger`` at
-    error level), not swallowed."""
+    error level), not swallowed. After the pass the serving manifest is
+    rewritten with exactly the series that refreshed successfully."""
     out: dict[str, int] = {}
+    served: dict[str, dict[str, object]] = {}
     for cohort_def in cohorts.list_cohort_definitions(root):
         if not cohort_def.get("active", False):
             continue  # only an operator-activated cohort is served
@@ -83,6 +123,8 @@ def refresh_once(
                 series,
             )
             continue
+        served[series] = _manifest_entry(cohort_def, name, series, conduit_root)
+    _write_serving_manifest(served, conduit_root)
     return out
 
 

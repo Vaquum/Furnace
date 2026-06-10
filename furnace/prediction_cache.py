@@ -53,10 +53,36 @@ def cache_path(series: str, conduit_root: Path = CONDUIT_ROOT) -> Path:
     return conduit_root / series / "latest.arrow"
 
 
+def cache_identity_path(series: str, conduit_root: Path = CONDUIT_ROOT) -> Path:
+    """The identity sidecar beside a served file: the ``cohort_id`` of the
+    cohort that produced ``latest.arrow``. ``top_up`` compares it against the
+    active cohort and replaces the file on mismatch, so a same-series cohort
+    switch can never append one cohort's tail onto another cohort's history."""
+    return conduit_root / series / "cohort_id"
+
+
+def serving_manifest_path(conduit_root: Path = CONDUIT_ROOT) -> Path:
+    """The consumer-facing liveness authority: ``<conduit_root>/serving_manifest.json``.
+    Written by the scheduler after each refresh pass; a served file absent from
+    it is not live (stale retained cache), whatever exists on disk."""
+    return conduit_root / "serving_manifest.json"
+
+
 def _experiment_dir(cohort_def: dict[str, object]) -> str:
     value = cohort_def.get("experiment_dir")
     if not isinstance(value, str) or not value:
         raise ValueError(f"cohort_def['experiment_dir'] must be a non-empty string; got {value!r}")
+    return value
+
+
+def _cohort_identity(cohort_def: dict[str, object]) -> str:
+    """The persisted ``cohort_id`` (content hash of manifest + permutation set) —
+    the stable identity recorded beside a served file. Fail-loud when absent:
+    every definition ``cohorts.write_cohort_definition`` produces carries it, so
+    a def without one is malformed, not a case to serve under a guessed name."""
+    value = cohort_def.get("cohort_id")
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"cohort_def['cohort_id'] must be a non-empty string; got {value!r}")
     return value
 
 
@@ -114,8 +140,18 @@ def _bound_cohort(cohort_def: dict[str, object]) -> Cohort:
 
 
 def _series_klines(series: str, arrow_root: Path) -> pl.DataFrame:
-    """Zero-copy read of the canonical bar series the cohort predicts over."""
-    return HistoricalData().get_arrow_file(str(arrow_root / series / "latest.arrow"))
+    """Zero-copy read of the canonical bar series, CLOSED bars only. The
+    snapshot's newest row is the FORMING bar — dollar series re-append it with a
+    churning end-``ts`` every snapshot, time series carry the just-opened
+    interval with whatever partial volume existed at write time — so it is
+    dropped here, at the single choke point both ``backfill`` and ``top_up``
+    load through: a prediction on a half-formed bar (a phantom ``ts`` that never
+    exists in the final history, or a frozen partial-interval row) can never be
+    written. A bar is served on the snapshot after its successor opens."""
+    klines = HistoricalData().get_arrow_file(str(arrow_root / series / "latest.arrow"))
+    if not klines.height:
+        return klines
+    return klines.filter(pl.col("datetime") < klines.get_column("datetime").max())
 
 
 def _reason_code(reason: object) -> int:
@@ -175,12 +211,24 @@ def backfill(
     arrow_root: Path = ARROW_ROOT,
 ) -> Path:
     """Predict the cohort over the full series history and write the cache.
-    Returns the written path (``<conduit_root>/<series>/latest.arrow``)."""
+    Returns the written path (``<conduit_root>/<series>/latest.arrow``).
+
+    The identity sidecar is invalidated BEFORE the payload write and recorded
+    after it (mirroring ``sensor_registry.persist_sensor``'s ordering): a crash
+    mid-write leaves a payload with no recorded identity, which the next
+    ``top_up`` treats as a rebuild signal — never a new payload still labelled
+    with the previous cohort's identity."""
     cohort = _bound_cohort(cohort_def)
+    identity = _cohort_identity(cohort_def)
     klines = _series_klines(series, arrow_root)
     frame = _to_frame(list(cohort.predict_all(klines)))
     path = cache_path(series, conduit_root)
+    identity_path = cache_identity_path(series, conduit_root)
+    identity_path.unlink(missing_ok=True)
     _write_atomic(frame, path)
+    identity_tmp = identity_path.with_name(identity_path.name + ".tmp")
+    identity_tmp.write_text(identity, encoding="utf-8")
+    identity_tmp.replace(identity_path)
     return path
 
 
@@ -194,9 +242,15 @@ def top_up(
     idempotent — re-running a minute appends nothing (a closed bar's prediction
     never changes), so a missed tick self-corrects on the next run. Returns the
     number of bars appended. Falls back to a full ``backfill`` when no cache
-    exists yet."""
+    exists yet, or when the cache was produced by a DIFFERENT cohort (the
+    identity sidecar): a same-series cohort switch replaces history outright —
+    appending the new cohort's tail onto the old cohort's rows would serve a
+    file no single cohort ever produced. The rebuild also purges any phantom
+    rows a pre-closed-bar-rule cache accumulated."""
     path = cache_path(series, conduit_root)
-    if not path.exists():
+    identity_path = cache_identity_path(series, conduit_root)
+    recorded = identity_path.read_text(encoding="utf-8").strip() if identity_path.is_file() else None
+    if not path.exists() or recorded != _cohort_identity(cohort_def):
         backfill(cohort_def, series, conduit_root, arrow_root)
         return pl.read_ipc(path, memory_map=True).height
     existing = pl.read_ipc(path, memory_map=True)

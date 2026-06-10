@@ -26,6 +26,8 @@ from limen.data import historical_data
 from furnace import prediction_cache
 
 _SERIES = "time_test"
+_CID_A = "sha256:" + "a" * 64
+_CID_B = "sha256:" + "b" * 64
 
 
 def _isolated_round(round_dir: Path, dest: Path) -> Path:
@@ -79,7 +81,7 @@ def test_backfill_writes_single_batch_uncompressed_arrow(
     file (not the patched input) is the proof."""
     round_dir, rids, _at = cohort_round
     _serve_arrow(monkeypatch, frozen_klines, arrow_root=tmp_path / "arrow", series=_SERIES)
-    cohort_def = {"experiment_dir": str(round_dir), "permutation_ids": list(rids)}
+    cohort_def = {"experiment_dir": str(round_dir), "permutation_ids": list(rids), "cohort_id": _CID_A}
 
     out = prediction_cache.backfill(
         cohort_def, _SERIES, conduit_root=tmp_path / "conduit", arrow_root=tmp_path / "arrow"
@@ -99,7 +101,7 @@ def test_cache_columns_and_ts_sorted(
     """The written frame carries exactly the fixed-width envelope, ts-sorted."""
     round_dir, rids, _at = cohort_round
     _serve_arrow(monkeypatch, frozen_klines, arrow_root=tmp_path / "arrow", series=_SERIES)
-    cohort_def = {"experiment_dir": str(round_dir), "permutation_ids": list(rids)}
+    cohort_def = {"experiment_dir": str(round_dir), "permutation_ids": list(rids), "cohort_id": _CID_A}
 
     out = prediction_cache.backfill(
         cohort_def, _SERIES, conduit_root=tmp_path / "conduit", arrow_root=tmp_path / "arrow"
@@ -122,7 +124,7 @@ def test_cache_path_layout(
     """The cache lands at ``<conduit_root>/<series>/latest.arrow``."""
     round_dir, rids, _at = cohort_round
     _serve_arrow(monkeypatch, frozen_klines, arrow_root=tmp_path / "arrow", series=_SERIES)
-    cohort_def = {"experiment_dir": str(round_dir), "permutation_ids": list(rids)}
+    cohort_def = {"experiment_dir": str(round_dir), "permutation_ids": list(rids), "cohort_id": _CID_A}
     conduit = tmp_path / "conduit"
 
     out = prediction_cache.backfill(
@@ -177,7 +179,7 @@ def test_backfill_persists_sensors(
     exp = _isolated_round(round_dir, tmp_path / "round")
     arrow = tmp_path / "arrow"
     _serve_arrow(monkeypatch, frozen_klines, arrow_root=arrow, series=_SERIES)
-    cohort_def = {"experiment_dir": str(exp), "permutation_ids": list(rids)}
+    cohort_def = {"experiment_dir": str(exp), "permutation_ids": list(rids), "cohort_id": _CID_A}
 
     prediction_cache.backfill(cohort_def, _SERIES, conduit_root=tmp_path / "conduit", arrow_root=arrow)
 
@@ -238,7 +240,7 @@ def test_topup_reuses_persisted_sensors_without_retrain(
     is gone once the store is warm."""
     round_dir, rids, _at = cohort_round
     exp = _isolated_round(round_dir, tmp_path / "round")
-    cohort_def = {"experiment_dir": str(exp), "permutation_ids": list(rids)}
+    cohort_def = {"experiment_dir": str(exp), "permutation_ids": list(rids), "cohort_id": _CID_A}
     conduit, arrow = tmp_path / "conduit", tmp_path / "arrow"
 
     calls: list[list[str]] = []
@@ -274,7 +276,7 @@ def test_topup_scores_bounded_window_not_full_history(
     a small WARMUP_BARS so the window is a strict subset of the series."""
     round_dir, rids, _at = cohort_round
     exp = _isolated_round(round_dir, tmp_path / "round")
-    cohort_def = {"experiment_dir": str(exp), "permutation_ids": list(rids)}
+    cohort_def = {"experiment_dir": str(exp), "permutation_ids": list(rids), "cohort_id": _CID_A}
     conduit, arrow = tmp_path / "conduit", tmp_path / "arrow"
 
     monkeypatch.setattr(prediction_cache, "WARMUP_BARS", 100)
@@ -307,17 +309,19 @@ def test_windowed_topup_matches_full_backfill(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    """A genuinely *truncated* top_up window reproduces a full backfill's rows
-    byte-for-byte. WARMUP_BARS is lowered to 1100 so the window is
-    ``tail(1100 + n_new)`` = 1417 of the 1585-bar fixture — a strict subset that
-    still covers the feature warm-up — yet the appended rows are byte-identical
-    to a full backfill's. A window too short to cover the warm-up drifts (the
-    causal rolling scaler's stats change with the leading context), so this is
-    the guard the WARMUP_BARS margin rests on; pinning the test at the full 2000
-    would only compare the whole history to itself."""
+    """A genuinely *truncated* top_up window reproduces a full backfill's rows.
+    WARMUP_BARS is lowered to 1100 so the window is ``tail(1100 + n_new)`` — a
+    strict subset of the closed-bar history that still covers the feature
+    warm-up — yet the appended rows carry identical ``ts``/``prediction``/
+    ``reason_code`` and probabilities within 1e-9 of a full backfill's (the two
+    frame lengths sum rolling windows in different float orders, observed
+    ~1e-13; a window short of the warm-up drifts the causal rolling scaler's
+    stats orders of magnitude above that, which is what this guards). Pinning
+    the test at the full 2000 would only compare the whole history to
+    itself."""
     round_dir, rids, _at = cohort_round
     exp = _isolated_round(round_dir, tmp_path / "round")
-    cohort_def = {"experiment_dir": str(exp), "permutation_ids": list(rids)}
+    cohort_def = {"experiment_dir": str(exp), "permutation_ids": list(rids), "cohort_id": _CID_A}
     arrow = tmp_path / "arrow"
     conduit_topup, conduit_full = tmp_path / "conduit_topup", tmp_path / "conduit_full"
 
@@ -355,7 +359,13 @@ def test_windowed_topup_matches_full_backfill(
     new_from_topup = topped.filter(pl.col("ts") > last_ts).sort("ts")
     new_from_full = full.filter(pl.col("ts") > last_ts).sort("ts")
     assert new_from_topup.height > 0
-    assert new_from_topup.equals(new_from_full)         # byte-identical despite the truncation
+    for col in ("ts", "prediction", "reason_code"):
+        assert new_from_topup.get_column(col).equals(new_from_full.get_column(col)), col
+    prob_t = new_from_topup.get_column("probability")
+    prob_f = new_from_full.get_column("probability")
+    assert prob_t.is_null().equals(prob_f.is_null())
+    max_diff = (prob_t - prob_f).abs().max()
+    assert max_diff is None or max_diff <= 1e-9        # summation-order noise only
 
 
 def test_topup_no_new_bar_skips_bind_and_predict(
@@ -370,7 +380,7 @@ def test_topup_no_new_bar_skips_bind_and_predict(
     comparison, not a re-score."""
     round_dir, rids, _at = cohort_round
     exp = _isolated_round(round_dir, tmp_path / "round")
-    cohort_def = {"experiment_dir": str(exp), "permutation_ids": list(rids)}
+    cohort_def = {"experiment_dir": str(exp), "permutation_ids": list(rids), "cohort_id": _CID_A}
     conduit, arrow = tmp_path / "conduit", tmp_path / "arrow"
 
     _serve_arrow(monkeypatch, frozen_klines, arrow_root=arrow, series=_SERIES)
@@ -383,3 +393,101 @@ def test_topup_no_new_bar_skips_bind_and_predict(
 
     # The series carries no bar newer than the cache's last ts.
     assert prediction_cache.top_up(cohort_def, _SERIES, conduit, arrow) == 0
+
+
+def test_series_klines_drops_forming_newest_row(monkeypatch) -> None:
+    """The snapshot's newest row is the FORMING bar (a churning dollar-bar tail
+    or a just-opened time interval) — ``_series_klines`` drops it, so neither
+    write path can ever predict on a half-formed bar."""
+    when = [datetime(2024, 5, 1, 12, m, tzinfo=UTC) for m in range(4)]
+    snapshot = pl.DataFrame({"datetime": when, "close": [1.0, 2.0, 3.0, 4.0]})
+    monkeypatch.setattr(
+        historical_data.HistoricalData,
+        "get_arrow_file",
+        staticmethod(lambda *_a, **_k: snapshot),
+    )
+    closed = prediction_cache._series_klines(_SERIES, Path("/x"))
+    assert closed.height == snapshot.height - 1
+    assert closed.get_column("datetime").max() == when[-2]
+
+
+def test_topup_never_appends_forming_bar_ts(
+    cohort_round: tuple[Path, list[str], str],
+    fake_spot_klines: None,
+    frozen_klines: pl.DataFrame,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """A forming bar's churning ``ts`` never reaches the cache: a tick whose
+    only change is the forming row's drift appends nothing, and once the bar
+    closes (a successor row appears) exactly the closed bars are appended —
+    with no phantom ``ts`` from any intermediate snapshot left behind."""
+    round_dir, rids, _at = cohort_round
+    exp = _isolated_round(round_dir, tmp_path / "round")
+    cohort_def = {"experiment_dir": str(exp), "permutation_ids": list(rids), "cohort_id": _CID_A}
+    conduit, arrow = tmp_path / "conduit", tmp_path / "arrow"
+    path = prediction_cache.cache_path(_SERIES, conduit)
+
+    n = frozen_klines.height - 3
+    snap1 = frozen_klines.head(n)  # its newest row is the forming bar
+    _serve_arrow(monkeypatch, snap1, arrow_root=arrow, series=_SERIES)
+    prediction_cache.backfill(cohort_def, _SERIES, conduit, arrow)
+    closed_max = snap1.get_column("datetime").dt.epoch("ns")[-2]
+    forming_v1 = snap1.get_column("datetime").dt.epoch("ns")[-1]
+    cached = pl.read_ipc(path, memory_map=True)
+    assert cached.get_column("ts").max() == closed_max
+    assert forming_v1 not in cached.get_column("ts").to_list()
+
+    # The forming bar drifts (same bar, later end-ts) — still nothing to serve.
+    drifted = pl.concat([
+        snap1.head(n - 1),
+        snap1.tail(1).with_columns(pl.col("datetime") + pl.duration(seconds=30)),
+    ])
+    _serve_arrow(monkeypatch, drifted, arrow_root=arrow, series=_SERIES)
+    assert prediction_cache.top_up(cohort_def, _SERIES, conduit, arrow) == 0
+    forming_v2 = drifted.get_column("datetime").dt.epoch("ns")[-1]
+
+    # The bar closes: successor rows appear; exactly the closed bars append.
+    _serve_arrow(monkeypatch, frozen_klines, arrow_root=arrow, series=_SERIES)
+    appended = prediction_cache.top_up(cohort_def, _SERIES, conduit, arrow)
+    # cached through bar n-2; the full snapshot closes bars n-1, n, n+1 and its
+    # newest row (the last fixture bar) is treated as forming and withheld.
+    assert appended == 3
+    ts_list = pl.read_ipc(path, memory_map=True).get_column("ts").to_list()
+    assert forming_v2 not in ts_list
+    src_ts = set(frozen_klines.get_column("datetime").dt.epoch("ns").to_list())
+    assert set(ts_list) <= src_ts  # every served ts exists in the canonical history
+
+
+def test_top_up_replaces_cache_when_cohort_identity_changes(
+    cohort_round: tuple[Path, list[str], str],
+    fake_spot_klines: None,
+    frozen_klines: pl.DataFrame,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """A same-series cohort switch REPLACES the served file via full backfill —
+    never appends the new cohort's tail onto the old cohort's history. The
+    rebuilt file is byte-identical to an independent backfill of the new
+    cohort, and the identity sidecar records the new cohort."""
+    round_dir, rids, _at = cohort_round
+    exp = _isolated_round(round_dir, tmp_path / "round")
+    conduit, arrow = tmp_path / "conduit", tmp_path / "arrow"
+    _serve_arrow(monkeypatch, frozen_klines, arrow_root=arrow, series=_SERIES)
+
+    cohort_a = {"experiment_dir": str(exp), "permutation_ids": list(rids[:1]), "cohort_id": _CID_A}
+    cohort_b = {"experiment_dir": str(exp), "permutation_ids": list(rids), "cohort_id": _CID_B}
+
+    prediction_cache.backfill(cohort_a, _SERIES, conduit, arrow)
+    identity = prediction_cache.cache_identity_path(_SERIES, conduit)
+    assert identity.read_text(encoding="utf-8") == _CID_A
+
+    served = prediction_cache.top_up(cohort_b, _SERIES, conduit, arrow)
+    rebuilt = pl.read_ipc(prediction_cache.cache_path(_SERIES, conduit), memory_map=True)
+    assert served == rebuilt.height
+    assert identity.read_text(encoding="utf-8") == _CID_B
+
+    reference_root = tmp_path / "conduit_ref"
+    prediction_cache.backfill(cohort_b, _SERIES, reference_root, arrow)
+    reference = pl.read_ipc(prediction_cache.cache_path(_SERIES, reference_root), memory_map=True)
+    assert rebuilt.equals(reference)  # B's history outright — no A rows mixed in

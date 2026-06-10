@@ -371,7 +371,7 @@ function renderRounds(data) {
   const present = new Set();
   document.querySelectorAll('#search-rows tr.round-row').forEach(tr => present.add(tr.dataset.key));
   for (const k of [...selected]) if (!present.has(k)) selected.delete(k);
-  if (selected.size === 0) lockedSha = null;
+  if (selected.size === 0) lockedKey = null;
   applyExpanded();
   applySelection();
 }
@@ -426,12 +426,12 @@ async function getApiCall() {
   setTimeout(() => { status.textContent = ''; }, 2000);
 }
 
-// ---- Round selection — pick same-manifest rounds for one cohort. A cohort is
-// one manifest (Limen's grouping rule); once a round is picked, every round with
-// a different manifest sha is dimmed and locked out. ----
-const selected = new Set();   // roundKeys
-let lockedSha = null;         // the manifest sha the selection is locked to
-let lockedExp = null;         // the experiment the selection is locked to (never cross-experiment)
+// ---- Round selection — a cohort is created from exactly one round (the
+// served history must never mix results of different runs), so picking a
+// round locks the selection to that single round; every other round is dimmed
+// until the selection is cleared. ----
+const selected = new Set();   // roundKeys (at most one)
+let lockedKey = null;         // the single round the selection is locked to
 function roundKey(exp, round) { return exp + ' ' + round; }
 
 function applySelection() {
@@ -439,7 +439,7 @@ function applySelection() {
     const cb = tr.querySelector('.round-check');
     const isSel = selected.has(tr.dataset.key);
     cb.checked = isSel;
-    const dim = lockedSha !== null && (tr.dataset.sha !== lockedSha || tr.dataset.exp !== lockedExp) && !isSel;
+    const dim = lockedKey !== null && tr.dataset.key !== lockedKey;
     tr.classList.toggle('dimmed', dim);
     cb.disabled = dim;
   });
@@ -472,18 +472,18 @@ function updateSelectionUI() {
 
 function toggleRound(tr, on) {
   if (on) {
-    if (lockedSha === null) { lockedSha = tr.dataset.sha; lockedExp = tr.dataset.exp; }
-    // Lock to one manifest AND one experiment — a cohort/bundle is never cross-experiment.
-    if (tr.dataset.sha !== lockedSha || tr.dataset.exp !== lockedExp) { applySelection(); return; }
+    if (lockedKey === null) lockedKey = tr.dataset.key;
+    // One round only — a second round cannot join the selection.
+    if (tr.dataset.key !== lockedKey) { applySelection(); return; }
     selected.add(tr.dataset.key);
   } else {
     selected.delete(tr.dataset.key);
-    if (selected.size === 0) { lockedSha = null; lockedExp = null; }
+    if (selected.size === 0) lockedKey = null;
   }
   applySelection();
 }
 
-function clearSelection() { selected.clear(); lockedSha = null; lockedExp = null; applySelection(); }
+function clearSelection() { selected.clear(); lockedKey = null; applySelection(); }
 
 document.querySelectorAll('.filter-block[data-metric]').forEach(block => {
   sliders[block.dataset.metric] = new RangeSlider(block);

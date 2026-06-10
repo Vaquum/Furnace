@@ -212,3 +212,33 @@ def test_search_links_to_cohort_create_not_graduation() -> None:
     # The cohorts table links each row into its detail page.
     cohorts_text = (PKG_DIR / "templates" / "cohorts.html").read_text(encoding="utf-8")
     assert "/cohorts/{{ c.url_id }}" in cohorts_text
+
+
+def test_create_cohort_rejects_multiple_rounds(tmp_path: Path, monkeypatch) -> None:
+    """A cohort is created from exactly ONE round — the served history must
+    never mix results of different runs. Two rounds in the selection 400 before
+    any round dir is touched; the error names the rule."""
+    from fastapi.testclient import TestClient
+
+    from furnace.app import create_app
+
+    monkeypatch.setenv("APP_USERNAME", "u")
+    monkeypatch.setenv("APP_PASSWORD", "p")
+    monkeypatch.setenv("API_SECRET", "s")
+    client = TestClient(create_app(tmp_path))
+
+    r = client.post(
+        "/cohorts",
+        json={
+            "name": "two-rounds",
+            "cohort_type": "direction",
+            "rounds": [
+                {"experiment_id": "exp", "round_id": "0001"},
+                {"experiment_id": "exp", "round_id": "0002"},
+            ],
+            "filters": {},
+        },
+        auth=("u", "p"),
+    )
+    assert r.status_code == 400
+    assert "exactly one round" in r.json()["detail"]
