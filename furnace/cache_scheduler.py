@@ -132,15 +132,16 @@ def refresh_once(
             continue
         try:
             out[name] = prediction_cache.top_up(cohort_def, series, conduit_root, arrow_root)
+            served[series] = _manifest_entry(cohort_def, name, series, conduit_root)
         except Exception:
             logger.exception(
-                "prediction-cache top_up failed for cohort %r (series %r); "
-                "skipping it this tick so the rest of the cache surface still refreshes",
+                "prediction-cache refresh failed for cohort %r (series %r) — in top_up or "
+                "in the manifest read-back; skipping it this tick so the rest of the cache "
+                "surface still refreshes and the manifest still publishes",
                 name,
                 series,
             )
             continue
-        served[series] = _manifest_entry(cohort_def, name, series, conduit_root)
     _write_serving_manifest(served, conduit_root)
     return out
 

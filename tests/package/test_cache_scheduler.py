@@ -315,6 +315,41 @@ def test_refresh_once_manifest_omits_inactive_stale_files(
     assert manifest["series"] == {}  # the stale file exists on disk, yet nothing is live
 
 
+def test_refresh_once_manifest_readback_failure_does_not_starve_the_pass(
+    cohort_round: tuple[Path, list[str], str],
+    fake_spot_klines: None,
+    frozen_klines: pl.DataFrame,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The manifest read-back is inside the per-cohort guard: a cohort whose
+    ``_manifest_entry`` raises (a corrupt payload, a schema mismatch) is skipped
+    like any other refresh failure — it never aborts the pass, and the manifest
+    is still published (the failing cohort simply absent from it)."""
+    round_dir, rids, _at = cohort_round
+    exp = _arrow_cohort(round_dir, tmp_path / "round", _SERIES)
+    root = tmp_path / "data"
+    conduit, arrow = tmp_path / "conduit", tmp_path / "arrow"
+    _serve_arrow(monkeypatch, frozen_klines)
+    _register(root, "cohort-1", exp, list(rids), cohort_id=_CID_A)
+
+    def boom(*_a: object, **_k: object) -> dict[str, object]:
+        raise OSError("payload unreadable")
+
+    monkeypatch.setattr(cache_scheduler, "_manifest_entry", boom)
+
+    res = cache_scheduler.refresh_once(root, conduit, arrow)
+
+    # top_up genuinely appended/rebuilt, so the cohort is in the bar-count
+    # return; the manifest is the separate fail-closed layer — unable to read
+    # the payload back to describe it, it omits the series rather than lying.
+    assert list(res) == ["cohort-1"]
+    manifest = json.loads(
+        prediction_cache.serving_manifest_path(conduit).read_text(encoding="utf-8")
+    )
+    assert manifest["series"] == {}  # published despite the read-back failure
+
+
 def test_refresh_once_skips_second_active_cohort_on_same_series(
     cohort_round: tuple[Path, list[str], str],
     fake_spot_klines: None,
