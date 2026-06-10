@@ -1270,12 +1270,12 @@ def create_app(root: Path) -> FastAPI:
 
     @app.get("/search/bundle")
     def search_bundle(request: Request, experiment: str | None = None, rounds: str | None = None):
-        # Selection-based: exactly the rounds the operator picked (one
-        # experiment, one manifest), filtered to the cohort's perms — not the
-        # whole filtered index. Unauthenticated (see the auth middleware) so a
-        # same-host consumer can `curl` the exact bundle without credentials.
+        # Selection-based: exactly the round the operator picked, filtered to
+        # the cohort's perms — not the whole filtered index. Unauthenticated
+        # (see the auth middleware) so a same-host consumer can `curl` the
+        # exact bundle without credentials.
         if not experiment or not rounds:
-            raise HTTPException(400, "select one or more rounds (one experiment) before downloading a bundle")
+            raise HTTPException(400, "select a round before downloading a bundle")
         round_ids = [r.strip() for r in rounds.split(",") if r.strip()]
         if not round_ids:
             raise HTTPException(400, "no rounds in the selection")
@@ -1796,52 +1796,47 @@ def _build_selection_bundle(
     # Resolve through _safe_child_dir so `experiment` / `round_ids` cannot path-
     # traverse and can only be the regex-validated forms (which are also the
     # filename stem) — a crafted id is a 404, not a filesystem read.
-    exp_dir = _safe_child_dir(root / "experiments", experiment, EXPERIMENT_ID_RE, "experiment not found")
-    sorted_rids = sorted(round_ids)
-    round_dirs = [
-        _safe_child_dir(exp_dir / "rounds", rid, ROUND_ID_RE, "round not found")
-        for rid in sorted_rids
-    ]
     # A bundle is the file form of a cohort, and a cohort is one round: the
     # selection is one round's limen_output filtered to the matching perms.
-    if len(round_dirs) != 1:
+    if len(round_ids) != 1:
         raise HTTPException(400, "a bundle is one round filtered to the selection")
-    manifests = {(rd / "manifest.yml").read_bytes() for rd in round_dirs if (rd / "manifest.yml").is_file()}
-    perms_by_round = _matching_permutation_ids(root, filters, {(experiment, rid) for rid in sorted_rids})
-    base = _selection_bundle_base(experiment, sorted_rids)
+    exp_dir = _safe_child_dir(root / "experiments", experiment, EXPERIMENT_ID_RE, "experiment not found")
+    rid = round_ids[0]
+    round_dir = _safe_child_dir(exp_dir / "rounds", rid, ROUND_ID_RE, "round not found")
+    perms = list(_matching_permutation_ids(root, filters, {(experiment, rid)}).get((experiment, rid), []))
+    base = _selection_bundle_base(experiment, round_ids)
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         # `limen run <base>/manifest.yml` re-runs it (mount the arrow source).
-        if manifests:
-            z.writestr(f"{base}/manifest.yml", next(iter(manifests)))
-        for rid, rd in zip(sorted_rids, round_dirs):
-            limen = rd / "limen_output"
-            perms = list(perms_by_round.get((experiment, rid), []))
-            out = f"{base}/limen_output/{rid}"
-            meta_path = limen / "metadata.json"
-            if meta_path.is_file():
-                z.writestr(f"{out}/metadata.json", meta_path.read_bytes())
-            csv_path = _round_csv_path(rd)
-            if csv_path.exists():
-                df = pl.read_csv(csv_path, infer_schema_length=200)
-                # Always filter to the matching perms — a zero-match filter
-                # yields a header-only CSV, never a silent fall-back to the full
-                # round. permutation_ids are String (the index normalizes `id`);
-                # an int-id round's CSV `id` infers Int64, so cast before is_in.
-                if "id" in df.columns:
-                    df = df.filter(pl.col("id").cast(pl.String).is_in(perms))
-                z.writestr(f"{out}/results.csv", df.write_csv())
-            rd_path = limen / "round_data.jsonl"
-            if rd_path.is_file():
-                # Each line is one perm's trained sensor, keyed by `round_id`;
-                # keep only the matching perms (a zero match keeps none).
-                permset = set(perms)
-                kept = [
-                    ln for ln in rd_path.read_text().splitlines()
-                    if ln.strip() and str(json.loads(ln).get("round_id")) in permset
-                ]
-                z.writestr(f"{out}/round_data.jsonl", "".join(f"{ln}\n" for ln in kept))
+        manifest_path = round_dir / "manifest.yml"
+        if manifest_path.is_file():
+            z.writestr(f"{base}/manifest.yml", manifest_path.read_bytes())
+        limen = round_dir / "limen_output"
+        out = f"{base}/limen_output/{rid}"
+        meta_path = limen / "metadata.json"
+        if meta_path.is_file():
+            z.writestr(f"{out}/metadata.json", meta_path.read_bytes())
+        csv_path = _round_csv_path(round_dir)
+        if csv_path.exists():
+            df = pl.read_csv(csv_path, infer_schema_length=200)
+            # Always filter to the matching perms — a zero-match filter
+            # yields a header-only CSV, never a silent fall-back to the full
+            # round. permutation_ids are String (the index normalizes `id`);
+            # an int-id round's CSV `id` infers Int64, so cast before is_in.
+            if "id" in df.columns:
+                df = df.filter(pl.col("id").cast(pl.String).is_in(perms))
+            z.writestr(f"{out}/results.csv", df.write_csv())
+        rd_path = limen / "round_data.jsonl"
+        if rd_path.is_file():
+            # Each line is one perm's trained sensor, keyed by `round_id`;
+            # keep only the matching perms (a zero match keeps none).
+            permset = set(perms)
+            kept = [
+                ln for ln in rd_path.read_text().splitlines()
+                if ln.strip() and str(json.loads(ln).get("round_id")) in permset
+            ]
+            z.writestr(f"{out}/round_data.jsonl", "".join(f"{ln}\n" for ln in kept))
     return buf.getvalue()
 
 
