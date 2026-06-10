@@ -63,7 +63,10 @@ def _manifest_entry(
     wrote (an mmap read, not a recompute) so the manifest can never describe
     rows the file does not hold."""
     payload = pl.read_ipc(prediction_cache.cache_path(series, conduit_root), memory_map=True)
-    max_ts = payload.get_column("ts").max() if payload.height else None
+    # The payload is ts-sorted by construction (``_to_frame`` sorts, ``top_up``
+    # re-sorts after concat; pinned by ``test_cache_columns_and_ts_sorted``),
+    # so the last row carries the max ts — no full-column scan per tick.
+    max_ts = payload.get_column("ts")[-1] if payload.height else None
     return {
         "cohort_id": str(cohort_def.get("cohort_id", "")),
         "name": name,
