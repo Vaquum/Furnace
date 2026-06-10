@@ -1,5 +1,5 @@
 """Cohort definitions — the persisted record of which decoders (one
-manifest) form a named cohort, written by the graduation view.
+manifest) form a named cohort, written by the create-cohort dialog.
 
 A cohort definition is a flat JSON file under ``<root>/cohorts/`` — one per
 cohort, named ``<folded_cohort_id>.json`` where the canonical ``cohort_id``'s
@@ -12,11 +12,11 @@ model, and the file is written atomically (temp + ``os.replace``). The
 (``limen.cohort.Cohort.set_members``) so a Furnace-written definition and a
 Limen-built cohort agree on identity — including Limen's uniqueness contract
 (Limen rejects duplicate permutation_ids), which we mirror by rejecting them
-here. ``test_cohort_graduation`` freezes the formula against a literal hash so
+here. ``test_cohort_definitions`` freezes the formula against a literal hash so
 a change to *our* replica is caught; the literal was derived from Limen's
 current formula, so it doubles as the cross-system agreement anchor.
 
-This module is deliberately free of any ``limen`` import: graduation
+This module is deliberately free of any ``limen`` import: cohort creation
 persists *which permutations* form a cohort (the manifest_id + ids), not
 trained sensors — sensor materialization is a separate slice."""
 
@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import cast
 
 # Mirror of limen.yaml.store._SHA256_PREFIX — the prefix Limen puts on every
-# content-hash id (manifest_id, cohort_id). Pinned by test_cohort_graduation.
+# content-hash id (manifest_id, cohort_id). Pinned by test_cohort_definitions.
 _SHA256_PREFIX = "sha256:"
 
 
@@ -64,7 +64,7 @@ def _cohorts_dir(root: Path) -> Path:
 
 def read_manifest_id(limen_output_dir: Path) -> str:
     """Read the round's ``manifest_id`` from ``limen_output/metadata.json``.
-    Limen >= 3.13 writes it; a round without it cannot be graduated (the
+    Limen >= 3.13 writes it; a round without it cannot join a cohort (the
     cohort grouping key would be ambiguous), so this fails loud rather than
     inventing one."""
     metadata_path = limen_output_dir / "metadata.json"
@@ -206,7 +206,9 @@ def activate_cohort(root: Path, url_id: str) -> dict[str, object]:
     """Make this cohort the sole active one for its bar type: set its own
     ``active`` true, and set every OTHER cohort sharing its arrow series
     (``cohort_display_meta()['arrow_series']``) to false. Returns the activated
-    definition so the caller can backfill its series file. Peers are found by
+    definition. The scheduler performs the prediction refresh out-of-band — it
+    detects the cohort change via the conduit identity sidecar and rebuilds the
+    served file; the route does no serving work. Peers are found by
     enumerating ``<root>/cohorts/*.json``, never by building a path from
     ``url_id``. Raises ``FileNotFoundError`` when no cohort matches ``url_id``."""
     target = find_cohort_definition(root, url_id)

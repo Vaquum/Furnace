@@ -194,3 +194,28 @@ def test_creation_modal_saves_manifest_via_put() -> None:
     js = (STATIC / "create_modal.js").read_text(encoding="utf-8")
     assert "/manifest" in js
     assert "manifest_invalid" in js
+
+
+def test_starter_manifest_passes_limen_validation() -> None:
+    """The starter is every new experiment's first contact with the system, so
+    it must validate through the exact Save-path validator (_manifest_errors →
+    limen's parser) under whatever Limen the environment ships. This is the
+    test that keeps the template from rotting against an unpinned Limen — the
+    previous starter sat ~19 versions stale on a retired data-source shape."""
+    from furnace.app import STARTER_MANIFEST, _manifest_errors
+
+    manifest = STARTER_MANIFEST.replace("__EXPERIMENT_NAME__", "starter_check")
+    assert _manifest_errors(manifest) == []
+
+
+def test_starter_manifest_uses_the_arrow_store() -> None:
+    """The starter targets the canonical arrow store (time_15m), keeps the
+    live-progress output contract, and declares split_dates (required by the
+    serving path's training-window masking)."""
+    from furnace.app import STARTER_MANIFEST
+
+    assert "method: limen.data.HistoricalData.get_arrow_file" in STARTER_MANIFEST
+    assert "file_path: /opt/arrow/time_15m/latest.arrow" in STARTER_MANIFEST
+    assert "split_dates:" in STARTER_MANIFEST
+    assert "output_path: limen_output" in STARTER_MANIFEST
+    assert "get_spot_klines" not in STARTER_MANIFEST

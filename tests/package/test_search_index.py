@@ -247,19 +247,20 @@ def test_selection_bundle_empty_filter_match_is_empty(tmp_path: Path) -> None:
     assert [ln for ln in z.read(jsonls[0]).decode().splitlines() if ln.strip()] == []
 
 
-def test_selection_bundle_rejects_cross_manifest(tmp_path: Path) -> None:
-    """Selecting rounds with different manifests is a 400 — a bundle is one
-    manifest (the shared manifest at the root must describe every round)."""
+def test_selection_bundle_rejects_multiple_rounds(tmp_path: Path) -> None:
+    """A bundle is the file form of a cohort, and a cohort is one round: any
+    multi-round selection is a 400 at the bundle chokepoint, whatever the
+    rounds' manifests."""
     from fastapi import HTTPException
 
     from furnace.app import _build_selection_bundle
 
     _make_round(tmp_path / "experiments" / "exp" / "rounds" / "0001", ids=["1"], edge=["1.0"])
-    r2 = _make_round(tmp_path / "experiments" / "exp" / "rounds" / "0002", ids=["2"], edge=["2.0"])
-    (r2 / "manifest.yml").write_text("schema_version: '2.0'\n")  # a different manifest
+    _make_round(tmp_path / "experiments" / "exp" / "rounds" / "0002", ids=["2"], edge=["2.0"])
     try:
         _build_selection_bundle(tmp_path, "exp", ["0001", "0002"], {})
     except HTTPException as exc:
         assert exc.status_code == 400
+        assert "one round" in str(exc.detail)
     else:
-        raise AssertionError("expected 400 for a cross-manifest selection")
+        raise AssertionError("expected 400 for a multi-round selection")
