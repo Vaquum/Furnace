@@ -80,3 +80,14 @@ def test_results_table_has_landing_metric_columns() -> None:
     app = (REPO_ROOT / "furnace" / "app.py").read_text(encoding="utf-8")
     assert 'pl.col(col).fill_nan(None).quantile(0.50, interpolation="nearest").alias(key)' in app
     assert 'pl.first("code_sha256").alias("code_sha256")' in app
+
+
+def test_search_selection_locks_to_single_round() -> None:
+    """The search selection locks to exactly ONE round (a cohort is one round —
+    the served history must never mix runs); the old one-manifest lock
+    (`lockedSha`/`lockedExp`) is gone."""
+    text = (TEMPLATES / "search.html").read_text(encoding="utf-8")
+    assert "lockedKey" in text
+    assert "lockedSha" not in text
+    assert "lockedExp" not in text
+    assert "exactly one round" in text

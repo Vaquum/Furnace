@@ -1118,11 +1118,12 @@ def create_app(root: Path) -> FastAPI:
 
     @app.post("/cohorts")
     async def create_cohort(request: Request):
-        # Create a cohort from the rounds selected in search. The permutations
+        # Create a cohort from the round selected in search. The permutations
         # are computed server-side from the live filter (never trusted from the
-        # client), and every selected round must share one manifest (Limen's
-        # grouping rule) — enforced via the manifest_id read from each round's
-        # own metadata.json.
+        # client), and a cohort comes from exactly ONE round — the served
+        # history must never mix results of different runs, and one round
+        # trivially satisfies Limen's one-manifest grouping rule (the
+        # manifest_id is still read from the round's own metadata.json).
         raw = await request.json()
         if not isinstance(raw, dict):
             raise HTTPException(400, "request body must be a JSON object")
@@ -1146,13 +1147,15 @@ def create_app(root: Path) -> FastAPI:
             if not isinstance(exp_id, str) or not isinstance(round_id, str):
                 raise HTTPException(400, "experiment_id and round_id must be strings")
             wanted.add((exp_id, round_id))
+        if len(wanted) != 1:
+            raise HTTPException(400, "a cohort is created from exactly one round")
         filter_params: dict[str, str | None] = (
             {str(k): str(v) for k, v in cast(dict[object, object], filters_raw).items()}
             if isinstance(filters_raw, dict) else {}
         )
         filters = _parse_filter_params(filter_params)
-        # Every selected round must share one manifest; the first round's dir is
-        # the representative for manifest-derived metadata (bar type / window).
+        # The single round's dir carries the manifest-derived metadata
+        # (bar type / window) and the manifest_id the definition records.
         manifest_ids: set[str] = set()
         first_dir: Path | None = None
         for exp_id, round_id in sorted(wanted):

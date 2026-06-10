@@ -23,6 +23,8 @@ from limen.data import historical_data
 from furnace import cache_scheduler, prediction_cache
 
 _SERIES = "time_test"
+_CID_A = "sha256:" + "a" * 64
+_CID_B = "sha256:" + "b" * 64
 
 
 def _serve_arrow(monkeypatch: pytest.MonkeyPatch, klines: pl.DataFrame) -> None:
@@ -59,15 +61,21 @@ def _arrow_cohort(round_dir: Path, dest: Path, series: str) -> Path:
     return dest
 
 
-def _register(root: Path, name: str, experiment_dir: Path, rids: list[str]) -> None:
-    # active=True: the scheduler now refreshes only active cohorts (slice S78),
-    # so a cohort registered for a top-up test must be on to be served.
+def _register(
+    root: Path, name: str, experiment_dir: Path, rids: list[str],
+    *, cohort_id: str | None = None, active: bool = True,
+) -> None:
+    # active=True: the scheduler refreshes only active cohorts (slice S78), so a
+    # cohort registered for a top-up test must be on to be served. Every real
+    # definition carries a cohort_id — the serving path records it beside the
+    # served file and rebuilds on mismatch (slice S85).
     cohorts_dir = root / "cohorts"
     cohorts_dir.mkdir(parents=True, exist_ok=True)
     (cohorts_dir / f"{name}.json").write_text(
         json.dumps({
             "name": name, "experiment_dir": str(experiment_dir),
-            "permutation_ids": rids, "active": True,
+            "permutation_ids": rids, "active": active,
+            "cohort_id": cohort_id or f"sha256:{name.ljust(64, '0')}",
         }),
         encoding="utf-8",
     )
@@ -161,7 +169,7 @@ def test_topup_appends_only_new_bars(
 ) -> None:
     """A top-up appends only bars newer than the cache's last ts."""
     round_dir, rids, _at = cohort_round
-    cohort_def = {"experiment_dir": str(round_dir), "permutation_ids": list(rids)}
+    cohort_def = {"experiment_dir": str(round_dir), "permutation_ids": list(rids), "cohort_id": _CID_A}
     conduit, arrow = tmp_path / "conduit", tmp_path / "arrow"
 
     head = frozen_klines.head(int(frozen_klines.height * 0.8))
@@ -188,7 +196,7 @@ def test_topup_is_idempotent(
     the cache byte-identical — a missed tick self-corrects, a repeated tick is a
     no-op."""
     round_dir, rids, _at = cohort_round
-    cohort_def = {"experiment_dir": str(round_dir), "permutation_ids": list(rids)}
+    cohort_def = {"experiment_dir": str(round_dir), "permutation_ids": list(rids), "cohort_id": _CID_A}
     conduit, arrow = tmp_path / "conduit", tmp_path / "arrow"
     _serve_arrow(monkeypatch, frozen_klines)
 
@@ -199,3 +207,177 @@ def test_topup_is_idempotent(
     appended = prediction_cache.top_up(cohort_def, _SERIES, conduit, arrow)
     assert appended == 0
     assert path.read_bytes() == before
+
+
+def test_refresh_once_rebuilds_same_series_after_active_cohort_switch(
+    cohort_round: tuple[Path, list[str], str],
+    fake_spot_klines: None,
+    frozen_klines: pl.DataFrame,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Switching the active cohort for a series rebuilds its served file as the
+    new cohort's full history — the switch can never leave A-history with a
+    B-tail in one file."""
+    round_dir, rids, _at = cohort_round
+    exp = _arrow_cohort(round_dir, tmp_path / "round", _SERIES)
+    root = tmp_path / "data"
+    conduit, arrow = tmp_path / "conduit", tmp_path / "arrow"
+    _serve_arrow(monkeypatch, frozen_klines)
+
+    _register(root, "cohort-a", exp, list(rids[:1]), cohort_id=_CID_A)
+    cache_scheduler.refresh_once(root, conduit, arrow)
+    identity = prediction_cache.cache_identity_path(_SERIES, conduit)
+    assert identity.read_text(encoding="utf-8") == _CID_A
+
+    # The switch: A off, B (different members, different identity) on.
+    _register(root, "cohort-a", exp, list(rids[:1]), cohort_id=_CID_A, active=False)
+    _register(root, "cohort-b", exp, list(rids), cohort_id=_CID_B)
+    res = cache_scheduler.refresh_once(root, conduit, arrow)
+
+    rebuilt = pl.read_ipc(prediction_cache.cache_path(_SERIES, conduit), memory_map=True)
+    assert res == {"cohort-b": rebuilt.height}  # the whole file is B's rebuild
+    assert identity.read_text(encoding="utf-8") == _CID_B
+
+    reference_root = tmp_path / "conduit_ref"
+    cohort_b = {"experiment_dir": str(exp), "permutation_ids": list(rids), "cohort_id": _CID_B}
+    prediction_cache.backfill(cohort_b, _SERIES, reference_root, arrow)
+    reference = pl.read_ipc(prediction_cache.cache_path(_SERIES, reference_root), memory_map=True)
+    assert rebuilt.equals(reference)
+
+
+def test_refresh_once_writes_serving_manifest_for_active_successes(
+    cohort_round: tuple[Path, list[str], str],
+    fake_spot_klines: None,
+    frozen_klines: pl.DataFrame,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """After a pass, ``serving_manifest.json`` lists exactly the series that
+    refreshed successfully, with the producing cohort's identity and the
+    payload's row count / max ts read back from the written file."""
+    round_dir, rids, _at = cohort_round
+    exp = _arrow_cohort(round_dir, tmp_path / "round", _SERIES)
+    root = tmp_path / "data"
+    _register(root, "cohort-1", exp, list(rids), cohort_id=_CID_A)
+    conduit, arrow = tmp_path / "conduit", tmp_path / "arrow"
+    _serve_arrow(monkeypatch, frozen_klines)
+
+    cache_scheduler.refresh_once(root, conduit, arrow)
+
+    manifest = json.loads(
+        prediction_cache.serving_manifest_path(conduit).read_text(encoding="utf-8")
+    )
+    payload = pl.read_ipc(prediction_cache.cache_path(_SERIES, conduit), memory_map=True)
+    assert manifest["version"] == 1
+    assert manifest["generated_at"]
+    entry = manifest["series"][_SERIES]
+    assert entry["cohort_id"] == _CID_A
+    assert entry["name"] == "cohort-1"
+    assert entry["path"] == f"{_SERIES}/latest.arrow"
+    assert entry["rows"] == payload.height
+    assert entry["max_ts"] == payload.get_column("ts").max()
+
+
+def test_refresh_once_manifest_omits_inactive_stale_files(
+    cohort_round: tuple[Path, list[str], str],
+    fake_spot_klines: None,
+    frozen_klines: pl.DataFrame,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fail-closed liveness: a retained file whose cohort is now inactive, and
+    an active cohort whose refresh failed, are both absent from the manifest —
+    path existence is not a liveness signal."""
+    round_dir, rids, _at = cohort_round
+    exp = _arrow_cohort(round_dir, tmp_path / "round", _SERIES)
+    root = tmp_path / "data"
+    conduit, arrow = tmp_path / "conduit", tmp_path / "arrow"
+    _serve_arrow(monkeypatch, frozen_klines)
+
+    # A stale retained file: served while active, then turned off.
+    _register(root, "stale", exp, list(rids), cohort_id=_CID_A)
+    cache_scheduler.refresh_once(root, conduit, arrow)
+    assert prediction_cache.cache_path(_SERIES, conduit).is_file()
+    _register(root, "stale", exp, list(rids), cohort_id=_CID_A, active=False)
+
+    # An active cohort that fails (no valid yaml_reference -> Trainer raises).
+    bad = tmp_path / "bad"
+    bad.mkdir()
+    (bad / "metadata.json").write_text(json.dumps(_arrow_metadata("time_bad")), encoding="utf-8")
+    _register(root, "bad", bad, ["not-a-real-permutation"], cohort_id=_CID_B)
+
+    cache_scheduler.refresh_once(root, conduit, arrow)
+
+    manifest = json.loads(
+        prediction_cache.serving_manifest_path(conduit).read_text(encoding="utf-8")
+    )
+    assert manifest["series"] == {}  # the stale file exists on disk, yet nothing is live
+
+
+def test_refresh_once_manifest_readback_failure_does_not_starve_the_pass(
+    cohort_round: tuple[Path, list[str], str],
+    fake_spot_klines: None,
+    frozen_klines: pl.DataFrame,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The manifest read-back is inside the per-cohort guard: a cohort whose
+    ``_manifest_entry`` raises (a corrupt payload, a schema mismatch) is skipped
+    like any other refresh failure — it never aborts the pass, and the manifest
+    is still published (the failing cohort simply absent from it)."""
+    round_dir, rids, _at = cohort_round
+    exp = _arrow_cohort(round_dir, tmp_path / "round", _SERIES)
+    root = tmp_path / "data"
+    conduit, arrow = tmp_path / "conduit", tmp_path / "arrow"
+    _serve_arrow(monkeypatch, frozen_klines)
+    _register(root, "cohort-1", exp, list(rids), cohort_id=_CID_A)
+
+    def boom(*_a: object, **_k: object) -> dict[str, object]:
+        raise OSError("payload unreadable")
+
+    monkeypatch.setattr(cache_scheduler, "_manifest_entry", boom)
+
+    res = cache_scheduler.refresh_once(root, conduit, arrow)
+
+    # top_up genuinely appended/rebuilt, so the cohort is in the bar-count
+    # return; the manifest is the separate fail-closed layer — unable to read
+    # the payload back to describe it, it omits the series rather than lying.
+    assert list(res) == ["cohort-1"]
+    manifest = json.loads(
+        prediction_cache.serving_manifest_path(conduit).read_text(encoding="utf-8")
+    )
+    assert manifest["series"] == {}  # published despite the read-back failure
+
+
+def test_refresh_once_skips_second_active_cohort_on_same_series(
+    cohort_round: tuple[Path, list[str], str],
+    fake_spot_klines: None,
+    frozen_klines: pl.DataFrame,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two active cohorts on one series (only reachable by editing definitions
+    out-of-band — the activation route flips same-series peers off) must not
+    trade the identity sidecar and full-rebuild the file every tick: the
+    latecomer is skipped loudly, the first claimant's file and identity stay."""
+    round_dir, rids, _at = cohort_round
+    exp = _arrow_cohort(round_dir, tmp_path / "round", _SERIES)
+    root = tmp_path / "data"
+    conduit, arrow = tmp_path / "conduit", tmp_path / "arrow"
+    _serve_arrow(monkeypatch, frozen_klines)
+
+    _register(root, "first", exp, list(rids[:1]), cohort_id=_CID_A)
+    _register(root, "second", exp, list(rids), cohort_id=_CID_B)
+    res = cache_scheduler.refresh_once(root, conduit, arrow)
+
+    # list_cohort_definitions orders newest-first; exactly one claimed the series.
+    assert len(res) == 1
+    winner = next(iter(res))
+    identity = prediction_cache.cache_identity_path(_SERIES, conduit).read_text(encoding="utf-8")
+    assert identity == {"first": _CID_A, "second": _CID_B}[winner]
+
+    # A second tick must not rebuild: the same winner appends 0, the loser stays skipped.
+    res2 = cache_scheduler.refresh_once(root, conduit, arrow)
+    assert res2 == {winner: 0}
+    assert prediction_cache.cache_identity_path(_SERIES, conduit).read_text(encoding="utf-8") == identity

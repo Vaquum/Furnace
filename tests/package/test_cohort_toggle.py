@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import polars as pl
 from fastapi.testclient import TestClient
 
 from furnace import cache_scheduler, cohorts, prediction_cache
@@ -87,7 +88,14 @@ def test_refresh_once_skips_inactive_cohort(tmp_path: Path, monkeypatch) -> None
     served: list[str] = []
 
     def spy_top_up(cohort_def, series, conduit_root, arrow_root):
+        # Uphold top_up's postcondition (a readable payload exists) — the
+        # refresh now reads it back to build the serving manifest.
         served.append(series)
+        path = prediction_cache.cache_path(series, conduit_root)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        pl.DataFrame({
+            "ts": [1], "prediction": [1], "probability": [0.5], "reason_code": [0],
+        }).write_ipc(path, compression="uncompressed")
         return 1
 
     monkeypatch.setattr(prediction_cache, "top_up", spy_top_up)

@@ -19,8 +19,11 @@ from __future__ import annotations
 import json
 import logging
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
+
+import polars as pl
 
 from furnace import cohorts, prediction_cache
 
@@ -53,18 +56,60 @@ def series_for_cohort(cohort_def: dict[str, object]) -> str | None:
     return Path(node).parent.name
 
 
+def _manifest_entry(
+    cohort_def: dict[str, object], name: str, series: str, conduit_root: Path
+) -> dict[str, object]:
+    """One serving-manifest entry, read back from the payload ``top_up`` just
+    wrote (an mmap read, not a recompute) so the manifest can never describe
+    rows the file does not hold."""
+    payload = pl.read_ipc(prediction_cache.cache_path(series, conduit_root), memory_map=True)
+    # The payload is ts-sorted by construction (``_to_frame`` sorts, ``top_up``
+    # re-sorts after concat; pinned by ``test_cache_columns_and_ts_sorted``),
+    # so the last row carries the max ts — no full-column scan per tick.
+    max_ts = payload.get_column("ts")[-1] if payload.height else None
+    return {
+        "cohort_id": str(cohort_def.get("cohort_id", "")),
+        "name": name,
+        "path": f"{series}/latest.arrow",
+        "rows": payload.height,
+        "max_ts": cast(int | None, max_ts),
+    }
+
+
+def _write_serving_manifest(series_entries: dict[str, dict[str, object]], conduit_root: Path) -> None:
+    """Atomically (re)write ``serving_manifest.json`` — the consumer-facing
+    liveness authority. Fail-closed: only this tick's successful active
+    refreshes are listed, so an inactive cohort's retained file, a failed
+    refresh, or a cohort turned off simply does not appear, whatever is on
+    disk."""
+    manifest: dict[str, object] = {
+        "version": 1,
+        "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "series": series_entries,
+    }
+    path = prediction_cache.serving_manifest_path(conduit_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    tmp.replace(path)
+
+
 def refresh_once(
     root: Path = DATA_ROOT,
     conduit_root: Path = prediction_cache.CONDUIT_ROOT,
     arrow_root: Path = prediction_cache.ARROW_ROOT,
 ) -> dict[str, int]:
     """One pass: top up every graduated cohort that maps to an arrow series.
-    Returns ``{cohort_name: bars_appended}`` for the cohorts that succeeded. A
+    Returns ``{cohort_name: rows}`` for the cohorts that succeeded — ``rows``
+    is the bars appended that tick, or the file's full row count when the
+    cohort's cache was (re)built from scratch (first serve / cohort switch). A
     single cohort raising (a round caught mid-write, a corrupt sensor, a full
     disk) is logged with its traceback and skipped — it must not starve every
     other cohort of its refresh this tick. The failure is loud (``logger`` at
-    error level), not swallowed."""
+    error level), not swallowed. After the pass the serving manifest is
+    rewritten with exactly the series that refreshed successfully."""
     out: dict[str, int] = {}
+    served: dict[str, dict[str, object]] = {}
     for cohort_def in cohorts.list_cohort_definitions(root):
         if not cohort_def.get("active", False):
             continue  # only an operator-activated cohort is served
@@ -73,16 +118,34 @@ def refresh_once(
             continue
         name_obj = cohort_def.get("name")
         name = name_obj if isinstance(name_obj, str) else series
+        if series in served:
+            # Two active cohorts on one series can only arise from out-of-band
+            # definition edits (the activation route flips same-series peers
+            # off). Served alternately they would trade the identity sidecar
+            # and full-rebuild the file every tick — skip the latecomer loudly
+            # instead of entering that rebuild storm.
+            logger.error(
+                "cohort %r maps to series %r already served by %r this tick; "
+                "skipping it — deactivate one of the two (only the activation "
+                "route keeps one cohort active per series)",
+                name,
+                series,
+                served[series]["name"],
+            )
+            continue
         try:
             out[name] = prediction_cache.top_up(cohort_def, series, conduit_root, arrow_root)
+            served[series] = _manifest_entry(cohort_def, name, series, conduit_root)
         except Exception:
             logger.exception(
-                "prediction-cache top_up failed for cohort %r (series %r); "
-                "skipping it this tick so the rest of the cache surface still refreshes",
+                "prediction-cache refresh failed for cohort %r (series %r) — in top_up or "
+                "in the manifest read-back; skipping it this tick so the rest of the cache "
+                "surface still refreshes and the manifest still publishes",
                 name,
                 series,
             )
             continue
+    _write_serving_manifest(served, conduit_root)
     return out
 
 
