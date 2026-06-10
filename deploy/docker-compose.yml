@@ -50,6 +50,11 @@ services:
   furnace-scheduler:
     image: ${FURNACE_IMAGE:?FURNACE_IMAGE must be set}
     init: true
+    environment:
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      NUMEXPR_NUM_THREADS: "1"
     command: ["python", "-m", "furnace", "--root", "/data/experiments", "--scheduler"]
     volumes:
       - type: bind

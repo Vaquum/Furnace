@@ -88,12 +88,14 @@ def _load_or_build_sensors(
         else:
             loaded[permutation_id] = sensor
     if misses:
-        trained: list[sensor_registry.Sensor] = Trainer(experiment_dir).train(misses)
-        # Trainer.train returns the sensors in the requested order (Limen's
-        # inference contract, the same alignment Cohort.set_members relies on),
-        # so zip the misses to their sensors rather than reading permutation_id
-        # back off each Sensor.
-        for permutation_id, sensor in zip(misses, trained, strict=True):
+        trainer = Trainer(experiment_dir)
+        for permutation_id in misses:
+            trained: list[sensor_registry.Sensor] = trainer.train([permutation_id])
+            if len(trained) != 1:
+                raise ValueError(
+                    f"Trainer returned {len(trained)} sensors for {permutation_id!r}"
+                )
+            sensor = trained[0]
             sensor_registry.persist_sensor(sensor, store)
             loaded[permutation_id] = sensor
     return [loaded[permutation_id] for permutation_id in permutation_ids]

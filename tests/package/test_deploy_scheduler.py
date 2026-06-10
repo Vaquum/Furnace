@@ -73,6 +73,18 @@ def test_scheduler_service_has_serving_mounts() -> None:
     assert conduit["read_only"] is False
 
 
+def test_scheduler_service_caps_blas_threads() -> None:
+    """Cold sensor reconstruction must match run_round's numeric threading
+    contract. Without these caps, sklearn/OpenBLAS can fan one scheduler fit
+    across the whole host and change reconstruction metrics."""
+    assert _scheduler_service()["environment"] == {
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1",
+        "NUMEXPR_NUM_THREADS": "1",
+    }
+
+
 def test_scheduler_service_restart_policy() -> None:
     assert _scheduler_service()["restart"] == "unless-stopped"
 
