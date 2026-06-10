@@ -29,7 +29,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import api_reference, cohorts, inference
+from . import api_reference, cohorts
 from .state import (
     ACTIVE_STATES,
     StateMachine,
@@ -102,57 +102,73 @@ STARTER_MANIFEST = """schema_version: "1.0"
 
 metadata:
   name: __EXPERIMENT_NAME__
-  limen_version: "3.8.0"
+  limen_version: "3.27.0"
   mode: production
-  description: Furnace experiment
+  description: Vol/momentum next-bar-up baseline on canonical 15m bars
 
 sfd:
   manifest:
     type: ml
+
     data_source:
-      method: limen.data.HistoricalData.get_spot_klines
+      method: limen.data.HistoricalData.get_arrow_file
       params:
-        kline_size: 900
-        start_date_limit: "2026-02-01"
-    split_config:
-      train: 8
-      val: 1
-      test: 2
+        file_path: /opt/arrow/time_15m/latest.arrow
+
+    split_dates:
+      train_start: "2024-01-01"
+      train_end:   "2025-12-31"
+      val_start:   "2026-01-01"
+      val_end:     "2026-02-28"
+      test_start:  "2026-03-01"
+      test_end:    "2026-04-30"
+
     indicators:
-      - func: limen.indicators.roc
-        params: {period: "{roc_period}"}
-      - func: limen.indicators.ppo
-      - func: limen.indicators.wilder_rsi
-        params: {period: "{rsi_period}"}
-      - func: limen.indicators.atr
-        params: {period: "{atr_period}"}
-      - func: limen.indicators.ema
-        params: {period: "{ema_period}"}
-      - func: limen.indicators.sma
+      - func: limen.indicators.wilder_rsi.wilder_rsi
+        params: {group: oscillator, period: "{rsi_period}"}
+      - func: limen.indicators.roc.roc
+        params: {group: oscillator, period: "{roc_period}"}
+
     features:
-      - func: limen.features.log_returns.log_returns
-      - func: limen.features.vwap
-      - func: limen.features.range_pct
-      - func: limen.features.body_to_range
-      - func: limen.features.close_position
+      - func: limen.features.range_pct.range_pct
+      - func: limen.features.parkinson_volatility.parkinson_volatility
+        params: {group: vol, window: "{pv_window}"}
+      - func: limen.features.volatility_ratio.volatility_ratio
+        params: {group: vol, short_window: "{h_short}", long_window: "{h_long}"}
+      - func: limen.features.volume_regime.volume_regime
+        params: {group: regime, lookback: "{volume_lookback}"}
+
     target:
-      name: next_bar_up
+      name: next_up
       class: limen.targets.NextBarUpTarget
+
     scaler:
       from_params: scaler_type
+
     reference_architecture: limen.sfd.reference_architecture.logreg_binary
 
+    backtest:
+      fee_bps: "{cost_per_side_bps}"
+      slip_bps: 0.0
+
   params:
-    roc_period: [96, 144]
-    atr_period: [5, 7, 14]
-    rsi_period: [14, 18, 21]
-    ema_period: [12, 26, 96]
-    scaler_type: [robust]
-    solver: [lbfgs]
+    rsi_period: [7, 14, 21]
+    roc_period: [4, 8, 16]
+    pv_window: [4, 16, 96]
+    h_short: [12, 24, 48]
+    h_long: [96, 192, 384]
+    volume_lookback: [48, 96, 192]
+    scaler_type: [robust, rank_gauss]
+    cost_per_side_bps: [1.0, 4.5]
+    solver: [lbfgs, liblinear]
     penalty: [l2]
-    C: [0.05, 0.07, 0.1]
-    class_weight: [0.40, 0.50, 0.60, 0.75, 0.90]
-    max_iter: [60, 90, 120]
+    C: [0.05, 0.25, 1.0]
+    class_weight: [0.5, 0.75, 1.0]
+    tol: [0.0001, 0.001]
+    max_iter: [500, 1000]
+    fit_intercept: [true, false]
+    random_state: [13, 42, 123]
+    l1_ratio: [null]
 
 uel:
   n_permutations: 50
@@ -160,7 +176,6 @@ uel:
     type: random
   prep_each_round: true
   output_format: csv
-  # results land in <round>/limen_output/ — Furnace reads them there
   output_path: limen_output
 """
 
@@ -324,30 +339,6 @@ def _allocate_round_id(rounds_dir: Path) -> str:
     existing = sorted(int(p.name) for p in rounds_dir.iterdir() if p.name.isdigit())
     nxt = (existing[-1] + 1) if existing else 1
     return f"{nxt:04d}"
-
-
-def _parse_cohort_permutation_ids(value: str) -> list[str]:
-    # permutation_ids are Limen round_ids — SHA-256 hex strings, not ints.
-    pieces = [s.strip() for s in value.split(",") if s.strip()]
-    if not pieces:
-        raise HTTPException(
-            422, "permutation_ids must list at least one round_id",
-        )
-    for piece in pieces:
-        # Validate shape here so a malformed token (wrong length, non-hex, or
-        # path-traversal characters) gets a localized 422 instead of failing
-        # deeper in Limen — a round_id is a 64-char lowercase-hex SHA-256.
-        if not re.fullmatch(r"[0-9a-f]{64}", piece):
-            raise HTTPException(
-                422,
-                f"permutation_ids entry {piece!r} is not a round_id "
-                "(64-char lowercase hex)",
-            )
-    if len(set(pieces)) != len(pieces):
-        # Mirror Limen's Cohort uniqueness contract (and cohorts.py): a
-        # duplicate would double-count a member and break cohort_id identity.
-        raise HTTPException(422, "permutation_ids must be unique")
-    return pieces
 
 
 def _safe_child_dir(base: Path, child: str, pattern: re.Pattern[str], missing: str) -> Path:
@@ -1052,47 +1043,6 @@ def create_app(root: Path) -> FastAPI:
     def round_stats(experiment_id: str, round_id: str):
         return JSONResponse(_compute_round_stats(_round_dir(experiment_id, round_id)))
 
-    @app.get("/experiments/{experiment_id}/rounds/{round_id}/cohort/input")
-    def cohort_input(
-        experiment_id: str,
-        round_id: str,
-        at: str,
-    ):
-        # The raw klines window the cohort would feed its members to predict
-        # the bar at `at` — window bounds, bar count, columns, and the final
-        # bar. Pulled from the manifest's data_source; the window is
-        # pid-independent (every member sees the same klines), so there is no
-        # training and no permutation_ids here.
-        limen_output = _cohort_limen_output(experiment_id, round_id)
-        try:
-            body = inference.klines_window_at(limen_output, at)
-        except (ValueError, FileNotFoundError) as exc:
-            raise HTTPException(400, str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(500, str(exc)) from exc
-        return JSONResponse(body)
-
-    @app.get("/experiments/{experiment_id}/rounds/{round_id}/cohort/predict")
-    def cohort_predict(
-        experiment_id: str,
-        round_id: str,
-        permutation_ids: str,
-        at: str,
-    ):
-        # Trains the selected permutations into sensors via Limen's Trainer,
-        # binds a Cohort over them, pulls a klines window ending at `at` from
-        # the manifest's data_source, and returns the cohort's BarPrediction
-        # for the bar at `at`. Sensors are rebuilt on every call — no cache.
-        limen_output = _cohort_limen_output(experiment_id, round_id)
-        pids = _parse_cohort_permutation_ids(permutation_ids)
-        try:
-            body = inference.predict_at(limen_output, pids, at)
-        except (ValueError, FileNotFoundError) as exc:
-            raise HTTPException(400, str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(500, str(exc)) from exc
-        return JSONResponse(body)
-
     def _cohort_limen_output(experiment_id: str, round_id: str) -> Path:
         round_dir = _round_dir(experiment_id, round_id)
         limen_output = round_dir / "limen_output"
@@ -1100,17 +1050,9 @@ def create_app(root: Path) -> FastAPI:
             raise HTTPException(404, "round has no limen_output directory")
         return limen_output
 
-    # FastAPI holds the references through @app.get; this tuple keeps
-    # pyright's reportUnusedFunction from flagging the two handlers as
-    # dead code, since the decorator return is not a use-site pyright
-    # tracks. Touching only the new handlers keeps the rest of the
-    # endpoint surface untouched.
-    _cohort_handlers = (cohort_input, cohort_predict)
-    del _cohort_handlers
-
     @app.get("/cohorts", response_class=HTMLResponse)
     def cohorts_page(request: Request):
-        # COHORTS — a JOBS-style table of the graduated cohorts: one row per
+        # COHORTS — a JOBS-style table of the cohort definitions: one row per
         # cohort with its operator-set type, the derived bar type and training
         # window, and the decoder count.
         metas = [cohorts.cohort_display_meta(c) for c in cohorts.list_cohort_definitions(root)]
@@ -1156,29 +1098,23 @@ def create_app(root: Path) -> FastAPI:
         filters = _parse_filter_params(filter_params)
         # The single round's dir carries the manifest-derived metadata
         # (bar type / window) and the manifest_id the definition records.
-        manifest_ids: set[str] = set()
-        first_dir: Path | None = None
-        for exp_id, round_id in sorted(wanted):
-            limen_output = _cohort_limen_output(exp_id, round_id)
-            if first_dir is None:
-                first_dir = limen_output
-            try:
-                manifest_ids.add(cohorts.read_manifest_id(limen_output))
-            except (ValueError, FileNotFoundError) as exc:
-                raise HTTPException(400, f"{exp_id}/{round_id}: {exc}") from exc
-        if len(manifest_ids) != 1 or first_dir is None:
-            raise HTTPException(400, "selected rounds must share one manifest")
+        (exp_id, round_id) = next(iter(wanted))
+        limen_output = _cohort_limen_output(exp_id, round_id)
+        try:
+            manifest_id = cohorts.read_manifest_id(limen_output)
+        except (ValueError, FileNotFoundError) as exc:
+            raise HTTPException(400, f"{exp_id}/{round_id}: {exc}") from exc
         perms_by_round = _matching_permutation_ids(root, filters, wanted)
         permutation_ids = sorted({p for ps in perms_by_round.values() for p in ps})
         if not permutation_ids:
-            raise HTTPException(400, "no matching permutations in the selected rounds")
+            raise HTTPException(400, "no matching permutations in the selected round")
         try:
             cohort_id = cohorts.write_cohort_definition(
                 root,
                 name=name.strip(),
                 cohort_type=cohort_type,
-                experiment_dir=str(first_dir),
-                manifest_id=next(iter(manifest_ids)),
+                experiment_dir=str(limen_output),
+                manifest_id=manifest_id,
                 permutation_ids=permutation_ids,
             )
         except ValueError as exc:
@@ -1334,12 +1270,12 @@ def create_app(root: Path) -> FastAPI:
 
     @app.get("/search/bundle")
     def search_bundle(request: Request, experiment: str | None = None, rounds: str | None = None):
-        # Selection-based: exactly the rounds the operator picked (one
-        # experiment, one manifest), filtered to the cohort's perms — not the
-        # whole filtered index. Unauthenticated (see the auth middleware) so a
-        # same-host consumer can `curl` the exact bundle without credentials.
+        # Selection-based: exactly the round the operator picked, filtered to
+        # the cohort's perms — not the whole filtered index. Unauthenticated
+        # (see the auth middleware) so a same-host consumer can `curl` the
+        # exact bundle without credentials.
         if not experiment or not rounds:
-            raise HTTPException(400, "select one or more rounds (one experiment) before downloading a bundle")
+            raise HTTPException(400, "select a round before downloading a bundle")
         round_ids = [r.strip() for r in rounds.split(",") if r.strip()]
         if not round_ids:
             raise HTTPException(400, "no rounds in the selection")
@@ -1688,7 +1624,7 @@ def _ensure_round_index(round_dir: Path) -> Path | None:
         .filter(edge.is_not_null() & edge.is_not_nan())
         .select([
             # Limen round_ids are SHA-256 hex strings (see
-            # _parse_cohort_permutation_ids), not ints — carry `id` as a String
+            # 64-char hex round_ids), not ints — carry `id` as a String
             # so a hash-id round indexes instead of crashing the Int64 cast.
             pl.col("id").cast(pl.String).alias("permutation_id"),
             pl.lit(round_dir.parent.parent.name).alias("experiment_id"),
@@ -1853,61 +1789,54 @@ def _selection_bundle_base(experiment: str, round_ids: list[str]) -> str:
 def _build_selection_bundle(
     root: Path, experiment: str, round_ids: list[str], filters: _FilterMap,
 ) -> bytes:
-    """A bundle of exactly the selected rounds of ONE experiment: the runnable
-    manifest plus each round's limen_output filtered to the permutations that
-    match the active search filters — the same perms a cohort built from this
-    selection would hold. Single-experiment and single-manifest by construction;
-    never the whole filtered index across experiments."""
+    """A bundle of exactly the selected round: the runnable manifest plus the
+    round's limen_output filtered to the permutations that match the active
+    search filters — the same perms a cohort built from this selection would
+    hold. One experiment, one round, by construction."""
     # Resolve through _safe_child_dir so `experiment` / `round_ids` cannot path-
     # traverse and can only be the regex-validated forms (which are also the
     # filename stem) — a crafted id is a 404, not a filesystem read.
+    # A bundle is the file form of a cohort, and a cohort is one round: the
+    # selection is one round's limen_output filtered to the matching perms.
+    if len(round_ids) != 1:
+        raise HTTPException(400, "a bundle is one round filtered to the selection")
     exp_dir = _safe_child_dir(root / "experiments", experiment, EXPERIMENT_ID_RE, "experiment not found")
-    sorted_rids = sorted(round_ids)
-    round_dirs = [
-        _safe_child_dir(exp_dir / "rounds", rid, ROUND_ID_RE, "round not found")
-        for rid in sorted_rids
-    ]
-    # A bundle, like a cohort, is one manifest: every selected round's
-    # manifest.yml must be byte-identical, or the shared manifest at the bundle
-    # root would not describe some of the rounds.
-    manifests = {(rd / "manifest.yml").read_bytes() for rd in round_dirs if (rd / "manifest.yml").is_file()}
-    if len(manifests) > 1:
-        raise HTTPException(400, "selected rounds span more than one manifest — a bundle is one manifest")
-    perms_by_round = _matching_permutation_ids(root, filters, {(experiment, rid) for rid in sorted_rids})
-    base = _selection_bundle_base(experiment, sorted_rids)
+    rid = round_ids[0]
+    round_dir = _safe_child_dir(exp_dir / "rounds", rid, ROUND_ID_RE, "round not found")
+    perms = list(_matching_permutation_ids(root, filters, {(experiment, rid)}).get((experiment, rid), []))
+    base = _selection_bundle_base(experiment, round_ids)
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         # `limen run <base>/manifest.yml` re-runs it (mount the arrow source).
-        if manifests:
-            z.writestr(f"{base}/manifest.yml", next(iter(manifests)))
-        for rid, rd in zip(sorted_rids, round_dirs):
-            limen = rd / "limen_output"
-            perms = list(perms_by_round.get((experiment, rid), []))
-            out = f"{base}/limen_output/{rid}"
-            meta_path = limen / "metadata.json"
-            if meta_path.is_file():
-                z.writestr(f"{out}/metadata.json", meta_path.read_bytes())
-            csv_path = _round_csv_path(rd)
-            if csv_path.exists():
-                df = pl.read_csv(csv_path, infer_schema_length=200)
-                # Always filter to the matching perms — a zero-match filter
-                # yields a header-only CSV, never a silent fall-back to the full
-                # round. permutation_ids are String (the index normalizes `id`);
-                # an int-id round's CSV `id` infers Int64, so cast before is_in.
-                if "id" in df.columns:
-                    df = df.filter(pl.col("id").cast(pl.String).is_in(perms))
-                z.writestr(f"{out}/results.csv", df.write_csv())
-            rd_path = limen / "round_data.jsonl"
-            if rd_path.is_file():
-                # Each line is one perm's trained sensor, keyed by `round_id`;
-                # keep only the matching perms (a zero match keeps none).
-                permset = set(perms)
-                kept = [
-                    ln for ln in rd_path.read_text().splitlines()
-                    if ln.strip() and str(json.loads(ln).get("round_id")) in permset
-                ]
-                z.writestr(f"{out}/round_data.jsonl", "".join(f"{ln}\n" for ln in kept))
+        manifest_path = round_dir / "manifest.yml"
+        if manifest_path.is_file():
+            z.writestr(f"{base}/manifest.yml", manifest_path.read_bytes())
+        limen = round_dir / "limen_output"
+        out = f"{base}/limen_output/{rid}"
+        meta_path = limen / "metadata.json"
+        if meta_path.is_file():
+            z.writestr(f"{out}/metadata.json", meta_path.read_bytes())
+        csv_path = _round_csv_path(round_dir)
+        if csv_path.exists():
+            df = pl.read_csv(csv_path, infer_schema_length=200)
+            # Always filter to the matching perms — a zero-match filter
+            # yields a header-only CSV, never a silent fall-back to the full
+            # round. permutation_ids are String (the index normalizes `id`);
+            # an int-id round's CSV `id` infers Int64, so cast before is_in.
+            if "id" in df.columns:
+                df = df.filter(pl.col("id").cast(pl.String).is_in(perms))
+            z.writestr(f"{out}/results.csv", df.write_csv())
+        rd_path = limen / "round_data.jsonl"
+        if rd_path.is_file():
+            # Each line is one perm's trained sensor, keyed by `round_id`;
+            # keep only the matching perms (a zero match keeps none).
+            permset = set(perms)
+            kept = [
+                ln for ln in rd_path.read_text().splitlines()
+                if ln.strip() and str(json.loads(ln).get("round_id")) in permset
+            ]
+            z.writestr(f"{out}/round_data.jsonl", "".join(f"{ln}\n" for ln in kept))
     return buf.getvalue()
 
 

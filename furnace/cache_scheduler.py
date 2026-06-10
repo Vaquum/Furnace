@@ -1,7 +1,7 @@
 """Per-minute Conduit prediction-cache top-up scheduler (PRD slice #71).
 
 Mirrors the ``/opt/arrow`` store's once-a-minute refresh: every interval, for
-each graduated cohort, append the newest closed bar(s) to its
+each active cohort, append the newest closed bar(s) to its
 ``/opt/conduit/<series>/latest.arrow`` via ``prediction_cache.top_up``.
 Deterministic and idempotent — a missed tick self-corrects on the next run.
 
@@ -99,7 +99,7 @@ def refresh_once(
     conduit_root: Path = prediction_cache.CONDUIT_ROOT,
     arrow_root: Path = prediction_cache.ARROW_ROOT,
 ) -> dict[str, int]:
-    """One pass: top up every graduated cohort that maps to an arrow series.
+    """One pass: top up every active cohort that maps to an arrow series.
     Returns ``{cohort_name: rows}`` for the cohorts that succeeded — ``rows``
     is the bars appended that tick, or the file's full row count when the
     cohort's cache was (re)built from scratch (first serve / cohort switch). A

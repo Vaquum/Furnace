@@ -1,5 +1,5 @@
-"""Tests for the cohort lifecycle: the operator selects same-manifest rounds
-from search, creates a named cohort, and browses it (a cohort is a round's
+"""Tests for the cohort lifecycle: the operator selects one round from
+search, creates a named cohort, and browses it (a cohort is one round's
 permutations, possibly filtered).
 
 `furnace/cohorts.py` is pure (no `limen`, no FastAPI), so it is tested
@@ -189,7 +189,7 @@ def test_cohort_display_meta_exposes_url_id_and_type(tmp_path: Path) -> None:
 
 def test_cohort_routes_registered() -> None:
     """app.py registers the cohort surface — the list, create, delete, and the
-    detail/drilldown pages — and the graduation surface is gone."""
+    detail/drilldown pages."""
     app_text = (PKG_DIR / "app.py").read_text(encoding="utf-8")
     assert '@app.get("/cohorts"' in app_text
     assert '@app.post("/cohorts")' in app_text
@@ -197,21 +197,50 @@ def test_cohort_routes_registered() -> None:
     assert '@app.get("/cohorts/{url_id}"' in app_text
     assert '@app.get("/cohorts/{url_id}/results"' in app_text
     assert "cohorts.write_cohort_definition(" in app_text
-    # The graduation view and its route are removed.
-    assert "/graduation" not in app_text
     # cohorts is imported from the package (isort may merge the import line).
     assert re.search(r"from \. import [\w, ]*\bcohorts\b", app_text)
 
 
-def test_search_links_to_cohort_create_not_graduation() -> None:
+def test_search_links_cohort_create() -> None:
     """The search page's cohort affordance is the create-cohort control, and
-    the dead /graduation link is gone."""
+    the cohorts table links each row into its detail page."""
     search_text = (PKG_DIR / "templates" / "search.html").read_text(encoding="utf-8")
     assert 'id="create-cohort-btn"' in search_text
-    assert "/graduation" not in search_text
-    # The cohorts table links each row into its detail page.
     cohorts_text = (PKG_DIR / "templates" / "cohorts.html").read_text(encoding="utf-8")
     assert "/cohorts/{{ c.url_id }}" in cohorts_text
+
+
+def test_no_graduation_wording_anywhere() -> None:
+    """The graduation view died in v0.29.0; the vocabulary died with this
+    slice. Cohorts are created, activated, and served — nothing "graduates".
+    Self-enforcing: any file under furnace/ or tests/ that reintroduces the
+    word fails this test."""
+    roots = (PKG_DIR, REPO_ROOT / "tests")
+    offenders: list[str] = []
+    for root in roots:
+        for path in root.rglob("*"):
+            if path.suffix not in {".py", ".html", ".css", ".js"} or "__pycache__" in path.parts:
+                continue
+            if path.resolve() == Path(__file__).resolve():
+                continue  # this test names the word to ban it
+            if "graduat" in path.read_text(encoding="utf-8").lower():
+                offenders.append(str(path.relative_to(REPO_ROOT)))
+    assert offenders == []
+
+
+def test_legacy_inference_routes_removed() -> None:
+    """The v0.21-era per-round inference surface (cohort/input, cohort/predict)
+    is gone — it re-trained every member per request and is superseded by
+    Conduit serving (/opt/conduit + the serving manifest). app.py neither
+    registers the routes nor imports furnace.inference."""
+    app_text = (PKG_DIR / "app.py").read_text(encoding="utf-8")
+    assert "cohort/input" not in app_text
+    assert "cohort/predict" not in app_text
+    assert not re.search(r"from \. import [\w, ]*\binference\b", app_text)
+    # inference.py remains as the limen boundary the serving path imports through.
+    inference_text = (PKG_DIR / "inference.py").read_text(encoding="utf-8")
+    for symbol in ("Cohort", "HistoricalData", "Trainer"):
+        assert symbol in inference_text
 
 
 def test_create_cohort_rejects_multiple_rounds(tmp_path: Path, monkeypatch) -> None:

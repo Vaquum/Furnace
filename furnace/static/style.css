@@ -1765,7 +1765,7 @@ table.experiments-table.search-table tr.dimmed td.col-id a { pointer-events: non
   margin-top: var(--gap-s); padding-top: var(--gap-m); border-top: 1px solid var(--rule);
 }
 .form-footer #cohort-submit { flex: 0 0 auto; }
-/* A long create error (e.g. a non-graduatable round) wraps onto its own full
+/* A long create error (e.g. a round that cannot join a cohort) wraps onto its own full
    line under the button and breaks long tokens — never overflowing the card. */
 #cohort-status { flex: 1 1 100%; min-width: 0; overflow-wrap: anywhere; }
 
