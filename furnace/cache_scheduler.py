@@ -97,7 +97,9 @@ def refresh_once(
     arrow_root: Path = prediction_cache.ARROW_ROOT,
 ) -> dict[str, int]:
     """One pass: top up every graduated cohort that maps to an arrow series.
-    Returns ``{cohort_name: bars_appended}`` for the cohorts that succeeded. A
+    Returns ``{cohort_name: rows}`` for the cohorts that succeeded — ``rows``
+    is the bars appended that tick, or the file's full row count when the
+    cohort's cache was (re)built from scratch (first serve / cohort switch). A
     single cohort raising (a round caught mid-write, a corrupt sensor, a full
     disk) is logged with its traceback and skipped — it must not starve every
     other cohort of its refresh this tick. The failure is loud (``logger`` at
@@ -113,6 +115,21 @@ def refresh_once(
             continue
         name_obj = cohort_def.get("name")
         name = name_obj if isinstance(name_obj, str) else series
+        if series in served:
+            # Two active cohorts on one series can only arise from out-of-band
+            # definition edits (the activation route flips same-series peers
+            # off). Served alternately they would trade the identity sidecar
+            # and full-rebuild the file every tick — skip the latecomer loudly
+            # instead of entering that rebuild storm.
+            logger.error(
+                "cohort %r maps to series %r already served by %r this tick; "
+                "skipping it — deactivate one of the two (only the activation "
+                "route keeps one cohort active per series)",
+                name,
+                series,
+                served[series]["name"],
+            )
+            continue
         try:
             out[name] = prediction_cache.top_up(cohort_def, series, conduit_root, arrow_root)
         except Exception:

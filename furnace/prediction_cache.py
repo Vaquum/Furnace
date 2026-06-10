@@ -148,6 +148,10 @@ def _series_klines(series: str, arrow_root: Path) -> pl.DataFrame:
     load through: a prediction on a half-formed bar (a phantom ``ts`` that never
     exists in the final history, or a frozen partial-interval row) can never be
     written. A bar is served on the snapshot after its successor opens."""
+    # Rests on the writers' contract that every snapshot ends on the forming
+    # bar (verified live for both the dollar and time writers): a halted feed's
+    # final partial bar is genuinely unclosed and is correctly withheld. A
+    # writer that emitted only closed bars would need a different rule here.
     klines = HistoricalData().get_arrow_file(str(arrow_root / series / "latest.arrow"))
     if not klines.height:
         return klines
@@ -241,12 +245,13 @@ def top_up(
     """Append bars newer than the cache's last ``ts``. Deterministic and
     idempotent — re-running a minute appends nothing (a closed bar's prediction
     never changes), so a missed tick self-corrects on the next run. Returns the
-    number of bars appended. Falls back to a full ``backfill`` when no cache
-    exists yet, or when the cache was produced by a DIFFERENT cohort (the
-    identity sidecar): a same-series cohort switch replaces history outright —
-    appending the new cohort's tail onto the old cohort's rows would serve a
-    file no single cohort ever produced. The rebuild also purges any phantom
-    rows a pre-closed-bar-rule cache accumulated."""
+    number of bars appended — or the rebuilt file's FULL row count when it
+    falls back to a full ``backfill``: when no cache exists yet, or when the
+    cache was produced by a DIFFERENT cohort (the identity sidecar). A
+    same-series cohort switch replaces history outright — appending the new
+    cohort's tail onto the old cohort's rows would serve a file no single
+    cohort ever produced. The rebuild also purges any phantom rows a
+    pre-closed-bar-rule cache accumulated."""
     path = cache_path(series, conduit_root)
     identity_path = cache_identity_path(series, conduit_root)
     recorded = identity_path.read_text(encoding="utf-8").strip() if identity_path.is_file() else None

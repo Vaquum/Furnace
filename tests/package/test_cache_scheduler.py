@@ -313,3 +313,36 @@ def test_refresh_once_manifest_omits_inactive_stale_files(
         prediction_cache.serving_manifest_path(conduit).read_text(encoding="utf-8")
     )
     assert manifest["series"] == {}  # the stale file exists on disk, yet nothing is live
+
+
+def test_refresh_once_skips_second_active_cohort_on_same_series(
+    cohort_round: tuple[Path, list[str], str],
+    fake_spot_klines: None,
+    frozen_klines: pl.DataFrame,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two active cohorts on one series (only reachable by editing definitions
+    out-of-band — the activation route flips same-series peers off) must not
+    trade the identity sidecar and full-rebuild the file every tick: the
+    latecomer is skipped loudly, the first claimant's file and identity stay."""
+    round_dir, rids, _at = cohort_round
+    exp = _arrow_cohort(round_dir, tmp_path / "round", _SERIES)
+    root = tmp_path / "data"
+    conduit, arrow = tmp_path / "conduit", tmp_path / "arrow"
+    _serve_arrow(monkeypatch, frozen_klines)
+
+    _register(root, "first", exp, list(rids[:1]), cohort_id=_CID_A)
+    _register(root, "second", exp, list(rids), cohort_id=_CID_B)
+    res = cache_scheduler.refresh_once(root, conduit, arrow)
+
+    # list_cohort_definitions orders newest-first; exactly one claimed the series.
+    assert len(res) == 1
+    winner = next(iter(res))
+    identity = prediction_cache.cache_identity_path(_SERIES, conduit).read_text(encoding="utf-8")
+    assert identity == {"first": _CID_A, "second": _CID_B}[winner]
+
+    # A second tick must not rebuild: the same winner appends 0, the loser stays skipped.
+    res2 = cache_scheduler.refresh_once(root, conduit, arrow)
+    assert res2 == {winner: 0}
+    assert prediction_cache.cache_identity_path(_SERIES, conduit).read_text(encoding="utf-8") == identity
