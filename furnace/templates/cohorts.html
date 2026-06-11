@@ -136,7 +136,10 @@ async function fillMakerRow(actions, cells) {
   try {
     const r = await fetch(`/cohorts/${encodeURIComponent(actions.dataset.urlId)}/maker-eval`);
     if (!r.ok) {
-      const msg = (await r.json()).detail || `${r.status}`;
+      // Guard the parse: a proxy 502/504 or empty body is not JSON, and the
+      // HTTP status must survive into the title (mirrors cohort.html's card).
+      let msg = `${r.status}`;
+      try { msg = (await r.json()).detail || msg; } catch (_) {}
       cells.forEach((c) => { c.innerHTML = '<span class="null">—</span>'; c.title = msg; });
       return;
     }
