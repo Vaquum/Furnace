@@ -178,3 +178,21 @@ def test_misaligned_predictions_fail_loud() -> None:
     minute = _minute([(150, 99.97, 100.0)])
     with pytest.raises(ValueError, match="misaligned"):
         _run(gate, minute, preds)
+
+
+def test_gate_bars_missing_predictions_inside_window_fail_loud() -> None:
+    """A gate bar INSIDE the served window with no prediction row is a
+    misalignment and raises; gate bars NEWER than the last served prediction
+    are the natural between-ticks serving lag and are simply outside the
+    evaluated window."""
+    preds = _preds([100, 300], [0.0, 0.0])  # bar 200 unserved, inside window
+    gate = _gate([100, 200, 300], [100.0, 100.0, 100.0])
+    minute = _minute([(150, 99.97, 100.0), (250, 99.97, 100.0)])
+    with pytest.raises(ValueError, match="gate bars inside the served window"):
+        _run(gate, minute, preds)
+
+    # trailing unserved bars are fine: evaluation ends at the last served ts
+    preds2 = _preds([100, 200], [0.0, 0.0])
+    gate2 = _gate([100, 200, 300], [100.0, 100.0, 100.0])
+    out = _run(gate2, _minute([(150, 99.97, 100.0)]), preds2)
+    assert out["gated"]["n_fills"] == 1

@@ -14,9 +14,15 @@ the served predictions), no HTTP, no ``limen`` import. Deterministic,
 including the moving-block bootstrap CI (fixed seed).
 
 Price convention: quotes derive from gate bar ``i-1``'s close and live during
-bar ``i``'s span ``(ts[i-1], ts[i]]``; all P&L is expressed in bps of the
-entry price; open inventory at window end is marked to the final close and
-charged the taker fee (it must be flattened to realize).
+bar ``i``'s span ``(ts[i-1], ts[i]]``; P&L is expressed in bps of the entry
+price, with one deliberate exception — a same-bar both-sides fill books the
+quoted spread (``2 * offset_bps``, bps of the quote reference) since the two
+legs' entry is the same reference; open inventory at window end is marked to
+the final close and charged the taker fee (it must be flattened to realize).
+
+The evaluation window is the SERVED window: gate bars newer than the last
+served prediction (the natural between-ticks serving lag) are outside it; any
+mismatch INSIDE the served window fails loud.
 """
 
 from __future__ import annotations
@@ -208,8 +214,10 @@ def simulate(
     (``ts``/``prediction``/``probability``/``reason_code``)."""
     if gate_bars.height < 2:
         raise ValueError("gate_bars must carry at least two bars (one to quote from)")
+    last_served = predictions.get_column("ts").max()
+    in_window = gate_bars.select(["ts", "close"]).filter(pl.col("ts") <= last_served)
     joined = (
-        gate_bars.select(["ts", "close"])
+        in_window
         .join(predictions.select(["ts", "probability", "reason_code"]), on="ts", how="inner")
         .sort("ts")
     )
@@ -220,6 +228,12 @@ def simulate(
             f"{predictions.height - joined.height} prediction rows have no matching "
             "gate bar ts — inputs are misaligned (different series or a re-cut "
             "snapshot); refusing to evaluate a silently different window"
+        )
+    if joined.height < in_window.height:
+        raise ValueError(
+            f"{in_window.height - joined.height} gate bars inside the served window "
+            "have no prediction row — inputs are misaligned (different series or a "
+            "re-cut snapshot); refusing to evaluate a silently different window"
         )
     gate_ts = joined.get_column("ts").cast(pl.Int64).to_numpy()
     close = _column_f64(joined, "close")
