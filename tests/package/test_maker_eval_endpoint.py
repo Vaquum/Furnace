@@ -6,7 +6,6 @@ invariants are asserted source-level, the codebase's idiom."""
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import polars as pl
