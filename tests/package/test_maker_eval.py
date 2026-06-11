@@ -152,3 +152,18 @@ def test_missing_minute_coverage_fails_loud() -> None:
     minute = _minute([(50, 99.0, 101.0)])  # before the first bar: outside every span
     with pytest.raises(ValueError, match="no 1m coverage"):
         _run(gate, minute, preds)
+
+
+def test_toxic_flatten_does_not_require_minute_coverage() -> None:
+    """A toxic signal flattens at the gate bar's close even when that bar has
+    no 1m coverage — the flatten marks off gate_bars, and only quoting needs
+    the 1m extremes. Long @ 99.98 from bar1; bar2 is toxic with no 1m rows in
+    its span: flattened at its close 101.0: (101-99.98)/99.98*1e4 - 5.0 =
+    +102.0204 - 5.0 = +97.0204 bps."""
+    gate = _gate([100, 200, 300], [100.0, 100.0, 101.0])
+    preds = _preds([100, 200, 300], [0.0, 0.0, 0.9])
+    minute = _minute([(150, 99.97, 100.0)])  # bar 3 has no coverage
+    out = _run(gate, minute, preds)
+    gated = out["gated"]
+    assert gated["n_flattens"] == 1
+    assert gated["net_bps"] == pytest.approx(97.0204, abs=1e-3)

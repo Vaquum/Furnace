@@ -85,15 +85,18 @@ def _replay(
     offset = offset_bps / 1e4
 
     for i in range(1, n):
-        if not covered[i]:
-            continue
         if toxic[i]:
+            # The flatten marks at the gate bar's close, which gate_bars always
+            # carries — a toxic signal acts even on a bar with no 1m coverage
+            # (only QUOTING needs the 1m extremes to detect fills).
             if position != 0:
                 exit_px = close[i]
                 pnl[i] += position * (exit_px - entry) / entry * 1e4 - taker_fee_bps
                 flatten_cost += taker_fee_bps
                 n_flattens += 1
                 position = 0
+            continue
+        if not covered[i]:
             continue
         n_quoted += 1
         ref = close[i - 1]
@@ -133,7 +136,9 @@ def _replay(
     ledger: dict[str, object] = {
         "n_quoted_bars": n_quoted,
         "n_fills": len(fills),
-        "fill_rate": (len(fills) / n_quoted) if n_quoted else None,
+        # 2 fills can land on 1 quoted bar (a same-bar round trip), so this
+        # is a rate per BAR in the ledger grammar, not a [0,1] probability.
+        "fills_per_quoted_bar": (len(fills) / n_quoted) if n_quoted else None,
         "spread_captured_bps": float(spread_captured),
         "n_flattens": n_flattens,
         "flatten_cost_bps": float(flatten_cost),
