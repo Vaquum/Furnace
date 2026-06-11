@@ -167,3 +167,14 @@ def test_toxic_flatten_does_not_require_minute_coverage() -> None:
     gated = out["gated"]
     assert gated["n_flattens"] == 1
     assert gated["net_bps"] == pytest.approx(97.0204, abs=1e-3)
+
+
+def test_misaligned_predictions_fail_loud() -> None:
+    """A prediction row whose ts has no gate bar means the inputs are not the
+    same series/window — the engine refuses rather than silently evaluating
+    the intersection."""
+    gate = _gate([100, 200, 300], [100.0, 100.0, 100.0])
+    preds = _preds([100, 200, 999], [0.0, 0.0, 0.0])  # 999 has no gate bar
+    minute = _minute([(150, 99.97, 100.0)])
+    with pytest.raises(ValueError, match="misaligned"):
+        _run(gate, minute, preds)

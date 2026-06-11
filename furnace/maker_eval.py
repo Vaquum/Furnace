@@ -175,7 +175,9 @@ def _block_bootstrap_ci(diff: _FloatArray) -> tuple[float, float]:
         total = float(diff.sum())
         return total, total
     rng = np.random.default_rng(_BOOTSTRAP_SEED)
-    starts_pool = n - _BOOTSTRAP_BLOCK
+    # high is exclusive: +1 keeps the LAST valid block start (n - block) in the
+    # draw, so diff[n-1] is reachable and the right edge is not biased away.
+    starts_pool = n - _BOOTSTRAP_BLOCK + 1
     n_blocks = n // _BOOTSTRAP_BLOCK + 1
     sums = np.empty(_BOOTSTRAP_ITER, dtype=np.float64)
     for b in range(_BOOTSTRAP_ITER):
@@ -213,6 +215,12 @@ def simulate(
     )
     if joined.height < 2:
         raise ValueError("predictions and gate_bars share fewer than two ts rows")
+    if joined.height < predictions.height:
+        raise ValueError(
+            f"{predictions.height - joined.height} prediction rows have no matching "
+            "gate bar ts — inputs are misaligned (different series or a re-cut "
+            "snapshot); refusing to evaluate a silently different window"
+        )
     gate_ts = joined.get_column("ts").cast(pl.Int64).to_numpy()
     close = _column_f64(joined, "close")
     probability = _column_f64(joined, "probability")
