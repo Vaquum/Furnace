@@ -2033,3 +2033,11 @@ table.results-table tbody td.col-perm-id {
   width: 92px;
 }
 .m-date-grid > input[type="date"] { width: 150px; }
+
+
+/* ---- Maker-eval columns + card ---- */
+table.cohorts-table th.col-maker, table.cohorts-table td.col-maker { width: 92px; }
+td.maker-cell.ci-significant { font-weight: 600; }
+.maker-eval-form { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 8px 0 12px; }
+.maker-eval-form label { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; color: var(--ink-mute); }
+.maker-eval-form input { width: 76px; }
