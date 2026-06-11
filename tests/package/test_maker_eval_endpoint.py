@@ -152,3 +152,20 @@ def test_cohorts_table_drops_type_and_arrow_columns() -> None:
     copy_at = text.index('class="copy-arrow"', actions)
     delete_at = text.index('class="delete-exp"', actions)
     assert actions < copy_at < delete_at
+
+
+def test_engine_data_fault_is_loud_500_not_soft_409(tmp_path: Path, monkeypatch) -> None:
+    """simulate()'s fail-loud ValueError (window misalignment / no 1m
+    coverage) is a data fault: it surfaces as a 500, visibly distinct from the
+    actionable not-served 409 — the loud guard stays loud."""
+    _auth_env(monkeypatch)
+    url_id = _cohort(tmp_path)
+
+    def fault(*_a, **_k):
+        raise ValueError("refusing to evaluate a silently different window")
+
+    monkeypatch.setattr(maker_eval, "evaluate_served", fault)
+    client = TestClient(create_app(tmp_path), raise_server_exceptions=False)
+
+    r = client.get(f"/cohorts/{url_id}/maker-eval", auth=("u", "p"))
+    assert r.status_code == 500

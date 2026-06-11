@@ -1195,8 +1195,12 @@ def create_app(root: Path) -> FastAPI:
             result = maker_eval.evaluate_served(
                 definition, offset_bps=offset_bps, tau=tau, k=k, taker_fee_bps=taker_fee_bps,
             )
-        except (FileNotFoundError, ValueError) as exc:
+        except FileNotFoundError as exc:
+            # Expected: nothing served yet — actionable, soft 409.
             raise HTTPException(409, str(exc)) from exc
+        # simulate()'s fail-loud ValueErrors (misaligned window, no 1m
+        # coverage) propagate to a 500 on purpose: a data fault must stay
+        # loud, not render as a hover-only em-dash.
         per_bar = result.pop("per_bar", None)
         if isinstance(per_bar, pl.DataFrame) and per_bar.height:
             ts_min = per_bar.get_column("ts").min()

@@ -298,12 +298,16 @@ def evaluate_served(
     (the gate), its series bars, and ``/opt/arrow/time_1m``. Recomputes on
     every call — both inputs are zero-copy mmap reads and there is no model
     inference; measured full-history cost 0.8 s (91k bars) to ~2.2 s (225k).
-    Raises ``FileNotFoundError`` when the cohort has no served conduit file
-    (only a served cohort has a gate to evaluate) and ``ValueError`` when its
-    data source is not an arrow series."""
+    Raises ``FileNotFoundError`` for the expected not-served cases (no arrow
+    series, no conduit file) — the route's soft 409. ``simulate()``'s
+    fail-loud ``ValueError``s (window misalignment, no 1m coverage) propagate
+    untouched: they signal a data fault and must stay loud, never a soft
+    em-dash."""
     series = series_for_cohort(cohort_def)
     if series is None:
-        raise ValueError("cohort has no arrow series — nothing is served for it")
+        raise FileNotFoundError(
+            "cohort's data source is not an arrow series — nothing is served for it"
+        )
     served_path = prediction_cache.cache_path(series, conduit_root)
     if not served_path.is_file():
         raise FileNotFoundError(
