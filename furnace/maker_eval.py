@@ -27,9 +27,14 @@ mismatch INSIDE the served window fails loud.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import numpy.typing as npt
 import polars as pl
+
+from furnace import prediction_cache
+from furnace.cache_scheduler import series_for_cohort
 
 _FloatArray = npt.NDArray[np.float64]
 _BOOTSTRAP_ITER = 200
@@ -277,3 +282,44 @@ def simulate(
         "delta_ci_95": (ci_lo, ci_hi),
         "per_bar": per_bar,
     }
+
+
+def evaluate_served(
+    cohort_def: dict[str, object],
+    *,
+    offset_bps: float,
+    tau: float,
+    k: int = 3,
+    taker_fee_bps: float = 5.0,
+    conduit_root: Path = prediction_cache.CONDUIT_ROOT,
+    arrow_root: Path = prediction_cache.ARROW_ROOT,
+) -> dict[str, object]:
+    """``simulate()`` over the live mounts: the cohort's served predictions
+    (the gate), its series bars, and ``/opt/arrow/time_1m``. Recomputes on
+    every call — both inputs are zero-copy mmap reads and there is no model
+    inference; measured full-history cost 0.8 s (91k bars) to ~2.2 s (225k).
+    Raises ``FileNotFoundError`` when the cohort has no served conduit file
+    (only a served cohort has a gate to evaluate) and ``ValueError`` when its
+    data source is not an arrow series."""
+    series = series_for_cohort(cohort_def)
+    if series is None:
+        raise ValueError("cohort has no arrow series — nothing is served for it")
+    served_path = prediction_cache.cache_path(series, conduit_root)
+    if not served_path.is_file():
+        raise FileNotFoundError(
+            f"cohort has no served predictions at {served_path}; activate it "
+            "(and let the scheduler build the file) before evaluating"
+        )
+    minute_path = arrow_root / "time_1m" / "latest.arrow"
+    if not minute_path.is_file():
+        raise FileNotFoundError(f"1m bars not found at {minute_path}")
+    predictions = pl.read_ipc(served_path, memory_map=True)
+    gate_bars = pl.read_ipc(arrow_root / series / "latest.arrow", memory_map=True)
+    minute_bars = pl.read_ipc(minute_path, memory_map=True)
+    result = simulate(
+        gate_bars, minute_bars, predictions,
+        offset_bps=offset_bps, tau=tau, k=k, taker_fee_bps=taker_fee_bps,
+    )
+    result["series"] = series
+    result["cohort_id"] = cohort_def.get("cohort_id")
+    return result

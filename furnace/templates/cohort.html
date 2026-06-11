@@ -77,8 +77,71 @@
   {% endif %}
 </div>
 
+
+<div class="section" id="maker-eval-card">
+  <details class="collapsible" open>
+    <summary class="atom-heading"><span class="numeral">01</span><span>Maker evaluation</span></summary>
+    {# The engine replays passive quotes gated by this cohort's SERVED
+       predictions and reports the model's value over the ungated baseline. #}
+    <form id="maker-eval-form" class="maker-eval-form" onsubmit="return false;">
+      <label>offset_bps <input type="number" name="offset_bps" value="2.0" step="0.5" min="0.1" max="50"></label>
+      <label>tau <input type="number" name="tau" value="0.5" step="0.05" min="0" max="1.01"></label>
+      <label>k <input type="number" name="k" value="3" step="1" min="1" max="20"></label>
+      <label>taker_fee_bps <input type="number" name="taker_fee_bps" value="5.0" step="0.5" min="0" max="50"></label>
+      <button type="button" class="btn" id="maker-eval-run">Run</button>
+      <span id="maker-eval-status" class="atom-small"></span>
+    </form>
+    <table class="progress-table" id="maker-eval-table" hidden>
+      <thead>
+        <tr><th>metric</th><th class="num">gated</th><th class="num">ungated</th></tr>
+      </thead>
+      <tbody id="maker-eval-rows"></tbody>
+    </table>
+  </details>
+</div>
+
+<script>
+(function () {
+  const form = document.getElementById('maker-eval-form');
+  const status = document.getElementById('maker-eval-status');
+  const table = document.getElementById('maker-eval-table');
+  const rows = document.getElementById('maker-eval-rows');
+  const fmt = (v) => (v === null || v === undefined) ? '—' : (typeof v === 'number' ? (Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(3)) : String(v));
+  async function run() {
+    const qs = new URLSearchParams(new FormData(form));
+    status.textContent = 'computing…';
+    table.hidden = true;
+    const r = await fetch(`/cohorts/{{ cohort.url_id }}/maker-eval?${qs}`);
+    if (!r.ok) {
+      let msg = `${r.status}`;
+      try { msg = (await r.json()).detail || msg; } catch (_) {}
+      status.textContent = msg;
+      return;
+    }
+    const d = await r.json();
+    const days = d.window_days || 1;
+    const [lo, hi] = d.delta_ci_95;
+    const keys = ['n_quoted_bars', 'n_fills', 'fills_per_quoted_bar', 'spread_captured_bps',
+                  'adverse_selection_bps_k', 'n_flattens', 'flatten_cost_bps', 'net_bps',
+                  'net_per_fill_bps', 'exposure_share'];
+    rows.innerHTML = '';
+    for (const k of keys) {
+      rows.insertAdjacentHTML('beforeend',
+        `<tr><td class="mono">${k}</td><td class="num">${fmt(d.gated[k])}</td><td class="num">${fmt(d.ungated[k])}</td></tr>`);
+    }
+    rows.insertAdjacentHTML('beforeend',
+      `<tr><td class="mono">model value: delta_net_bps (95% CI)</td>` +
+      `<td class="num" colspan="2">${fmt(d.delta_net_bps)} (${fmt(lo)} … ${fmt(hi)}) over ${days.toFixed(1)} days = ${fmt(d.delta_net_bps / days)}/day</td></tr>`);
+    table.hidden = false;
+    status.textContent = `window ${days.toFixed(1)} days · offset ${d.params.offset_bps} · tau ${d.params.tau} · fee ${d.params.taker_fee_bps}`;
+  }
+  document.getElementById('maker-eval-run').addEventListener('click', run);
+  run();  // auto-run with defaults on load
+})();
+</script>
+
 <details class="section collapsible">
-  <summary class="atom-heading"><span class="numeral">01</span><span>Frozen manifest</span></summary>
+  <summary class="atom-heading"><span class="numeral">02</span><span>Frozen manifest</span></summary>
   <div class="code-block-wrap">
     <button class="code-block-copy" type="button" data-copy-target="frozen-manifest" title="Copy manifest" aria-label="Copy frozen manifest">⧉</button>
     <pre class="atom-code-block" id="frozen-manifest">{{ frozen_manifest }}</pre>

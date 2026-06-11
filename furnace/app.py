@@ -29,7 +29,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import api_reference, cohorts
+from . import api_reference, cohorts, maker_eval
 from .state import (
     ACTIVE_STATES,
     StateMachine,
@@ -1171,6 +1171,46 @@ def create_app(root: Path) -> FastAPI:
     def _cohort_perms(definition: dict[str, object]) -> set[str]:
         perms = definition.get("permutation_ids")
         return {str(p) for p in cast(list[object], perms)} if isinstance(perms, list) else set()
+
+    @app.get("/cohorts/{url_id}/maker-eval")
+    def cohort_maker_eval(
+        url_id: str,
+        offset_bps: float = 2.0,
+        tau: float = 0.5,
+        k: int = 3,
+        taker_fee_bps: float = 5.0,
+    ):
+        """Maker-fill evaluation of the cohort's SERVED predictions (engine:
+        furnace.maker_eval). Parameters are clamped to sane bounds rather than
+        silently trusted; 409 when the cohort has nothing served (only a served
+        cohort has a gate to evaluate). Recomputes on every call — measured
+        0.8-2.2 s full-history; the per-bar frame is summarized into
+        window_days and dropped from the JSON."""
+        definition = _cohort_or_404(url_id)
+        offset_bps = min(max(offset_bps, 0.1), 50.0)
+        tau = min(max(tau, 0.0), 1.01)
+        k = min(max(k, 1), 20)
+        taker_fee_bps = min(max(taker_fee_bps, 0.0), 50.0)
+        try:
+            result = maker_eval.evaluate_served(
+                definition, offset_bps=offset_bps, tau=tau, k=k, taker_fee_bps=taker_fee_bps,
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            raise HTTPException(409, str(exc)) from exc
+        per_bar = result.pop("per_bar", None)
+        if isinstance(per_bar, pl.DataFrame) and per_bar.height:
+            ts_min = per_bar.get_column("ts").min()
+            ts_max = per_bar.get_column("ts").max()
+            if isinstance(ts_min, int) and isinstance(ts_max, int):
+                result["window_days"] = (ts_max - ts_min) / 86_400e9
+        return JSONResponse(result)
+
+    # FastAPI holds the reference through @app.get; pyright does not track the
+    # decorator return as a use-site, so without this keep-alive the handler
+    # counts against the frozen error budget (the idiom the v0.21 cohort
+    # handlers used for the same reason).
+    _maker_eval_handler = (cohort_maker_eval,)
+    del _maker_eval_handler
 
     @app.get("/cohorts/{url_id}", response_class=HTMLResponse)
     def cohort_page(request: Request, url_id: str):
