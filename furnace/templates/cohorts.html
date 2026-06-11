@@ -113,11 +113,26 @@ document.getElementById('cohorts-rows').addEventListener('click', async (e) => {
 // default params; cells fill as results land (0.8-2.2 s each, server-side).
 // Unserved rows keep the em-dash; an error lands its detail in the title. ----
 const fmt = (v, d = 2) => (v === null || v === undefined || Number.isNaN(v)) ? '—' : (v >= 0 ? '+' : '') + v.toFixed(d);
-document.querySelectorAll('#cohorts-rows tr[data-cohort]').forEach(async (tr) => {
+// Each fetch is a CPU-bound 0.8-2.2 s recompute server-side, so the fan-out is
+// capped at 3 in-flight: rows fill in order without bursting the server (the
+// systemic answer — memoize on conduit mtime — is tracked as #131).
+const makerQueue = [];
+let makerInFlight = 0;
+function pumpMaker() {
+  while (makerInFlight < 3 && makerQueue.length) {
+    makerInFlight++;
+    makerQueue.shift()().finally(() => { makerInFlight--; pumpMaker(); });
+  }
+}
+document.querySelectorAll('#cohorts-rows tr[data-cohort]').forEach((tr) => {
   const actions = tr.querySelector('.col-actions');
   if (!actions || !actions.dataset.served) return;
   const cells = tr.querySelectorAll('.maker-cell');
   cells.forEach((c) => { c.innerHTML = '<span class="null">…</span>'; });
+  makerQueue.push(() => fillMakerRow(actions, cells));
+});
+pumpMaker();
+async function fillMakerRow(actions, cells) {
   try {
     const r = await fetch(`/cohorts/${encodeURIComponent(actions.dataset.urlId)}/maker-eval`);
     if (!r.ok) {
@@ -147,7 +162,7 @@ document.querySelectorAll('#cohorts-rows tr[data-cohort]').forEach(async (tr) =>
   } catch (err) {
     cells.forEach((c) => { c.innerHTML = '<span class="null">—</span>'; c.title = String(err); });
   }
-});
+}
 </script>
 
 {% endblock %}
