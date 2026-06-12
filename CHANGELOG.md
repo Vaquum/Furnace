@@ -1,3 +1,8 @@
+# v0.40.0
+
+- Cap concurrently active rounds across experiments (S93, PRD #137). The active-round gate was per-experiment only: two operators starting rounds in two experiments both proceeded, and each `limen run` parallelizes as if it owns the box — the documented within-run oversubscription (186 threads on 48 cores, fixed by BLAS pinning) had no cross-run equivalent. `POST /experiments/{id}/rounds` now counts rounds in `pending`/`running`/`terminating` across all experiments inside the start lock and answers 409 naming the first blocker (`<experiment>/<round>`) when the cap is reached — the start modal already renders that message.
+- The cap is `FURNACE_MAX_ACTIVE_ROUNDS` (default 1), validated at startup with the same fail-loud posture as the auth vars: a non-integer or a value below 1 refuses to start. `deploy/docker-compose.yml` passes the variable through, defaulting to 1; raising it is a deliberate deploy-time choice.
+
 # v0.39.4
 
 - Lock experiment and round deletion against concurrent starts (S92, PRD #137). `delete_experiment` checked `is_experiment_active` and `rmtree`'d with no lock; interleaved with a round start, the check passed before the round existed and the removal pulled the experiment out from under a just-spawned `limen run` — an orphaned process group burning cores with nothing in the UI pointing at it. Both delete handlers now take `sm.exp_lock(...)` around check-and-remove, and `start_round` re-checks the experiment still exists inside the lock (a lost race is a 404, never a `FileNotFoundError` 500).

@@ -354,6 +354,37 @@ def _trash_path(root: Path, stem: str) -> Path:
     return trash / f"{stem[:80]}-{secrets.token_hex(4)}"
 
 
+def _active_rounds(root: Path) -> list[str]:
+    """Every '<experiment_id>/<round_id>' whose status.json state is in
+    ACTIVE_STATES — the global denominator the round-start cap counts
+    against. A malformed status.json fails loud here (the cap must never be
+    computed over a silently smaller world), but a round or experiment that a
+    concurrent delete renames away mid-scan is simply not active — deletes
+    hold the per-experiment lock, not the start lock, so the scan must
+    tolerate entries vanishing under it."""
+    experiments = root / "experiments"
+    if not experiments.exists():
+        return []
+    out: list[str] = []
+    for exp_dir in sorted(experiments.iterdir()):
+        try:
+            round_dirs = sorted((exp_dir / "rounds").iterdir())
+        except FileNotFoundError:
+            # No rounds dir, or a concurrent delete renamed the experiment
+            # away between listing and scanning — nothing active either way.
+            round_dirs = []
+        for round_dir in round_dirs:
+            try:
+                state = read_status(round_dir).get("state")
+            except FileNotFoundError:
+                # The round (or its status.json — a legacy partial dir)
+                # vanished or never materialized; not an active round.
+                state = None
+            if state in ACTIVE_STATES:
+                out.append(f"{exp_dir.name}/{round_dir.name}")
+    return out
+
+
 def _allocate_round_id(rounds_dir: Path) -> str:
     rounds_dir.mkdir(parents=True, exist_ok=True)
     existing = sorted(int(p.name) for p in rounds_dir.iterdir() if p.name.isdigit())
@@ -521,6 +552,14 @@ def _terminate_backstop(pgid: int) -> None:
 # serialize in-process or both cohorts can finish active on one series.
 _cohort_flip_lock = threading.Lock()
 
+# The active-round cap counts rounds across ALL experiments, but exp_lock is
+# per-experiment: two concurrent starts in different experiments hold two
+# different locks, and both can pass the cap check before either round
+# materializes. Count-and-materialize must be atomic across every start, so
+# all of _start_round_sync serializes here. Starts are infrequent and the
+# longest section (limen validate) is seconds — one global lock costs nothing.
+_round_start_lock = threading.Lock()
+
 
 def create_app(root: Path) -> FastAPI:
     # Auth credentials must be in the environment before the app builds.
@@ -532,6 +571,20 @@ def create_app(root: Path) -> FastAPI:
         raise RuntimeError(
             "Furnace requires APP_USERNAME, APP_PASSWORD, and "
             "API_SECRET environment variables; refusing to start"
+        )
+    # Global active-round cap: one `limen run` already parallelizes to the
+    # box, so concurrent rounds across experiments degrade each other.
+    # Same fail-loud posture as the auth vars — garbage refuses startup.
+    raw_cap = os.environ.get("FURNACE_MAX_ACTIVE_ROUNDS", "1")
+    try:
+        max_active_rounds = int(raw_cap)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"FURNACE_MAX_ACTIVE_ROUNDS must be an integer >= 1; got {raw_cap!r}"
+        ) from exc
+    if max_active_rounds < 1:
+        raise RuntimeError(
+            f"FURNACE_MAX_ACTIVE_ROUNDS must be an integer >= 1; got {raw_cap!r}"
         )
 
     templates = Jinja2Templates(directory=str(PKG_DIR / "templates"))
@@ -765,7 +818,10 @@ def create_app(root: Path) -> FastAPI:
 
     def _start_round_sync(experiment_id: str, if_match: object):
         exp_dir = _exp_dir(experiment_id)
-        with sm.exp_lock(experiment_id):
+        # Global lock FIRST (then per-experiment): the cap check below counts
+        # rounds across all experiments, so it is only correct if no other
+        # start can sit between its own check and its round materializing.
+        with _round_start_lock, sm.exp_lock(experiment_id):
             # Re-check under the lock: a delete that won the race renamed the
             # experiment away after _exp_dir resolved it — that is a 404, not
             # a FileNotFoundError 500 from the version flock's touch.
@@ -778,6 +834,14 @@ def create_app(root: Path) -> FastAPI:
                 if is_experiment_active(exp_dir):
                     return JSONResponse(
                         {"error": "another round is active"}, status_code=409,
+                    )
+                active = _active_rounds(root)
+                if len(active) >= max_active_rounds:
+                    return JSONResponse(
+                        {"error": f"active-round cap ({max_active_rounds}) reached: "
+                                  f"{active[0]} is still active — terminate it, wait, "
+                                  "or raise FURNACE_MAX_ACTIVE_ROUNDS"},
+                        status_code=409,
                     )
                 # Source of truth: the manifest is saved via PUT /manifest.
                 # We snapshot it under the same flock that gates the if_match

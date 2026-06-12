@@ -1,0 +1,189 @@
+"""Tests for S93 (PRD #137): a global cap on concurrently active rounds.
+
+The per-experiment gate already refuses a second round in the SAME
+experiment; these tests pin the cross-experiment cap: at the default
+(`FURNACE_MAX_ACTIVE_ROUNDS=1`) a start anywhere answers 409 naming the
+blocking round while any round is active, a raised cap admits exactly that
+many, and a garbage cap refuses startup. Fake active rounds are written
+AFTER create_app so the startup reconciler does not finalize them.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import threading
+import time
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+import furnace.app as appmod
+from furnace.app import create_app
+
+AUTH = ("u", "p")
+
+
+def _auth_env(monkeypatch) -> None:
+    monkeypatch.setenv("APP_USERNAME", "u")
+    monkeypatch.setenv("APP_PASSWORD", "p")
+    monkeypatch.setenv("API_SECRET", "s")
+
+
+class _ParkedPopen:
+    """A spawn stub whose round never exits — the started round stays
+    `pending` (active) without running a real `limen run` (same stub as
+    test_delete_locking)."""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        self.pid = os.getpid()
+
+    def wait(self) -> int:
+        threading.Event().wait()
+        return 0
+
+    def poll(self) -> None:
+        return None
+
+
+def _fake_active_round(root: Path, eid: str, rid: str = "0001") -> None:
+    """An on-disk round in state `running` — written after create_app, so it
+    exists only for the request-time cap scan."""
+    round_dir = root / "experiments" / eid / "rounds" / rid
+    round_dir.mkdir(parents=True)
+    (round_dir / "status.json").write_text(json.dumps({
+        "state": "running", "pid": 4_194_304,
+        "started_at": "2026-06-12T00:00:00Z", "ended_at": None, "exit_code": None,
+    }))
+
+
+def test_default_cap_blocks_second_round_across_experiments(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """With the default cap (1) and an active round in experiment A, a start
+    in experiment B answers 409 — the gate the per-experiment check never
+    covered."""
+    _auth_env(monkeypatch)
+    monkeypatch.setattr(appmod, "_manifest_errors", lambda _m: [])
+    app = create_app(tmp_path)
+    client = TestClient(app)
+    eid_a = client.post("/experiments", json={"name": "busy"}, auth=AUTH).json()["id"]
+    eid_b = client.post("/experiments", json={"name": "idle"}, auth=AUTH).json()["id"]
+    _fake_active_round(tmp_path, eid_a)
+
+    r = client.post(f"/experiments/{eid_b}/rounds", json={"if_match": 0}, auth=AUTH)
+    assert r.status_code == 409
+    assert "active-round cap (1) reached" in r.json()["error"]
+
+
+def test_cap_409_names_the_blocking_round(tmp_path: Path, monkeypatch) -> None:
+    """The 409 body's `error` carries the blocking `<experiment>/<round>` —
+    the string the start modal renders, so the operator knows what to
+    terminate or wait for."""
+    _auth_env(monkeypatch)
+    monkeypatch.setattr(appmod, "_manifest_errors", lambda _m: [])
+    app = create_app(tmp_path)
+    client = TestClient(app)
+    eid_a = client.post("/experiments", json={"name": "busy"}, auth=AUTH).json()["id"]
+    eid_b = client.post("/experiments", json={"name": "idle"}, auth=AUTH).json()["id"]
+    _fake_active_round(tmp_path, eid_a, rid="0003")
+
+    r = client.post(f"/experiments/{eid_b}/rounds", json={"if_match": 0}, auth=AUTH)
+    assert r.status_code == 409
+    assert f"{eid_a}/0003" in r.json()["error"]
+    assert "FURNACE_MAX_ACTIVE_ROUNDS" in r.json()["error"]
+
+
+def test_raised_cap_allows_concurrent_rounds(tmp_path: Path, monkeypatch) -> None:
+    """FURNACE_MAX_ACTIVE_ROUNDS=2 admits a second concurrent round and
+    refuses the third — the cap counts rounds, not experiments."""
+    _auth_env(monkeypatch)
+    monkeypatch.setenv("FURNACE_MAX_ACTIVE_ROUNDS", "2")
+    monkeypatch.setattr("subprocess.Popen", _ParkedPopen)
+    monkeypatch.setattr(appmod, "_manifest_errors", lambda _m: [])
+    app = create_app(tmp_path)
+    client = TestClient(app)
+    eid_a = client.post("/experiments", json={"name": "busy"}, auth=AUTH).json()["id"]
+    eid_b = client.post("/experiments", json={"name": "second"}, auth=AUTH).json()["id"]
+    eid_c = client.post("/experiments", json={"name": "third"}, auth=AUTH).json()["id"]
+    _fake_active_round(tmp_path, eid_a)
+
+    second = client.post(f"/experiments/{eid_b}/rounds", json={"if_match": 0}, auth=AUTH)
+    assert second.status_code == 200
+
+    third = client.post(f"/experiments/{eid_c}/rounds", json={"if_match": 0}, auth=AUTH)
+    assert third.status_code == 409
+    assert "active-round cap (2) reached" in third.json()["error"]
+
+
+def test_concurrent_starts_cannot_exceed_the_cap(tmp_path: Path, monkeypatch) -> None:
+    """Two simultaneous starts in two DIFFERENT experiments hold two different
+    per-experiment locks; only the global start lock makes count-and-
+    materialize atomic. Unserialized, both pass the cap check (zero active)
+    inside their slow validates before either round materializes — and the
+    cap is exceeded under exactly the concurrency it exists to prevent."""
+    _auth_env(monkeypatch)
+    monkeypatch.setattr("subprocess.Popen", _ParkedPopen)
+    monkeypatch.setattr(appmod, "_manifest_errors", lambda _m: time.sleep(0.8) or [])
+    app = create_app(tmp_path)
+    client = TestClient(app)
+    eids = [client.post("/experiments", json={"name": n}, auth=AUTH).json()["id"]
+            for n in ("left", "right")]
+
+    results: list[object] = []
+    results_lock = threading.Lock()
+
+    def _start(eid: str) -> None:
+        r = TestClient(app).post(f"/experiments/{eid}/rounds", json={"if_match": 0}, auth=AUTH)
+        with results_lock:
+            results.append(r)
+
+    threads = [threading.Thread(target=_start, args=(e,)) for e in eids]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    statuses = sorted(r.status_code for r in results)
+    assert statuses == [200, 409], f"cap=1 admitted both concurrent starts: {statuses}"
+    assert len(appmod._active_rounds(tmp_path)) == 1
+    blocked = next(r for r in results if r.status_code == 409)
+    assert "active-round cap (1) reached" in blocked.json()["error"]
+
+
+def test_active_rounds_tolerates_vanished_rounds_but_not_garbage(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """A round renamed away between the scan's listing and its status read
+    (a concurrent tombstone delete) is not active — the cap scan must not
+    500 a start over a microsecond race it cannot lock against. Malformed
+    JSON stays loud: a vanished round shrinks the world honestly, a garbled
+    status.json silently mis-counts it."""
+    round_dir = tmp_path / "experiments" / "e1" / "rounds" / "0001"
+    round_dir.mkdir(parents=True)
+    (round_dir / "status.json").write_text(json.dumps({"state": "running", "pid": 1}))
+
+    def _vanished(_round_dir: Path) -> dict:
+        raise FileNotFoundError("renamed to .trash mid-scan")
+
+    monkeypatch.setattr(appmod, "read_status", _vanished)
+    assert appmod._active_rounds(tmp_path) == []
+    monkeypatch.undo()
+
+    assert appmod._active_rounds(tmp_path) == ["e1/0001"]
+    (round_dir / "status.json").write_text("{not json")
+    with pytest.raises(json.JSONDecodeError):
+        appmod._active_rounds(tmp_path)
+
+
+def test_invalid_cap_refuses_startup(tmp_path: Path, monkeypatch) -> None:
+    """A cap that is not an integer >= 1 refuses startup with the variable
+    named — the same fail-loud posture as the auth vars."""
+    _auth_env(monkeypatch)
+    monkeypatch.setenv("FURNACE_MAX_ACTIVE_ROUNDS", "zebra")
+    with pytest.raises(RuntimeError, match="FURNACE_MAX_ACTIVE_ROUNDS"):
+        create_app(tmp_path)
+    monkeypatch.setenv("FURNACE_MAX_ACTIVE_ROUNDS", "0")
+    with pytest.raises(RuntimeError, match="FURNACE_MAX_ACTIVE_ROUNDS"):
+        create_app(tmp_path)

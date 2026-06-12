@@ -13,6 +13,10 @@ services:
       APP_USERNAME: ${APP_USERNAME:?APP_USERNAME must be set}
       APP_PASSWORD: ${APP_PASSWORD:?APP_PASSWORD must be set}
       API_SECRET: ${API_SECRET:?API_SECRET must be set}
+      # Max rounds in pending/running/terminating across ALL experiments
+      # before POST /experiments/{id}/rounds answers 409. One `limen run`
+      # already parallelizes to the box; raise deliberately, not by default.
+      FURNACE_MAX_ACTIVE_ROUNDS: ${FURNACE_MAX_ACTIVE_ROUNDS:-1}
     ports:
       - "${FURNACE_PORT:-8502}:8502"
     volumes:
