@@ -10,6 +10,7 @@ import math
 import os
 import re
 import secrets
+import shutil
 import signal
 import subprocess
 import sys
@@ -341,6 +342,15 @@ def _claim_experiment_dir(experiments_dir: Path, name: str) -> Path:
         return experiments_dir / candidate
 
 
+def _trash_path(root: Path, stem: str) -> Path:
+    """A unique tombstone under <root>/.trash/ for a rename-then-rmtree
+    delete: observers see the target vanish in one atomic step, and a crash
+    mid-rmtree leaves only a tombstone the next startup sweeps."""
+    trash = root / ".trash"
+    trash.mkdir(parents=True, exist_ok=True)
+    return trash / f"{stem}-{secrets.token_hex(4)}"
+
+
 def _allocate_round_id(rounds_dir: Path) -> str:
     rounds_dir.mkdir(parents=True, exist_ok=True)
     existing = sorted(int(p.name) for p in rounds_dir.iterdir() if p.name.isdigit())
@@ -536,6 +546,10 @@ def create_app(root: Path) -> FastAPI:
         templates.env.globals[k] = v
     sm = StateMachine(root)
     reconcile_at_startup(sm)
+    # Tombstones are deletes already acknowledged to the operator; a crash
+    # mid-rmtree must not retain their data silently. Loud on failure.
+    if (root / ".trash").exists():
+        shutil.rmtree(root / ".trash")
 
     app = FastAPI(title="Furnace")
     app.mount("/static", StaticFiles(directory=str(PKG_DIR / "static")), name="static")
@@ -623,10 +637,19 @@ def create_app(root: Path) -> FastAPI:
     @app.delete("/experiments/{experiment_id}")
     def delete_experiment(experiment_id: str):
         exp_dir = _exp_dir(experiment_id)
-        if is_experiment_active(exp_dir):
-            raise HTTPException(409, "experiment has an active round; terminate it first")
-        import shutil
-        shutil.rmtree(exp_dir)
+        # The experiment lock serializes this against a concurrent round
+        # start: unlocked, the active check can pass before the start writes
+        # its round dir, and the rmtree then pulls the experiment out from
+        # under a just-spawned `limen run`. The rename makes the deletion
+        # atomic to observers; the slow rmtree happens on the tombstone.
+        with sm.exp_lock(experiment_id):
+            if not exp_dir.exists():
+                raise HTTPException(404, "experiment not found")
+            if is_experiment_active(exp_dir):
+                raise HTTPException(409, "experiment has an active round; terminate it first")
+            tombstone = _trash_path(root, experiment_id)
+            exp_dir.rename(tombstone)
+        shutil.rmtree(tombstone)
         return {"ok": True}
 
     @app.post("/experiments")
@@ -740,6 +763,11 @@ def create_app(root: Path) -> FastAPI:
     def _start_round_sync(experiment_id: str, if_match: object):
         exp_dir = _exp_dir(experiment_id)
         with sm.exp_lock(experiment_id):
+            # Re-check under the lock: a delete that won the race renamed the
+            # experiment away after _exp_dir resolved it — that is a 404, not
+            # a FileNotFoundError 500 from the version flock's touch.
+            if not exp_dir.exists():
+                raise HTTPException(404, "experiment not found")
             with version_flock(exp_dir):
                 current_version = read_version(exp_dir)
                 if if_match != current_version:
@@ -892,15 +920,22 @@ def create_app(root: Path) -> FastAPI:
         # Refuse if the round is still active. The user must terminate first
         # so the watcher and pid table aren't left referencing a removed dir.
         round_dir = _round_dir(experiment_id, round_id)
-        st = read_status(round_dir)
-        state = st.get("state")
-        if state in ACTIVE_STATES:
-            raise HTTPException(
-                status_code=409,
-                detail=f"round {round_id} is {state}; terminate it first",
-            )
-        import shutil
-        shutil.rmtree(round_dir)
+        # Same lock as start_round: unlocked, deleting the highest round id
+        # mid-allocation lets the new round dir collide with one being
+        # removed. Rename-then-rmtree, as in delete_experiment.
+        with sm.exp_lock(experiment_id):
+            if not round_dir.exists():
+                raise HTTPException(404, "round not found")
+            st = read_status(round_dir)
+            state = st.get("state")
+            if state in ACTIVE_STATES:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"round {round_id} is {state}; terminate it first",
+                )
+            tombstone = _trash_path(root, f"{experiment_id}__r{round_id}")
+            round_dir.rename(tombstone)
+        shutil.rmtree(tombstone)
         return {"deleted": True}
 
     @app.post("/experiments/{experiment_id}/rounds/{round_id}/terminate")

@@ -1,3 +1,9 @@
+# v0.39.4
+
+- Lock experiment and round deletion against concurrent starts (S92, PRD #137). `delete_experiment` checked `is_experiment_active` and `rmtree`'d with no lock; interleaved with a round start, the check passed before the round existed and the removal pulled the experiment out from under a just-spawned `limen run` — an orphaned process group burning cores with nothing in the UI pointing at it. Both delete handlers now take `sm.exp_lock(...)` around check-and-remove, and `start_round` re-checks the experiment still exists inside the lock (a lost race is a 404, never a `FileNotFoundError` 500).
+- Deletion is now atomic to observers: the directory is renamed into a `<root>/.trash/` tombstone in one step and the slow `rmtree` runs on the tombstone, so a list page can never render a half-removed experiment. Tombstones a crash leaves behind are swept at startup — a delete already acknowledged to the operator must not silently retain data.
+- `delete_round` serializing on the experiment lock also closes the id-reuse race: deleting the highest round id mid-allocation could hand the new round a directory that was being removed.
+
 # v0.39.3
 
 - Run every mutation endpoint's body in the threadpool (S91, PRD #137). `create_experiment`, `save_manifest`, `start_round`, `create_cohort`, and `set_cohort_active_route` parsed their request async and then did blocking work — `limen validate` subprocesses, fcntl flocks, file writes, polars search-index rebuilds, the round spawn — directly on the event loop, freezing every other request (the second operator's pages, the 2-second polls, even `/health`) for the duration. Each handler now delegates its entire body to a sync closure via `run_in_threadpool`, so a save/start/create no longer stalls anyone else.
