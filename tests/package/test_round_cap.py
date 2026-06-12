@@ -152,6 +152,31 @@ def test_concurrent_starts_cannot_exceed_the_cap(tmp_path: Path, monkeypatch) ->
     assert "active-round cap (1) reached" in blocked.json()["error"]
 
 
+def test_active_rounds_tolerates_vanished_rounds_but_not_garbage(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """A round renamed away between the scan's listing and its status read
+    (a concurrent tombstone delete) is not active — the cap scan must not
+    500 a start over a microsecond race it cannot lock against. Malformed
+    JSON stays loud: a vanished round shrinks the world honestly, a garbled
+    status.json silently mis-counts it."""
+    round_dir = tmp_path / "experiments" / "e1" / "rounds" / "0001"
+    round_dir.mkdir(parents=True)
+    (round_dir / "status.json").write_text(json.dumps({"state": "running", "pid": 1}))
+
+    def _vanished(_round_dir: Path) -> dict:
+        raise FileNotFoundError("renamed to .trash mid-scan")
+
+    monkeypatch.setattr(appmod, "read_status", _vanished)
+    assert appmod._active_rounds(tmp_path) == []
+    monkeypatch.undo()
+
+    assert appmod._active_rounds(tmp_path) == ["e1/0001"]
+    (round_dir / "status.json").write_text("{not json")
+    with pytest.raises(json.JSONDecodeError):
+        appmod._active_rounds(tmp_path)
+
+
 def test_invalid_cap_refuses_startup(tmp_path: Path, monkeypatch) -> None:
     """A cap that is not an integer >= 1 refuses startup with the variable
     named — the same fail-loud posture as the auth vars."""

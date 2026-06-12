@@ -247,7 +247,7 @@ def test_changelog_has_v0_40_0_entry() -> None:
         len(lines),
     )
     content = [ln for ln in lines[header_idx + 1 : next_header_idx] if ln.strip()]
-    assert content, "v0.39.3 CHANGELOG entry is empty"
+    assert content, "v0.40.0 CHANGELOG entry is empty"
 
 
 def test_limen_requirement_unpinned() -> None:

@@ -357,20 +357,30 @@ def _trash_path(root: Path, stem: str) -> Path:
 def _active_rounds(root: Path) -> list[str]:
     """Every '<experiment_id>/<round_id>' whose status.json state is in
     ACTIVE_STATES — the global denominator the round-start cap counts
-    against. A malformed status.json fails loud here: the cap must never be
-    computed over a silently smaller world."""
+    against. A malformed status.json fails loud here (the cap must never be
+    computed over a silently smaller world), but a round or experiment that a
+    concurrent delete renames away mid-scan is simply not active — deletes
+    hold the per-experiment lock, not the start lock, so the scan must
+    tolerate entries vanishing under it."""
     experiments = root / "experiments"
     if not experiments.exists():
         return []
     out: list[str] = []
     for exp_dir in sorted(experiments.iterdir()):
-        rounds_dir = exp_dir / "rounds"
-        if not rounds_dir.exists():
-            continue
-        for round_dir in sorted(rounds_dir.iterdir()):
-            if not (round_dir / "status.json").exists():
-                continue
-            if read_status(round_dir).get("state") in ACTIVE_STATES:
+        try:
+            round_dirs = sorted((exp_dir / "rounds").iterdir())
+        except FileNotFoundError:
+            # No rounds dir, or a concurrent delete renamed the experiment
+            # away between listing and scanning — nothing active either way.
+            round_dirs = []
+        for round_dir in round_dirs:
+            try:
+                state = read_status(round_dir).get("state")
+            except FileNotFoundError:
+                # The round (or its status.json — a legacy partial dir)
+                # vanished or never materialized; not an active round.
+                state = None
+            if state in ACTIVE_STATES:
                 out.append(f"{exp_dir.name}/{round_dir.name}")
     return out
 
