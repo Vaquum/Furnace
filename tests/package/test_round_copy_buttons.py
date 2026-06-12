@@ -55,15 +55,18 @@ def test_diff_view_wires_copy_buttons() -> None:
 
 def test_delete_round_endpoint_exists() -> None:
     """app.py declares DELETE /experiments/{id}/rounds/{round_id}, refuses
-    when the round is in an active state, and rmtrees the round dir
-    otherwise."""
+    when the round is in an active state, and removes the round dir
+    otherwise — under the experiment lock, via the rename-to-tombstone
+    delete (S92), so removal can never race a round start."""
     text = (PKG_DIR / 'app.py').read_text(encoding='utf-8')
     pattern = r'@app\.delete\("/experiments/\{experiment_id\}/rounds/\{round_id\}"\)'
     assert re.search(pattern, text) is not None
     idx = text.index('@app.delete("/experiments/{experiment_id}/rounds/{round_id}"')
     body = text[idx:idx + 1500]
     assert 'ACTIVE_STATES' in body
-    assert 'shutil.rmtree(round_dir)' in body
+    assert 'sm.exp_lock(experiment_id)' in body
+    assert 'round_dir.rename(tombstone)' in body
+    assert 'shutil.rmtree(tombstone)' in body
     assert 'status_code=409' in body
 
 
