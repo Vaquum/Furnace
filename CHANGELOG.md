@@ -1,3 +1,9 @@
+# v0.39.3
+
+- Run every mutation endpoint's body in the threadpool (S91, PRD #137). `create_experiment`, `save_manifest`, `start_round`, `create_cohort`, and `set_cohort_active_route` parsed their request async and then did blocking work — `limen validate` subprocesses, fcntl flocks, file writes, polars search-index rebuilds, the round spawn — directly on the event loop, freezing every other request (the second operator's pages, the 2-second polls, even `/health`) for the duration. Each handler now delegates its entire body to a sync closure via `run_in_threadpool`, so a save/start/create no longer stalls anyone else.
+- Two guards the event loop's accidental serialization was providing now hold under real thread concurrency: experiment-id allocation claims its directory with an atomic `mkdir(exist_ok=False)` retry loop (two same-name creates can never both win one id), and the one-active-per-series cohort flip — a multi-file read-modify-write — serializes on an in-process lock.
+- Document `workers=1` in `furnace/__main__.py` as load-bearing: the round registry, watcher threads, and locks are in-process state; a second worker or replica on the same root silently breaks them.
+
 # v0.39.2
 
 - Tolerate canonical re-cuts in the maker evaluation. The tdw writer occasionally re-cuts recent closed bars (measured live: 17 of ~91k overnight on `dollar_60M`) and serving does not reconcile between rebuilds, so a served prediction's `ts` can lawfully vanish from today's snapshot — the strict misalignment guard turned this into a 500 on the live cohort. `simulate()` now evaluates the prediction/bar intersection and **reports** both exclusion counts in the result (`n_unmatched_predictions`, `n_unmatched_gate_bars`) — visible, never silent, never a crash; absolute garbage (near-zero overlap) still fails loud on the `< 2` guard.

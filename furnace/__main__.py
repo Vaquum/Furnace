@@ -46,6 +46,10 @@ def main():
     def _head_root() -> Response:
         return Response(status_code=200)
 
+    # workers=1 is load-bearing, not a tuning choice: the round registry,
+    # watcher threads, experiment locks, and the cohort-flip lock are all
+    # in-process state. A second worker (or a second app replica on the
+    # same root) silently breaks them.
     uvicorn.run(app, host=args.host, port=args.port, log_level="info", workers=1)
 
 
