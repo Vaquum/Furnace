@@ -93,3 +93,14 @@ def test_web_service_has_no_scheduler_flag() -> None:
     web = _services()["furnace"]
     assert isinstance(web, dict)
     assert "--scheduler" not in str(web.get("command"))
+
+
+def test_dockerfile_carries_libgomp_and_limen_import_smoke() -> None:
+    """The runtime image must carry libgomp1 (lightgbm's native dependency,
+    pulled in by PyPI-latest Limen >= 3.29) and must FAIL ITS BUILD when the
+    installed limen cannot import — the 2026-06-11 crash-loop (both containers
+    dead at import, scheduler down for ~2 h) becomes a failed CI build naming
+    the missing library instead."""
+    text = (REPO_ROOT / "Dockerfile").read_text(encoding="utf-8")
+    assert "libgomp1" in text
+    assert 'RUN python -c "import limen.experiment.trainer"' in text

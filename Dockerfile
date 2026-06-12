@@ -4,12 +4,18 @@ ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git \
+ && apt-get install -y --no-install-recommends git libgomp1 \
  && rm -rf /var/lib/apt/lists/*
 
 COPY furnace/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir --upgrade pip \
  && pip install --no-cache-dir -r /tmp/requirements.txt
+
+# Fail the BUILD, not production, when the installed (unpinned, PyPI-latest)
+# limen cannot import — e.g. a new native dependency like lightgbm needing
+# libgomp.so.1, which crash-looped both containers on 2026-06-11. This line
+# is why a broken runtime image can never ship again.
+RUN python -c "import limen.experiment.trainer"
 
 # pyproject.toml is read at app import time by `_load_build_meta()` in
 # furnace/app.py to stamp the running version on every page.

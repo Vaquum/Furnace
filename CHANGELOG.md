@@ -1,3 +1,6 @@
+# v0.39.1
+
+- Install `libgomp1` in the runtime image and **fail the image build when the installed Limen cannot import** (`RUN python -c "import limen.experiment.trainer"`). PyPI-latest Limen 3.29.0 added a `lightgbm` dependency whose native library needs `libgomp.so.1`; the slim base lacked it, so both containers built on 2026-06-11 crash-looped at import and the prediction scheduler was down for ~2 h (recovered with a host-local hotfix image carrying exactly this fix). With the smoke import in the Dockerfile, a future Limen release needing another native library becomes a failed CI build that names the missing soname — never a production crash-loop.
 # v0.39.0
 
 - Surface the maker-fill evaluation (PRD #125, S88). `GET /cohorts/{url_id}/maker-eval?offset_bps=&tau=&k=&taker_fee_bps=` runs `maker_eval.evaluate_served` over the live mounts — the cohort's served predictions (the gate), its series bars, and `/opt/arrow/time_1m` — with parameters clamped to sane bounds; 409 when the cohort has nothing served (only a served cohort has a gate to evaluate). Recomputes on every call (measured 0.8–2.2 s full-history; no cache by design); the per-bar frame is summarized into `window_days` and dropped from the JSON.
