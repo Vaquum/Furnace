@@ -171,6 +171,21 @@ def test_round_delete_waits_for_the_experiment_lock(tmp_path: Path, monkeypatch)
     assert not old_round.exists()
 
 
+def test_delete_tolerates_max_length_experiment_ids(tmp_path: Path, monkeypatch) -> None:
+    """A 250-char experiment id is creatable (under the 255-byte filename
+    limit) but its tombstone would not be without the stem cap — uncapped,
+    the suffix pushes the rename over the limit (ENAMETOOLONG) and a dir
+    that was valid at creation time becomes undeletable."""
+    _auth_env(monkeypatch)
+    app = create_app(tmp_path)
+    client = TestClient(app)
+    eid = client.post("/experiments", json={"name": "a" * 250}, auth=AUTH).json()["id"]
+    assert len(eid) == 250
+    r = client.delete(f"/experiments/{eid}", auth=AUTH)
+    assert r.status_code == 200
+    assert not (tmp_path / "experiments" / eid).exists()
+
+
 def test_trash_is_swept_at_startup(tmp_path: Path, monkeypatch) -> None:
     """A tombstone a crash left mid-rmtree is an acknowledged delete; startup
     removes the whole trash dir rather than retaining its data silently."""

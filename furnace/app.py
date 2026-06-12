@@ -345,10 +345,13 @@ def _claim_experiment_dir(experiments_dir: Path, name: str) -> Path:
 def _trash_path(root: Path, stem: str) -> Path:
     """A unique tombstone under <root>/.trash/ for a rename-then-rmtree
     delete: observers see the target vanish in one atomic step, and a crash
-    mid-rmtree leaves only a tombstone the next startup sweeps."""
+    mid-rmtree leaves only a tombstone the next startup sweeps. The stem is
+    capped so suffixing can never push a name that was valid at creation
+    time past the 255-byte filename limit (ids are ASCII by construction)
+    and fail the rename ENAMETOOLONG; uniqueness comes from the token."""
     trash = root / ".trash"
     trash.mkdir(parents=True, exist_ok=True)
-    return trash / f"{stem}-{secrets.token_hex(4)}"
+    return trash / f"{stem[:80]}-{secrets.token_hex(4)}"
 
 
 def _allocate_round_id(rounds_dir: Path) -> str:
