@@ -1,3 +1,6 @@
+# v0.39.2
+
+- Tolerate canonical re-cuts in the maker evaluation. The tdw writer occasionally re-cuts recent closed bars (measured live: 17 of ~91k overnight on `dollar_60M`) and serving does not reconcile between rebuilds, so a served prediction's `ts` can lawfully vanish from today's snapshot — the strict misalignment guard turned this into a 500 on the live cohort. `simulate()` now evaluates the prediction/bar intersection and **reports** both exclusion counts in the result (`n_unmatched_predictions`, `n_unmatched_gate_bars`) — visible, never silent, never a crash; absolute garbage (near-zero overlap) still fails loud on the `< 2` guard.
 # v0.39.1
 
 - Install `libgomp1` in the runtime image and **fail the image build when the installed Limen cannot import** (`RUN python -c "import limen.experiment.trainer"`). PyPI-latest Limen 3.29.0 added a `lightgbm` dependency whose native library needs `libgomp.so.1`; the slim base lacked it, so both containers built on 2026-06-11 crash-looped at import and the prediction scheduler was down for ~2 h (recovered with a host-local hotfix image carrying exactly this fix). With the smoke import in the Dockerfile, a future Limen release needing another native library becomes a failed CI build that names the missing soname — never a production crash-loop.

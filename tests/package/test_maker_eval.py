@@ -169,30 +169,33 @@ def test_toxic_flatten_does_not_require_minute_coverage() -> None:
     assert gated["net_bps"] == pytest.approx(97.0204, abs=1e-3)
 
 
-def test_misaligned_predictions_fail_loud() -> None:
-    """A prediction row whose ts has no gate bar means the inputs are not the
-    same series/window — the engine refuses rather than silently evaluating
-    the intersection."""
+def test_recut_drift_is_reported_not_fatal() -> None:
+    """The canonical writer re-cuts recent closed bars (measured live), so a
+    served prediction's ts can lawfully vanish from today's snapshot. The
+    engine evaluates the intersection and REPORTS the exclusion count — the
+    drift is visible in the result, never a crash and never silent."""
     gate = _gate([100, 200, 300], [100.0, 100.0, 100.0])
-    preds = _preds([100, 200, 999], [0.0, 0.0, 0.0])  # 999 has no gate bar
-    minute = _minute([(150, 99.97, 100.0)])
-    with pytest.raises(ValueError, match="misaligned"):
-        _run(gate, minute, preds)
+    preds = _preds([100, 200, 999], [0.0, 0.0, 0.0])  # 999 was re-cut away
+    minute = _minute([(150, 99.97, 100.0), (250, 99.99, 100.0)])
+    out = _run(gate, minute, preds)
+    assert out["n_unmatched_predictions"] == 1
+    assert out["gated"]["n_fills"] == 1  # the intersection still evaluates
 
 
-def test_gate_bars_missing_predictions_inside_window_fail_loud() -> None:
-    """A gate bar INSIDE the served window with no prediction row is a
-    misalignment and raises; gate bars NEWER than the last served prediction
-    are the natural between-ticks serving lag and are simply outside the
-    evaluated window."""
-    preds = _preds([100, 300], [0.0, 0.0])  # bar 200 unserved, inside window
+def test_unserved_gate_bars_reported_and_lag_excluded() -> None:
+    """A re-cut replacement bar inside the served window lacks a prediction:
+    reported in n_unmatched_gate_bars, evaluation proceeds on the
+    intersection. Gate bars NEWER than the last served prediction are the
+    natural between-ticks serving lag and are simply outside the window."""
+    preds = _preds([100, 300], [0.0, 0.0])  # bar 200 is a re-cut replacement
     gate = _gate([100, 200, 300], [100.0, 100.0, 100.0])
     minute = _minute([(150, 99.97, 100.0), (250, 99.97, 100.0)])
-    with pytest.raises(ValueError, match="gate bars inside the served window"):
-        _run(gate, minute, preds)
+    out = _run(gate, minute, preds)
+    assert out["n_unmatched_gate_bars"] == 1
 
     # trailing unserved bars are fine: evaluation ends at the last served ts
     preds2 = _preds([100, 200], [0.0, 0.0])
     gate2 = _gate([100, 200, 300], [100.0, 100.0, 100.0])
-    out = _run(gate2, _minute([(150, 99.97, 100.0)]), preds2)
-    assert out["gated"]["n_fills"] == 1
+    out2 = _run(gate2, _minute([(150, 99.97, 100.0)]), preds2)
+    assert out2["gated"]["n_fills"] == 1
+    assert out2["n_unmatched_gate_bars"] == 0

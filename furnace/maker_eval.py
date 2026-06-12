@@ -21,8 +21,12 @@ legs' entry is the same reference; open inventory at window end is marked to
 the final close and charged the taker fee (it must be flattened to realize).
 
 The evaluation window is the SERVED window: gate bars newer than the last
-served prediction (the natural between-ticks serving lag) are outside it; any
-mismatch INSIDE the served window fails loud.
+served prediction (the natural between-ticks serving lag) are outside it.
+Inside the window the canonical writer occasionally re-cuts recent closed
+bars and serving does not reconcile between rebuilds, so the evaluation runs
+on the prediction/bar intersection and reports both exclusion counts
+(``n_unmatched_predictions`` / ``n_unmatched_gate_bars``) in the result —
+visible, never silent; near-zero overlap still fails loud.
 """
 
 from __future__ import annotations
@@ -228,18 +232,15 @@ def simulate(
     )
     if joined.height < 2:
         raise ValueError("predictions and gate_bars share fewer than two ts rows")
-    if joined.height < predictions.height:
-        raise ValueError(
-            f"{predictions.height - joined.height} prediction rows have no matching "
-            "gate bar ts — inputs are misaligned (different series or a re-cut "
-            "snapshot); refusing to evaluate a silently different window"
-        )
-    if joined.height < in_window.height:
-        raise ValueError(
-            f"{in_window.height - joined.height} gate bars inside the served window "
-            "have no prediction row — inputs are misaligned (different series or a "
-            "re-cut snapshot); refusing to evaluate a silently different window"
-        )
+    # The canonical writer occasionally RE-CUTS recent closed bars (measured
+    # live: 17 of ~91k overnight), and serving does not reconcile between
+    # rebuilds — so a served prediction's ts can lawfully vanish from today's
+    # snapshot, and the replacement bars lawfully lack predictions. The
+    # evaluation runs on the intersection and REPORTS both exclusion counts in
+    # the result; nothing is silent, and absolute garbage (near-zero overlap)
+    # still dies on the <2 guard above.
+    n_unmatched_predictions = predictions.height - joined.height
+    n_unmatched_gate_bars = in_window.height - joined.height
     gate_ts = joined.get_column("ts").cast(pl.Int64).to_numpy()
     close = _column_f64(joined, "close")
     probability = _column_f64(joined, "probability")
@@ -280,6 +281,8 @@ def simulate(
         "ungated": ungated_ledger,
         "delta_net_bps": float(diff.sum()),
         "delta_ci_95": (ci_lo, ci_hi),
+        "n_unmatched_predictions": n_unmatched_predictions,
+        "n_unmatched_gate_bars": n_unmatched_gate_bars,
         "per_bar": per_bar,
     }
 
