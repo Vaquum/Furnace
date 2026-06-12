@@ -354,6 +354,27 @@ def _trash_path(root: Path, stem: str) -> Path:
     return trash / f"{stem[:80]}-{secrets.token_hex(4)}"
 
 
+def _active_rounds(root: Path) -> list[str]:
+    """Every '<experiment_id>/<round_id>' whose status.json state is in
+    ACTIVE_STATES — the global denominator the round-start cap counts
+    against. A malformed status.json fails loud here: the cap must never be
+    computed over a silently smaller world."""
+    experiments = root / "experiments"
+    if not experiments.exists():
+        return []
+    out: list[str] = []
+    for exp_dir in sorted(experiments.iterdir()):
+        rounds_dir = exp_dir / "rounds"
+        if not rounds_dir.exists():
+            continue
+        for round_dir in sorted(rounds_dir.iterdir()):
+            if not (round_dir / "status.json").exists():
+                continue
+            if read_status(round_dir).get("state") in ACTIVE_STATES:
+                out.append(f"{exp_dir.name}/{round_dir.name}")
+    return out
+
+
 def _allocate_round_id(rounds_dir: Path) -> str:
     rounds_dir.mkdir(parents=True, exist_ok=True)
     existing = sorted(int(p.name) for p in rounds_dir.iterdir() if p.name.isdigit())
@@ -532,6 +553,20 @@ def create_app(root: Path) -> FastAPI:
         raise RuntimeError(
             "Furnace requires APP_USERNAME, APP_PASSWORD, and "
             "API_SECRET environment variables; refusing to start"
+        )
+    # Global active-round cap: one `limen run` already parallelizes to the
+    # box, so concurrent rounds across experiments degrade each other.
+    # Same fail-loud posture as the auth vars — garbage refuses startup.
+    raw_cap = os.environ.get("FURNACE_MAX_ACTIVE_ROUNDS", "1")
+    try:
+        max_active_rounds = int(raw_cap)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"FURNACE_MAX_ACTIVE_ROUNDS must be an integer >= 1; got {raw_cap!r}"
+        ) from exc
+    if max_active_rounds < 1:
+        raise RuntimeError(
+            f"FURNACE_MAX_ACTIVE_ROUNDS must be an integer >= 1; got {raw_cap!r}"
         )
 
     templates = Jinja2Templates(directory=str(PKG_DIR / "templates"))
@@ -778,6 +813,14 @@ def create_app(root: Path) -> FastAPI:
                 if is_experiment_active(exp_dir):
                     return JSONResponse(
                         {"error": "another round is active"}, status_code=409,
+                    )
+                active = _active_rounds(root)
+                if len(active) >= max_active_rounds:
+                    return JSONResponse(
+                        {"error": f"active-round cap ({max_active_rounds}) reached: "
+                                  f"{active[0]} is still active — terminate it, wait, "
+                                  "or raise FURNACE_MAX_ACTIVE_ROUNDS"},
+                        status_code=409,
                     )
                 # Source of truth: the manifest is saved via PUT /manifest.
                 # We snapshot it under the same flock that gates the if_match
