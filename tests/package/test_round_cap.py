@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -114,6 +115,41 @@ def test_raised_cap_allows_concurrent_rounds(tmp_path: Path, monkeypatch) -> Non
     third = client.post(f"/experiments/{eid_c}/rounds", json={"if_match": 0}, auth=AUTH)
     assert third.status_code == 409
     assert "active-round cap (2) reached" in third.json()["error"]
+
+
+def test_concurrent_starts_cannot_exceed_the_cap(tmp_path: Path, monkeypatch) -> None:
+    """Two simultaneous starts in two DIFFERENT experiments hold two different
+    per-experiment locks; only the global start lock makes count-and-
+    materialize atomic. Unserialized, both pass the cap check (zero active)
+    inside their slow validates before either round materializes — and the
+    cap is exceeded under exactly the concurrency it exists to prevent."""
+    _auth_env(monkeypatch)
+    monkeypatch.setattr("subprocess.Popen", _ParkedPopen)
+    monkeypatch.setattr(appmod, "_manifest_errors", lambda _m: time.sleep(0.8) or [])
+    app = create_app(tmp_path)
+    client = TestClient(app)
+    eids = [client.post("/experiments", json={"name": n}, auth=AUTH).json()["id"]
+            for n in ("left", "right")]
+
+    results: list[object] = []
+    results_lock = threading.Lock()
+
+    def _start(eid: str) -> None:
+        r = TestClient(app).post(f"/experiments/{eid}/rounds", json={"if_match": 0}, auth=AUTH)
+        with results_lock:
+            results.append(r)
+
+    threads = [threading.Thread(target=_start, args=(e,)) for e in eids]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    statuses = sorted(r.status_code for r in results)
+    assert statuses == [200, 409], f"cap=1 admitted both concurrent starts: {statuses}"
+    assert len(appmod._active_rounds(tmp_path)) == 1
+    blocked = next(r for r in results if r.status_code == 409)
+    assert "active-round cap (1) reached" in blocked.json()["error"]
 
 
 def test_invalid_cap_refuses_startup(tmp_path: Path, monkeypatch) -> None:

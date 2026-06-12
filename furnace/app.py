@@ -542,6 +542,14 @@ def _terminate_backstop(pgid: int) -> None:
 # serialize in-process or both cohorts can finish active on one series.
 _cohort_flip_lock = threading.Lock()
 
+# The active-round cap counts rounds across ALL experiments, but exp_lock is
+# per-experiment: two concurrent starts in different experiments hold two
+# different locks, and both can pass the cap check before either round
+# materializes. Count-and-materialize must be atomic across every start, so
+# all of _start_round_sync serializes here. Starts are infrequent and the
+# longest section (limen validate) is seconds — one global lock costs nothing.
+_round_start_lock = threading.Lock()
+
 
 def create_app(root: Path) -> FastAPI:
     # Auth credentials must be in the environment before the app builds.
@@ -800,7 +808,10 @@ def create_app(root: Path) -> FastAPI:
 
     def _start_round_sync(experiment_id: str, if_match: object):
         exp_dir = _exp_dir(experiment_id)
-        with sm.exp_lock(experiment_id):
+        # Global lock FIRST (then per-experiment): the cap check below counts
+        # rounds across all experiments, so it is only correct if no other
+        # start can sit between its own check and its round materializing.
+        with _round_start_lock, sm.exp_lock(experiment_id):
             # Re-check under the lock: a delete that won the race renamed the
             # experiment away after _exp_dir resolved it — that is a 404, not
             # a FileNotFoundError 500 from the version flock's touch.
