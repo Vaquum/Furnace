@@ -28,6 +28,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.concurrency import run_in_threadpool
 
 from . import api_reference, cohorts, maker_eval
 from .state import (
@@ -324,14 +325,20 @@ def _slugify(name: str) -> str:
     return s or "experiment"
 
 
-def _allocate_experiment_id(experiments_dir: Path, name: str) -> str:
+def _claim_experiment_dir(experiments_dir: Path, name: str) -> Path:
+    """Allocate and CREATE the experiment dir in one atomic mkdir claim, so
+    two threadpool requests racing the same name can never both win one id."""
     base = _slugify(name)
     candidate = base
     n = 2
-    while (experiments_dir / candidate).exists():
-        candidate = f"{base}-{n}"
-        n += 1
-    return candidate
+    while True:
+        try:
+            (experiments_dir / candidate).mkdir(parents=True, exist_ok=False)
+        except FileExistsError:
+            candidate = f"{base}-{n}"
+            n += 1
+            continue
+        return experiments_dir / candidate
 
 
 def _allocate_round_id(rounds_dir: Path) -> str:
@@ -496,6 +503,12 @@ def _terminate_backstop(pgid: int) -> None:
         pass
 
 
+# The one-active-per-series cohort flip is a multi-file read-modify-write;
+# mutation handlers run in the threadpool, so two concurrent flips must
+# serialize in-process or both cohorts can finish active on one series.
+_cohort_flip_lock = threading.Lock()
+
+
 def create_app(root: Path) -> FastAPI:
     # Auth credentials must be in the environment before the app builds.
     # Refuse to start if any are missing — there is no "no auth" mode.
@@ -629,14 +642,16 @@ def create_app(root: Path) -> FastAPI:
             name = raw_name.strip()
         else:
             form = await request.form()
-            name = form.get("name", "").strip()
+            form_name = form.get("name", "")
+            name = form_name.strip() if isinstance(form_name, str) else ""
         if not name:
             raise HTTPException(400, "name is required")
-        experiments_dir = root / "experiments"
-        experiments_dir.mkdir(parents=True, exist_ok=True)
-        eid = _allocate_experiment_id(experiments_dir, name)
-        exp_dir = experiments_dir / eid
-        (exp_dir / "rounds").mkdir(parents=True, exist_ok=True)
+        return await run_in_threadpool(_create_experiment_sync, is_json, name)
+
+    def _create_experiment_sync(is_json: bool, name: str):
+        exp_dir = _claim_experiment_dir(root / "experiments", name)
+        eid = exp_dir.name
+        (exp_dir / "rounds").mkdir()
         (exp_dir / "manifest.yml").write_text(
             STARTER_MANIFEST.replace("__EXPERIMENT_NAME__", eid)
         )
@@ -679,16 +694,19 @@ def create_app(root: Path) -> FastAPI:
 
     @app.put("/experiments/{experiment_id}/manifest")
     async def save_manifest(experiment_id: str, request: Request):
-        exp_dir = _exp_dir(experiment_id)
         body = await request.json()
         if not isinstance(body, dict):
             raise HTTPException(400, "request body must be a JSON object")
         if "manifest" not in body:
             raise HTTPException(400, "request must include 'manifest'")
-        if_match = body.get("if_match")
+        if_match = cast(dict[str, object], body).get("if_match")
         manifest = body["manifest"]
         if not isinstance(manifest, str):
             raise HTTPException(400, "manifest must be a string")
+        return await run_in_threadpool(_save_manifest_sync, experiment_id, if_match, manifest)
+
+    def _save_manifest_sync(experiment_id: str, if_match: object, manifest: str):
+        exp_dir = _exp_dir(experiment_id)
         # Save refuses an invalid manifest so the user catches parse /
         # validation errors at the moment they hit Save, not at round-start
         # (which fails after they already moved on). The 400 detail is
@@ -713,12 +731,14 @@ def create_app(root: Path) -> FastAPI:
 
     @app.post("/experiments/{experiment_id}/rounds")
     async def start_round(experiment_id: str, request: Request):
-        exp_dir = _exp_dir(experiment_id)
         body = await request.json()
         if not isinstance(body, dict):
             raise HTTPException(400, "request body must be a JSON object")
-        if_match = body.get("if_match")
+        if_match = cast(dict[str, object], body).get("if_match")
+        return await run_in_threadpool(_start_round_sync, experiment_id, if_match)
 
+    def _start_round_sync(experiment_id: str, if_match: object):
+        exp_dir = _exp_dir(experiment_id)
         with sm.exp_lock(experiment_id):
             with version_flock(exp_dir):
                 current_version = read_version(exp_dir)
@@ -1060,13 +1080,16 @@ def create_app(root: Path) -> FastAPI:
 
     @app.post("/cohorts")
     async def create_cohort(request: Request):
+        raw = await request.json()
+        return await run_in_threadpool(_create_cohort_sync, raw)
+
+    def _create_cohort_sync(raw: object):
         # Create a cohort from the round selected in search. The permutations
         # are computed server-side from the live filter (never trusted from the
         # client), and a cohort comes from exactly ONE round — the served
         # history must never mix results of different runs, and one round
         # trivially satisfies Limen's one-manifest grouping rule (the
         # manifest_id is still read from the round's own metadata.json).
-        raw = await request.json()
         if not isinstance(raw, dict):
             raise HTTPException(400, "request body must be a JSON object")
         body = cast(dict[str, object], raw)
@@ -1142,11 +1165,15 @@ def create_app(root: Path) -> FastAPI:
         active = cast(dict[str, object], raw).get("active")
         if not isinstance(active, bool):
             raise HTTPException(400, "`active` must be a boolean")
+        return await run_in_threadpool(_set_cohort_active_sync, url_id, active)
+
+    def _set_cohort_active_sync(url_id: str, active: bool):
         try:
-            if active:
-                cohorts.activate_cohort(root, url_id)  # same-series peers -> off
-            else:
-                cohorts.set_cohort_active(root, url_id, False)
+            with _cohort_flip_lock:
+                if active:
+                    cohorts.activate_cohort(root, url_id)  # same-series peers -> off
+                else:
+                    cohorts.set_cohort_active(root, url_id, False)
         except FileNotFoundError as exc:
             raise HTTPException(404, "cohort not found") from exc
         return {"url_id": url_id, "active": active}
