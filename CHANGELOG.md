@@ -1,7 +1,12 @@
-# v0.40.1
+# v0.40.2
 
 - Publish Furnace on the host loopback only. Since 2026-10-03 Portal (https://portal.vaquum.fi, host network) is the single entry point to Vaquum services and reaches Furnace at `http://127.0.0.1:8502`, yet `deploy/docker-compose.yml` still published `${FURNACE_PORT:-8502}:8502` on all interfaces, so Furnace answered over plain HTTP on the host's public IP. The publish is now `127.0.0.1:${FURNACE_PORT:-8502}:8502`: Portal's path is unchanged and nothing off-host reaches the port.
 - The deploy contract pins it: `pr_checks_deploy_contract` now rejects any `services.furnace.ports` entry whose host IP is missing or not `127.0.0.1` (reversing the all-interfaces allowance from v0.7.0), and `tests/package/test_loopback_publish.py` asserts the exact publish.
+
+# v0.40.1
+
+- Pin `vaquum_limen==3.30.0` in package and image dependencies to match production. Limen 5.x removed the Sensor and Trainer APIs Furnace uses, breaking CI and image builds (#146). Upgrading Limen requires a separate API migration.
+- Sync the Protect-Main snapshot and live ruleset fixtures with GitHub's added pull-request parameters so the ruleset drift check passes.
 
 # v0.40.0
 
