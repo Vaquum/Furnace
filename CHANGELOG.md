@@ -1,3 +1,8 @@
+# v0.40.1
+
+- Pin `vaquum_limen==3.30.0` in package and image dependencies to match production. Limen 5.x removed the Sensor and Trainer APIs Furnace uses, breaking CI and image builds (#146). Upgrading Limen requires a separate API migration.
+- Sync the Protect-Main snapshot and live ruleset fixtures with GitHub's added pull-request parameters so the ruleset drift check passes.
+
 # v0.40.0
 
 - Cap concurrently active rounds across experiments (S93, PRD #137). The active-round gate was per-experiment only: two operators starting rounds in two experiments both proceeded, and each `limen run` parallelizes as if it owns the box — the documented within-run oversubscription (186 threads on 48 cores, fixed by BLAS pinning) had no cross-run equivalent. `POST /experiments/{id}/rounds` now counts rounds in `pending`/`running`/`terminating` across all experiments inside the start lock and answers 409 naming the first blocker (`<experiment>/<round>`) when the cap is reached — the start modal already renders that message.

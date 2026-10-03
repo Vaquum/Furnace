@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "furnace"
-version = "0.40.0"
+version = "0.40.1"
 description = "Web runner for Limen experiments."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -29,7 +29,7 @@ dependencies = [
   "scipy>=1.13",
   "aiosqlite>=0.20",
   "orjson>=3.10",
-  "vaquum_limen",
+  "vaquum_limen==3.30.0",
 ]
 
 [project.scripts]

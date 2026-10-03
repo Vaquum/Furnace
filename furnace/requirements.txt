@@ -5,4 +5,4 @@ jinja2
 python-multipart
 numpy>=2.0
 polars>=1.0
-vaquum_limen
+vaquum_limen==3.30.0

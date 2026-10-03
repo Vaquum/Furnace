@@ -11,8 +11,8 @@ COPY furnace/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir --upgrade pip \
  && pip install --no-cache-dir -r /tmp/requirements.txt
 
-# Fail the BUILD, not production, when the installed (unpinned, PyPI-latest)
-# limen cannot import — e.g. a new native dependency like lightgbm needing
+# Fail the BUILD, not production, when the installed Limen cannot import —
+# e.g. a new native dependency like lightgbm needing
 # libgomp.so.1, which crash-looped both containers on 2026-06-11. This line
 # is why a broken runtime image can never ship again.
 RUN python -c "import limen.experiment.trainer"
