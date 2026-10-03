@@ -1,3 +1,8 @@
+# v0.40.1
+
+- Publish Furnace on the host loopback only. Since 2026-10-03 Portal (https://portal.vaquum.fi, host network) is the single entry point to Vaquum services and reaches Furnace at `http://127.0.0.1:8502`, yet `deploy/docker-compose.yml` still published `${FURNACE_PORT:-8502}:8502` on all interfaces, so Furnace answered over plain HTTP on the host's public IP. The publish is now `127.0.0.1:${FURNACE_PORT:-8502}:8502`: Portal's path is unchanged and nothing off-host reaches the port.
+- The deploy contract pins it: `pr_checks_deploy_contract` now rejects any `services.furnace.ports` entry whose host IP is missing or not `127.0.0.1` (reversing the all-interfaces allowance from v0.7.0), and `tests/package/test_loopback_publish.py` asserts the exact publish.
+
 # v0.40.0
 
 - Cap concurrently active rounds across experiments (S93, PRD #137). The active-round gate was per-experiment only: two operators starting rounds in two experiments both proceeded, and each `limen run` parallelizes as if it owns the box — the documented within-run oversubscription (186 threads on 48 cores, fixed by BLAS pinning) had no cross-run equivalent. `POST /experiments/{id}/rounds` now counts rounds in `pending`/`running`/`terminating` across all experiments inside the start lock and answers 409 naming the first blocker (`<experiment>/<round>`) when the cap is reached — the start modal already renders that message.
