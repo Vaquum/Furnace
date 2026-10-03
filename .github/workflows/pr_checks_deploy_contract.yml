@@ -61,19 +61,19 @@ jobs:
           set -euo pipefail
           test "$(grep -cE '"--port", "8502"' Dockerfile)" -ge 1
 
-      - name: Compose ports all bind container port 8502 with an explicit host port
+      - name: Compose ports all bind loopback to container port 8502 with an explicit host port
         run: |
           set -euo pipefail
           # Walk every entry under services.furnace.ports and
-          # require each one (a) targets container port 8502 and (b) has
-          # an explicit host port. The container port must not drift —
-          # otherwise the deploy.yml + Dockerfile + healthcheck contract
-          # silently breaks. The explicit host port is what the operator
-          # controls via vars.FURNACE_PORT; without it Docker
-          # would publish on a random ephemeral port and bypass that
-          # control entirely. Host IP is intentionally unconstrained so
-          # an operator can pick loopback for dev or all-interfaces in
-          # production.
+          # require each one (a) targets container port 8502, (b) has
+          # an explicit host port and (c) binds host IP 127.0.0.1. The
+          # container port must not drift — otherwise the deploy.yml +
+          # Dockerfile + healthcheck contract silently breaks. The explicit
+          # host port is what the operator controls via vars.FURNACE_PORT;
+          # without it Docker would publish on a random ephemeral port and
+          # bypass that control entirely. The loopback host IP keeps Portal
+          # (host network, http://127.0.0.1:8502) the single entry point: a
+          # missing or non-loopback host IP publishes Furnace off-host.
           python <<'PY'
           import re, sys, yaml
           d = yaml.safe_load(open('deploy/docker-compose.yml'))
@@ -97,18 +97,22 @@ jobs:
                   masked = var_block_re.sub('<VAR>', entry)
                   parts = masked.split(':')
                   if len(parts) == 2:
-                      host_port = parts[0]
+                      host_ip, host_port = '', parts[0]
                   elif len(parts) == 3:
-                      host_port = parts[1]
+                      host_ip, host_port = parts[0], parts[1]
                   else:
                       errors.append(f'  port {entry!r}: expected HOST:CONTAINER or HOST_IP:HOST:CONTAINER form')
                       continue
+                  if host_ip != '127.0.0.1':
+                      errors.append(f'  port {entry!r}: host IP must be 127.0.0.1')
                   if host_port in BAD_HOST_PORTS:
                       errors.append(f'  port {entry!r}: host port must be set (not empty, not 0)')
                   container = parts[-1]
                   if container != '8502':
                       errors.append(f'  port {entry!r}: container side must be 8502')
               elif isinstance(entry, dict):
+                  if entry.get('host_ip') != '127.0.0.1':
+                      errors.append(f'  port {entry!r}: host_ip must be 127.0.0.1')
                   if str(entry.get('target')) != '8502':
                       errors.append(f'  port {entry!r}: target must be 8502')
                   published = entry.get('published')
@@ -117,7 +121,7 @@ jobs:
               else:
                   errors.append(f'  port {entry!r}: unrecognized form')
           if errors:
-              print('::error::furnace ports must all target 8502 with an explicit host port:')
+              print('::error::furnace ports must all bind 127.0.0.1 and target 8502 with an explicit host port:')
               for line in errors:
                   print(line)
               sys.exit(1)

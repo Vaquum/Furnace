@@ -17,8 +17,10 @@ services:
       # before POST /experiments/{id}/rounds answers 409. One `limen run`
       # already parallelizes to the box; raise deliberately, not by default.
       FURNACE_MAX_ACTIVE_ROUNDS: ${FURNACE_MAX_ACTIVE_ROUNDS:-1}
+    # Loopback only: Portal (host network) is the single entry point and
+    # reaches Furnace at http://127.0.0.1:8502; nothing off-host can.
     ports:
-      - "${FURNACE_PORT:-8502}:8502"
+      - "127.0.0.1:${FURNACE_PORT:-8502}:8502"
     volumes:
       - type: bind
         source: ${FURNACE_HOST_DATA_ROOT:-/data/experiments}
