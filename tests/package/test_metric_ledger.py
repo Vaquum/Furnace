@@ -227,7 +227,7 @@ def test_ensure_round_index_no_longer_normalizes_by_bars_total() -> None:
     assert "for m in _SEARCH_METRICS" in text
 
 
-def test_pyproject_version_is_0_40_1() -> None:
+def test_pyproject_version_is_0_40_2() -> None:
     """The loopback-publish slice (S94) bumps the version to 0.40.2.
     This assertion is the repo's single pin on the current version — whichever
     slice bumps the version updates it here."""
