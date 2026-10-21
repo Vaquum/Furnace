@@ -1,3 +1,7 @@
+# v0.40.3
+
+- Stop automatic Copilot code review on every push; reviews remain available on request.
+
 # v0.40.2
 
 - Publish Furnace on the host loopback only. Since 2026-10-03 Portal (https://portal.vaquum.fi, host network) is the single entry point to Vaquum services and reaches Furnace at `http://127.0.0.1:8502`, yet `deploy/docker-compose.yml` still published `${FURNACE_PORT:-8502}:8502` on all interfaces, so Furnace answered over plain HTTP on the host's public IP. The publish is now `127.0.0.1:${FURNACE_PORT:-8502}:8502`: Portal's path is unchanged and nothing off-host reaches the port.
