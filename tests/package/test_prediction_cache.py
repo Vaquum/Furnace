@@ -106,7 +106,7 @@ def test_cache_columns_and_ts_sorted(
     out = prediction_cache.backfill(
         cohort_def, _SERIES, conduit_root=tmp_path / "conduit", arrow_root=tmp_path / "arrow"
     )
-    df = pl.read_ipc(out, memory_map=True)
+    df = pl.read_ipc(out)
     assert df.columns == ["ts", "prediction", "probability", "reason_code"]
     assert df.schema["ts"] == pl.Int64
     assert df.schema["reason_code"] == pl.Int8
@@ -328,14 +328,14 @@ def test_windowed_topup_matches_full_backfill(
     # Reference: one full backfill over the entire real history.
     _serve_arrow(monkeypatch, frozen_klines, arrow_root=arrow, series=_SERIES)
     prediction_cache.backfill(cohort_def, _SERIES, conduit_full, arrow)
-    full = pl.read_ipc(prediction_cache.cache_path(_SERIES, conduit_full), memory_map=True)
+    full = pl.read_ipc(prediction_cache.cache_path(_SERIES, conduit_full))
 
     # Incremental: backfill a head, then top up the withheld real tail.
     head = frozen_klines.head(int(frozen_klines.height * 0.8))
     _serve_arrow(monkeypatch, head, arrow_root=arrow, series=_SERIES)
     prediction_cache.backfill(cohort_def, _SERIES, conduit_topup, arrow)
     last_ts = pl.read_ipc(
-        prediction_cache.cache_path(_SERIES, conduit_topup), memory_map=True
+        prediction_cache.cache_path(_SERIES, conduit_topup)
     ).get_column("ts").max()
 
     # Bound the top-up to a strict subset and capture the scored frame's height
@@ -351,7 +351,7 @@ def test_windowed_topup_matches_full_backfill(
     monkeypatch.setattr(prediction_cache.Cohort, "predict_all", spy_predict_all)
     _serve_arrow(monkeypatch, frozen_klines, arrow_root=arrow, series=_SERIES)
     prediction_cache.top_up(cohort_def, _SERIES, conduit_topup, arrow)
-    topped = pl.read_ipc(prediction_cache.cache_path(_SERIES, conduit_topup), memory_map=True)
+    topped = pl.read_ipc(prediction_cache.cache_path(_SERIES, conduit_topup))
 
     n_new = frozen_klines.height - head.height
     assert scored_heights == [1100 + n_new]           # the top-up scored a bounded tail...
@@ -434,7 +434,7 @@ def test_topup_never_appends_forming_bar_ts(
     prediction_cache.backfill(cohort_def, _SERIES, conduit, arrow)
     closed_max = snap1.get_column("datetime").dt.epoch("ns")[-2]
     forming_v1 = snap1.get_column("datetime").dt.epoch("ns")[-1]
-    cached = pl.read_ipc(path, memory_map=True)
+    cached = pl.read_ipc(path)
     assert cached.get_column("ts").max() == closed_max
     assert forming_v1 not in cached.get_column("ts").to_list()
 
@@ -453,7 +453,7 @@ def test_topup_never_appends_forming_bar_ts(
     # cached through bar n-2; the full snapshot closes bars n-1, n, n+1 and its
     # newest row (the last fixture bar) is treated as forming and withheld.
     assert appended == 3
-    ts_list = pl.read_ipc(path, memory_map=True).get_column("ts").to_list()
+    ts_list = pl.read_ipc(path).get_column("ts").to_list()
     assert forming_v2 not in ts_list
     src_ts = set(frozen_klines.get_column("datetime").dt.epoch("ns").to_list())
     assert set(ts_list) <= src_ts  # every served ts exists in the canonical history
@@ -483,11 +483,11 @@ def test_top_up_replaces_cache_when_cohort_identity_changes(
     assert identity.read_text(encoding="utf-8") == _CID_A
 
     served = prediction_cache.top_up(cohort_b, _SERIES, conduit, arrow)
-    rebuilt = pl.read_ipc(prediction_cache.cache_path(_SERIES, conduit), memory_map=True)
+    rebuilt = pl.read_ipc(prediction_cache.cache_path(_SERIES, conduit))
     assert served == rebuilt.height
     assert identity.read_text(encoding="utf-8") == _CID_B
 
     reference_root = tmp_path / "conduit_ref"
     prediction_cache.backfill(cohort_b, _SERIES, reference_root, arrow)
-    reference = pl.read_ipc(prediction_cache.cache_path(_SERIES, reference_root), memory_map=True)
+    reference = pl.read_ipc(prediction_cache.cache_path(_SERIES, reference_root))
     assert rebuilt.equals(reference)  # B's history outright — no A rows mixed in

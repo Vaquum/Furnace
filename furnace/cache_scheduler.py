@@ -62,7 +62,7 @@ def _manifest_entry(
     """One serving-manifest entry, read back from the payload ``top_up`` just
     wrote (an mmap read, not a recompute) so the manifest can never describe
     rows the file does not hold."""
-    payload = pl.read_ipc(prediction_cache.cache_path(series, conduit_root), memory_map=True)
+    payload = pl.read_ipc(prediction_cache.cache_path(series, conduit_root))
     # The payload is ts-sorted by construction (``_to_frame`` sorts, ``top_up``
     # re-sorts after concat; pinned by ``test_cache_columns_and_ts_sorted``),
     # so the last row carries the max ts — no full-column scan per tick.

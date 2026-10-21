@@ -320,9 +320,9 @@ def evaluate_served(
     minute_path = arrow_root / "time_1m" / "latest.arrow"
     if not minute_path.is_file():
         raise FileNotFoundError(f"1m bars not found at {minute_path}")
-    predictions = pl.read_ipc(served_path, memory_map=True)
-    gate_bars = pl.read_ipc(arrow_root / series / "latest.arrow", memory_map=True)
-    minute_bars = pl.read_ipc(minute_path, memory_map=True)
+    predictions = pl.read_ipc(served_path)
+    gate_bars = pl.read_ipc(arrow_root / series / "latest.arrow")
+    minute_bars = pl.read_ipc(minute_path)
     result = simulate(
         gate_bars, minute_bars, predictions,
         offset_bps=offset_bps, tau=tau, k=k, taker_fee_bps=taker_fee_bps,

@@ -126,7 +126,7 @@ def test_refresh_once_tops_up_arrow_cohort(
 
     res = cache_scheduler.refresh_once(root, conduit, arrow)
 
-    cached = pl.read_ipc(prediction_cache.cache_path(_SERIES, conduit), memory_map=True)
+    cached = pl.read_ipc(prediction_cache.cache_path(_SERIES, conduit))
     assert res == {"cohort-1": cached.height}
     assert res["cohort-1"] > 0
 
@@ -175,11 +175,11 @@ def test_topup_appends_only_new_bars(
     head = frozen_klines.head(int(frozen_klines.height * 0.8))
     _serve_arrow(monkeypatch, head)
     prediction_cache.backfill(cohort_def, _SERIES, conduit, arrow)
-    n0 = pl.read_ipc(prediction_cache.cache_path(_SERIES, conduit), memory_map=True).height
+    n0 = pl.read_ipc(prediction_cache.cache_path(_SERIES, conduit)).height
 
     _serve_arrow(monkeypatch, frozen_klines)  # the series now carries the full history
     appended = prediction_cache.top_up(cohort_def, _SERIES, conduit, arrow)
-    n1 = pl.read_ipc(prediction_cache.cache_path(_SERIES, conduit), memory_map=True).height
+    n1 = pl.read_ipc(prediction_cache.cache_path(_SERIES, conduit)).height
 
     assert appended > 0
     assert n1 == n0 + appended
@@ -235,14 +235,14 @@ def test_refresh_once_rebuilds_same_series_after_active_cohort_switch(
     _register(root, "cohort-b", exp, list(rids), cohort_id=_CID_B)
     res = cache_scheduler.refresh_once(root, conduit, arrow)
 
-    rebuilt = pl.read_ipc(prediction_cache.cache_path(_SERIES, conduit), memory_map=True)
+    rebuilt = pl.read_ipc(prediction_cache.cache_path(_SERIES, conduit))
     assert res == {"cohort-b": rebuilt.height}  # the whole file is B's rebuild
     assert identity.read_text(encoding="utf-8") == _CID_B
 
     reference_root = tmp_path / "conduit_ref"
     cohort_b = {"experiment_dir": str(exp), "permutation_ids": list(rids), "cohort_id": _CID_B}
     prediction_cache.backfill(cohort_b, _SERIES, reference_root, arrow)
-    reference = pl.read_ipc(prediction_cache.cache_path(_SERIES, reference_root), memory_map=True)
+    reference = pl.read_ipc(prediction_cache.cache_path(_SERIES, reference_root))
     assert rebuilt.equals(reference)
 
 
@@ -268,7 +268,7 @@ def test_refresh_once_writes_serving_manifest_for_active_successes(
     manifest = json.loads(
         prediction_cache.serving_manifest_path(conduit).read_text(encoding="utf-8")
     )
-    payload = pl.read_ipc(prediction_cache.cache_path(_SERIES, conduit), memory_map=True)
+    payload = pl.read_ipc(prediction_cache.cache_path(_SERIES, conduit))
     assert manifest["version"] == 1
     assert manifest["generated_at"]
     entry = manifest["series"][_SERIES]

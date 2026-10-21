@@ -20,7 +20,7 @@ dependencies = [
   "matplotlib",
   "clickhouse-driver",
   "clickhouse-connect>=0.7",
-  "polars>=1.0",
+  "polars>=1.0,<2",
   "pyarrow>=15.0",
   "huggingface_hub",
   "lz4>=4.0.0",

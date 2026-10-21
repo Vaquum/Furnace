@@ -257,8 +257,8 @@ def top_up(
     recorded = identity_path.read_text(encoding="utf-8").strip() if identity_path.is_file() else None
     if not path.exists() or recorded != _cohort_identity(cohort_def):
         backfill(cohort_def, series, conduit_root, arrow_root)
-        return pl.read_ipc(path, memory_map=True).height
-    existing = pl.read_ipc(path, memory_map=True)
+        return pl.read_ipc(path).height
+    existing = pl.read_ipc(path)
     last_ts = existing.get_column("ts").max() if existing.height else None
     klines = _series_klines(series, arrow_root)
     # The canonical bars carry ``datetime`` (not the cache's epoch-ns ``ts``);
