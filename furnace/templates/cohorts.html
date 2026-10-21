@@ -65,7 +65,7 @@ document.getElementById('cohorts-rows').addEventListener('click', async (e) => {
     const snippet =
       'import polars as pl\n' +
       `# predictions for cohort "${copy.dataset.name}" — conduit volume mounted at /opt/conduit\n` +
-      `df = pl.read_ipc("${copy.dataset.path}", memory_map=True)`;
+      `df = pl.read_ipc("${copy.dataset.path}")`;
     const ok = await window.copyText(snippet);
     copy.textContent = ok ? '✓' : '✕';
     copy.classList.toggle('copied', ok);

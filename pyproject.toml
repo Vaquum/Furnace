@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "furnace"
-version = "0.40.2"
+version = "0.40.3"
 description = "Web runner for Limen experiments."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -20,7 +20,7 @@ dependencies = [
   "matplotlib",
   "clickhouse-driver",
   "clickhouse-connect>=0.7",
-  "polars>=1.0",
+  "polars>=1.0,<2",
   "pyarrow>=15.0",
   "huggingface_hub",
   "lz4>=4.0.0",

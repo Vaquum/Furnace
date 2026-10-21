@@ -4,5 +4,5 @@ uvicorn[standard]
 jinja2
 python-multipart
 numpy>=2.0
-polars>=1.0
+polars>=1.0,<2
 vaquum_limen==3.30.0
