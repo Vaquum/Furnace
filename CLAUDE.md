@@ -22,7 +22,7 @@ Ten laws. Nine are workflow gates on every PR; the tenth is branch protection on
 
 9. **Live branch protection on `main` matches `.github/rulesets/main.json`.** Changing branch protection out-of-band (in the GitHub UI) blocks the next PR until the snapshot is updated in a PR of its own. *(pr_checks_ruleset)*
 
-10. **No direct push to `main`. No force-push. No branch deletion.** Branch must be up-to-date with `main` before merge. One Copilot review required; all review threads resolved. *(branch protection, server-side)*
+10. **No direct push to `main`. No force-push. No branch deletion.** Branch must be up-to-date with `main` before merge. All review threads resolved. *(branch protection, server-side)*
 
 ## Workflow
 

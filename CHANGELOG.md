@@ -1,3 +1,7 @@
+# v0.40.4
+
+- Remove the Copilot code-review ruleset rule and all Copilot references from instruction files; Copilot no longer reviews PRs.
+
 # v0.40.3
 
 - Stop automatic Copilot code review on every push; reviews remain available on request.
